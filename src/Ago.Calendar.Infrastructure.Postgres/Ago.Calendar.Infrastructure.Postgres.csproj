@@ -5,12 +5,27 @@
     referenced from the start - it is one of the seams this item exists to prove a second product can
     consume as a package.
 
-    EF Core and Npgsql are in the restore graph already, transitively through it; what is deliberately
-    absent is a *direct* pin and reference here. ago-chat added those (and Dapper) when it had an
-    entity to map and a read store to write - `20-01`'s job, not a scaffold's. Pinning them now would
-    also mean this repository asserting an EF Core version before it has a single query to run it
-    against.
+    `20-01` adds the direct EF Core/Npgsql references the scaffold deliberately left out, now that
+    there are entities to map and a schema to migrate. Dapper is still absent: adr/0004's read side
+    needs a read model, and this item builds none - it arrives with `20-02`.
   -->
+  <ItemGroup>
+    <!-- adr/0004: EF Core owns writes (aggregates, transactions, migrations). -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <!-- Explicit, not merely transitive via the Npgsql provider - keeps this project resolving the
+         same EFCore version as Microsoft.EntityFrameworkCore.Design below. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <!-- ServiceCollectionExtensions: DI wiring lives in the host, but the extension method that
+         names this adapter's own registrations belongs beside the adapter (clean-architecture.md). -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <!-- Migration tooling only - never used at runtime, so it never ships in a container image. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
   <ItemGroup Condition="'$(AgoCalendarDevOverride)' != 'true'">
     <PackageReference Include="Ago.Platform.Persistence.Postgres" />
   </ItemGroup>

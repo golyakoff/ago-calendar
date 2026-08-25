@@ -10,6 +10,8 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Ago.Calendar.Architecture.Tests/Ago.Calendar.Architecture.Tests.csproj" />
+    <Project Path="tests/Ago.Calendar.Domain.Tests/Ago.Calendar.Domain.Tests.csproj" />
+    <Project Path="tests/Ago.Calendar.Integration.Tests/Ago.Calendar.Integration.Tests.csproj" />
   </Folder>
   <Folder Name="/tests/Fixtures/">
     <Project Path="tests/Fixtures/Ago.Calendar.ArchFixture.Compliant/Ago.Calendar.ArchFixture.Compliant.csproj" />

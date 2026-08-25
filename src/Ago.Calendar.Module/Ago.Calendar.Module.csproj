@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Ago.Platform.Hosting carries IProductModule - the platform/product seam a host composes against.
+    Messaging.RabbitMq / Realtime / Caching.Redis / Storage.S3 are not referenced yet: AGO Chat's
+    module needs all four, this one needs none of them until it has something to publish, push or
+    cache, and a reference with no call site would misrepresent what this product actually uses.
+  -->
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' != 'true'">
+    <PackageReference Include="Ago.Platform.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' == 'true'">
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Hosting\Ago.Platform.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
+    <ProjectReference Include="..\Ago.Calendar.Infrastructure.Postgres\Ago.Calendar.Infrastructure.Postgres.csproj" />
+  </ItemGroup>
+
+</Project>

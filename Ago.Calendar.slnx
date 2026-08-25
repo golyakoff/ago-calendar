@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Ago.Calendar.Api/Ago.Calendar.Api.csproj" />
+    <Project Path="src/Ago.Calendar.Application/Ago.Calendar.Application.csproj" />
+    <Project Path="src/Ago.Calendar.Contracts/Ago.Calendar.Contracts.csproj" />
+    <Project Path="src/Ago.Calendar.Domain/Ago.Calendar.Domain.csproj" />
+    <Project Path="src/Ago.Calendar.Infrastructure.Postgres/Ago.Calendar.Infrastructure.Postgres.csproj" />
+    <Project Path="src/Ago.Calendar.Module/Ago.Calendar.Module.csproj" />
+    <Project Path="src/Ago.Calendar.Worker/Ago.Calendar.Worker.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Ago.Calendar.Architecture.Tests/Ago.Calendar.Architecture.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tests/Fixtures/">
+    <Project Path="tests/Fixtures/Ago.Calendar.ArchFixture.Compliant/Ago.Calendar.ArchFixture.Compliant.csproj" />
+    <Project Path="tests/Fixtures/Ago.Calendar.ArchFixture.ReachesIntoChat/Ago.Calendar.ArchFixture.ReachesIntoChat.csproj" />
+    <Project Path="tests/Fixtures/Ago.Chat.ArchFixture/Ago.Chat.ArchFixture.csproj" />
+  </Folder>
+</Solution>

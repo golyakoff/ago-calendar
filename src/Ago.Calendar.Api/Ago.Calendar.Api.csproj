@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Host: connections, commands, queries (adr/0013's split by failure profile). Ago.Platform.Hosting
+    arrives transitively through Ago.Calendar.Module - a host composes the module, it does not
+    duplicate the module's package list.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Module\Ago.Calendar.Module.csproj" />
+    <ProjectReference Include="..\Ago.Calendar.Contracts\Ago.Calendar.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

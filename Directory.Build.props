@@ -1,0 +1,35 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <!--
+    Dev override (docs/architecture/repositories.md): set the AgoCalendarDevOverride environment
+    variable to swap Ago.Platform.* PackageReferences for ProjectReferences into a sibling
+    ../ago-platform checkout, for a change that spans this repository and the platform.
+
+      AgoCalendarDevOverride=true dotnet build            (bash)
+      $env:AgoCalendarDevOverride = 'true'; dotnet build  (PowerShell)
+
+    Read it as "the override *this repository* honours", not "the override that points at
+    ago-calendar" - it retargets the same Ago.Platform.* references ago-chat's own
+    AgoPlatformDevOverride retargets there. The two are deliberately different names rather than one
+    shared one (`20-00`): a single variable would silently retarget *both* products' builds in the
+    same shell, so switching ago-calendar onto unpublished platform source would also switch
+    ago-chat onto it - and a green ago-chat build against source that is not published yet is
+    exactly the API break the package boundary exists to catch.
+
+    Nothing in this repository changes when the override is used, so a merged branch cannot
+    accidentally keep it switched on - CI never sets the variable and always builds against the
+    published package.
+  -->
+  <PropertyGroup>
+    <AgoCalendarDevOverride Condition="'$(AgoCalendarDevOverride)' == ''">false</AgoCalendarDevOverride>
+  </PropertyGroup>
+
+</Project>

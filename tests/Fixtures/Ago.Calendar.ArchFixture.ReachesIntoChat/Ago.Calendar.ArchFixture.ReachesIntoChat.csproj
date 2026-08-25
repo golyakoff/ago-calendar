@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The deliberate violation. This project is what a Calendar assembly looks like the moment someone
+    adds "just one" ProjectReference into ../ago-chat, and ChatBoundaryTests asserts the rule flags
+    it. Its compliant twin (Ago.Calendar.ArchFixture.Compliant) is this project minus one line, so a
+    rule that flagged everything would fail the demonstration too.
+
+    Never referenced by any src/ project - only by the arch-test project that scans it.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Chat.ArchFixture\Ago.Chat.ArchFixture.csproj" />
+  </ItemGroup>
+
+</Project>

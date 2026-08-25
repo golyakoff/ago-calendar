@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <!--
+    Host: consumers, outbox dispatch, scheduled jobs (adr/0013). No Ago.Calendar.Webhooks host
+    exists - nothing in this product's spec needs an outbound-webhook bulkhead the way AGO Chat's
+    CRM integrations did; add one when a real caller needs it (`20-00` scope).
+
+    Sdk.Worker, not Sdk.Web: this host has no HTTP surface yet. ago-chat's Worker later became a Web
+    host so it could expose /health and /metrics - the same move is likely here, and belongs with
+    the item that first deploys this host, not with a scaffold that has no manifests.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Module\Ago.Calendar.Module.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,48 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Same reason ago-chat turns this on: a central pin only binds a project's own *direct*
+         PackageReferences without it, so a transitively-acquired platform package could resolve to
+         a different version than the one named here and produce an assembly-version conflict at
+         compile time. -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="AGO Platform">
+    <!-- `20-00`: 0.16.0 is ago-platform's current published version - the shared version its CI
+         packs every Ago.Platform.* project at, read from that repository's own CHANGELOG.md at pack
+         time (`[0.16.0]`, 2026-08-25, the presigned-PUT size fix from `5-13`). ago-chat still pins
+         0.15.0; that is not a disagreement, only that nothing has made it bump since.
+
+         Only the four packages this scaffold actually compiles against are pinned. The other five
+         (Messaging.RabbitMq, Realtime, Caching.Redis, Storage.S3, Resilience) get a pin when a
+         project here first references one - a version pinned for a package nothing restores says
+         something about this repository that is not true. -->
+    <PackageVersion Include="Ago.Platform.Kernel" Version="0.16.0" />
+    <PackageVersion Include="Ago.Platform.Abstractions" Version="0.16.0" />
+    <PackageVersion Include="Ago.Platform.Persistence.Postgres" Version="0.16.0" />
+    <PackageVersion Include="Ago.Platform.Hosting" Version="0.16.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Hosting">
+    <!-- Ago.Calendar.Worker only: Microsoft.NET.Sdk.Worker does not carry the generic host the way
+         Microsoft.NET.Sdk.Web carries ASP.NET Core, so this one is a real direct dependency rather
+         than a shared-framework reference. Matches the ASP.NET Core 10.0.11 line ago-chat pins. -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <!-- Mono.Cecil: NetArchTest reasons about type-level dependencies only; the assembly-reference
+         and IL-body rules (adr/0027's Ago.Chat.* isolation, adr/0011's ambient-clock ban) need to
+         read metadata and method bodies directly. It is the library NetArchTest itself is built on,
+         so this adds a name to the restore graph, not a dependency. -->
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="Mono.Cecil" Version="0.11.6" />
+    <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+</Project>

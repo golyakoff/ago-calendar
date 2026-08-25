@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Integration events, public and versioned. Dependency-free on purpose: a consumer of a
+       contract should not be forced to take this product's domain with it. -->
+
+</Project>

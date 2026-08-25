@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The compliant twin of Ago.Calendar.ArchFixture.ReachesIntoChat: identical shape, no reference
+    across the product boundary. It exists so that ChatBoundaryTests proves the rule discriminates,
+    rather than proving only that it can say "no" to everything.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

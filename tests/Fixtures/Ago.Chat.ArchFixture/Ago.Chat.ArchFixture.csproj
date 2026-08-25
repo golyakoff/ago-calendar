@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A stand-in for a real Ago.Chat.* assembly, and the only project in this repository allowed to
+    carry that name. adr/0027's rule - no Ago.Calendar.* assembly references any Ago.Chat.* one -
+    can never be violated for real inside this repository, because a real violation would require
+    ago-chat's binaries to be here in the first place. So the demonstration that the rule can go red
+    (Ago.Calendar.Architecture.Tests, ChatBoundaryTests) compiles a genuine reference against this
+    instead: real IL emitted by the real compiler, not a hand-built metadata table.
+
+    It holds one type and no behaviour. Its name is the entire point of it.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

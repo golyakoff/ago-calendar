@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Ago.Platform.Kernel only - the dependency rule allows nothing else in from outside this project
+    (clean-architecture.md), and Ago.Calendar.Architecture.Tests' LayeringTests enforces exactly
+    that list. Same PackageReference/ProjectReference dev-override switch as every other project
+    here that touches the platform (repositories.md, Directory.Build.props).
+
+    Empty of types until `20-01`: this product's own Tenant/Operator/Worker/Service/Event live here
+    and nowhere else (adr/0027 - Calendar never borrows Ago.Chat.Domain.Operator).
+  -->
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' != 'true'">
+    <PackageReference Include="Ago.Platform.Kernel" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' == 'true'">
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Kernel\Ago.Platform.Kernel.csproj" />
+  </ItemGroup>
+
+</Project>

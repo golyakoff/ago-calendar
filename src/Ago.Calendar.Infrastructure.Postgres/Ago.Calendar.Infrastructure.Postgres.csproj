@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Ago.Platform.Persistence.Postgres (UoW, transactions, outbox/inbox plumbing, EF conventions) is
+    referenced from the start - it is one of the seams this item exists to prove a second product can
+    consume as a package.
+
+    EF Core and Npgsql are in the restore graph already, transitively through it; what is deliberately
+    absent is a *direct* pin and reference here. ago-chat added those (and Dapper) when it had an
+    entity to map and a read store to write - `20-01`'s job, not a scaffold's. Pinning them now would
+    also mean this repository asserting an EF Core version before it has a single query to run it
+    against.
+  -->
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' != 'true'">
+    <PackageReference Include="Ago.Platform.Persistence.Postgres" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' == 'true'">
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Persistence.Postgres\Ago.Platform.Persistence.Postgres.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
+  </ItemGroup>
+
+</Project>

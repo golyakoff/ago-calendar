@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Ago.Platform.Kernel (Result<T>, IClock, IIdGenerator) and Ago.Platform.Abstractions (the generic
+    technical ports - ICache, IEventPublisher, IUnitOfWork) are both dependency-free and therefore
+    safe to reference inwards; product-specific ports live in this project's own Abstractions/
+    folder instead (clean-architecture.md).
+  -->
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' != 'true'">
+    <PackageReference Include="Ago.Platform.Kernel" />
+    <PackageReference Include="Ago.Platform.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' == 'true'">
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Kernel\Ago.Platform.Kernel.csproj" />
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Abstractions\Ago.Platform.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Domain\Ago.Calendar.Domain.csproj" />
+    <ProjectReference Include="..\Ago.Calendar.Contracts\Ago.Calendar.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

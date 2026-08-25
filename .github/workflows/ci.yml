@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+# A branch with a red job here cannot show green - this workflow's name is what a GitHub branch
+# protection rule requires (../ago-root/docs/conventions/git-workflow.md).
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      # This build proves it restores Ago.Platform.* as a real, published .nupkg
+      # (nuget.ci.config), never as a ProjectReference - the whole point of AGO Calendar being the
+      # second product on the platform rather than a folder inside the first. AgoCalendarDevOverride
+      # is never set here, so the dev-override branch of every .csproj (Directory.Build.props) stays
+      # off; a branch merged with it left on fails exactly here (repositories.md).
+      # AGO_PLATFORM_PACKAGES_TOKEN is a repository secret: a classic PAT scoped to read:packages
+      # only (adr/0018) - GitHub does not allow anonymous reads of NuGet packages even on a public
+      # repository.
+      - name: Restore
+        run: dotnet restore Ago.Calendar.slnx --configfile nuget.ci.config
+        env:
+          AGO_PLATFORM_PACKAGES_TOKEN: ${{ secrets.AGO_PLATFORM_PACKAGES_TOKEN }}
+
+      # Runs before build so a formatting-only branch fails fast, before paying for compilation.
+      - name: Format check
+        run: dotnet format Ago.Calendar.slnx --verify-no-changes
+
+      - name: Build
+        run: dotnet build Ago.Calendar.slnx --no-restore -c Release
+
+      # Ago.Calendar.Architecture.Tests is an ordinary test project in this solution, so the
+      # layering rules and adr/0027's Ago.Chat.* isolation rule run here with no separate job.
+      - name: Test
+        run: >
+          dotnet test Ago.Calendar.slnx --no-build -c Release
+          --logger trx --results-directory TestResults
+
+      - name: Publish test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-results
+          path: TestResults

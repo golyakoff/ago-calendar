@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Mono.Cecil" />
+    <PackageReference Include="NetArchTest.Rules" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Referencing every product assembly here, once, is what lets each test load an assembly by
+      simple name (TestAssemblies.cs) instead of by a fragile hard-coded output path - MSBuild
+      guarantees these .dlls sit next to this test project's own output.
+    -->
+    <ProjectReference Include="..\..\src\Ago.Calendar.Domain\Ago.Calendar.Domain.csproj" />
+    <ProjectReference Include="..\..\src\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
+    <ProjectReference Include="..\..\src\Ago.Calendar.Contracts\Ago.Calendar.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Ago.Calendar.Infrastructure.Postgres\Ago.Calendar.Infrastructure.Postgres.csproj" />
+    <ProjectReference Include="..\..\src\Ago.Calendar.Module\Ago.Calendar.Module.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      The arch-test fixtures (ChatBoundaryTests): a deliberately violating assembly, its compliant
+      twin, and the Ago.Chat.* stand-in the violating one compiles against. Scanned by name, never
+      listed in TestAssemblies.AllProduct - a fixture that turned the real rules red for everyone
+      would defeat the point of having them.
+    -->
+    <ProjectReference Include="..\Fixtures\Ago.Calendar.ArchFixture.ReachesIntoChat\Ago.Calendar.ArchFixture.ReachesIntoChat.csproj" />
+    <ProjectReference Include="..\Fixtures\Ago.Calendar.ArchFixture.Compliant\Ago.Calendar.ArchFixture.Compliant.csproj" />
+  </ItemGroup>
+
+</Project>

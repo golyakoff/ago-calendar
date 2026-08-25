@@ -39,6 +39,13 @@ jobs:
 
       # Ago.Calendar.Architecture.Tests is an ordinary test project in this solution, so the
       # layering rules and adr/0027's Ago.Chat.* isolation rule run here with no separate job.
+      #
+      # `20-01`: Ago.Calendar.Integration.Tests joins them, and it starts a real Postgres through
+      # Testcontainers. No extra setup step - ubuntu-latest ships a running Docker daemon, which is
+      # exactly how ago-chat's own integration suite has run in CI since `1-04`. If a runner image
+      # ever stops providing one, this step is where it will show up, and the honest fix is a
+      # service container rather than skipping the tests: the overlap guarantee has no in-memory
+      # equivalent to fall back to.
       - name: Test
         run: >
           dotnet test Ago.Calendar.slnx --no-build -c Release

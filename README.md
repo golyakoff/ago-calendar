@@ -47,6 +47,31 @@ dotnet test Ago.Calendar.slnx --no-build -c Release
 (`../ago-root/docs/runbooks/workspace.md`); pack `ago-platform` into it first if it is empty. CI
 uses `nuget.ci.config` and the real GitHub Packages feed instead (`../ago-root/docs/adr/0018-*`).
 
+## Database
+
+Its **own** Postgres database, never a schema inside AGO Chat's (`../ago-root/docs/adr/0027-*`), and
+no query in either product can reach the other's tables. Schema and reasoning:
+`../ago-root/docs/architecture/data-model.md`, "AGO Calendar" section, and
+`../ago-root/docs/adr/0049-*` for the two decisions worth arguing with - how time is stored, and why
+"no double booking" is a database exclusion constraint rather than a check in the aggregate.
+
+`dotnet ef` needs a connection string, and it comes from an environment variable so that no
+credential shape is ever committed here:
+
+```bash
+cd C:/git/ago/ago-calendar
+export AGO_CALENDAR_CONNECTION_STRING="Host=localhost;Port=5432;Database=ago_calendar;Username=...;Password=..."
+dotnet ef migrations add <StageVerbSubject> \
+  -p src/Ago.Calendar.Infrastructure.Postgres -s src/Ago.Calendar.Infrastructure.Postgres
+```
+
+`migrations add` never actually connects - schema generation is static from the model - so any
+syntactically valid string satisfies it; `database update` needs a reachable one.
+
+`Ago.Calendar.Integration.Tests` needs a **running Docker daemon**: it starts a real Postgres through
+Testcontainers and applies the migrations from scratch. That is not a preference - the overlap
+guarantee is a storage-level constraint, and no in-memory provider has one to prove.
+
 ## Dev override
 
 For a change that genuinely spans this repository and `ago-platform`, set `AgoCalendarDevOverride`

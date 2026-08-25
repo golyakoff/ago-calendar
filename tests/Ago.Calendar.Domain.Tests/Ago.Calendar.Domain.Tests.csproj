@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Nothing else. testing.md's own rule of thumb: "a test that needs a container to prove a
+         business rule means the business rule leaked out of the Domain" - every invariant proven
+         here runs in milliseconds with no infrastructure at all. -->
+    <ProjectReference Include="..\..\src\Ago.Calendar.Domain\Ago.Calendar.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

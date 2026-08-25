@@ -10,19 +10,29 @@
   </PropertyGroup>
 
   <ItemGroup Label="AGO Platform">
-    <!-- `20-00`: 0.16.0 is ago-platform's current published version - the shared version its CI
-         packs every Ago.Platform.* project at, read from that repository's own CHANGELOG.md at pack
-         time (`[0.16.0]`, 2026-08-25, the presigned-PUT size fix from `5-13`). ago-chat still pins
-         0.15.0; that is not a disagreement, only that nothing has made it bump since.
+    <!-- `20-00`: 0.16.0 was ago-platform's published version when this repository was scaffolded -
+         the shared version its CI packs every Ago.Platform.* project at, read from that
+         repository's own CHANGELOG.md at pack time.
 
-         Only the four packages this scaffold actually compiles against are pinned. The other five
-         (Messaging.RabbitMq, Realtime, Caching.Redis, Storage.S3, Resilience) get a pin when a
-         project here first references one - a version pinned for a package nothing restores says
-         something about this repository that is not true. -->
-    <PackageVersion Include="Ago.Platform.Kernel" Version="0.16.0" />
-    <PackageVersion Include="Ago.Platform.Abstractions" Version="0.16.0" />
-    <PackageVersion Include="Ago.Platform.Persistence.Postgres" Version="0.16.0" />
-    <PackageVersion Include="Ago.Platform.Hosting" Version="0.16.0" />
+         `20-01`: moved to 0.18.0. `7-09`/adr/0046 split telemetry out of Ago.Platform.Hosting into
+         a new Ago.Platform.Observability package - source-breaking for every host that calls
+         AddPlatformObservability, and a one-line change here because no host in this repository
+         ever called it. Ago.Calendar.Worker deliberately does **not** take an
+         Ago.Platform.Observability reference: it is a plain Microsoft.NET.Sdk.Worker host with no
+         IEndpointRouteBuilder to expose a Prometheus scrape endpoint on, so referencing the package
+         would drag eight OpenTelemetry dependencies (one of them prerelease) back into its restore
+         graph for a capability it still could not use - which is precisely the cost `7-09` removed,
+         and which `20-00`'s own Open questions section is what surfaced. When this host gains an
+         HTTP surface and real telemetry, the reference arrives with them, not before.
+
+         Only the four packages this repository actually compiles against are pinned. The other five
+         (Messaging.RabbitMq, Realtime, Caching.Redis, Storage.S3, Resilience) plus Observability get
+         a pin when a project here first references one - a version pinned for a package nothing
+         restores says something about this repository that is not true. -->
+    <PackageVersion Include="Ago.Platform.Kernel" Version="0.18.0" />
+    <PackageVersion Include="Ago.Platform.Abstractions" Version="0.18.0" />
+    <PackageVersion Include="Ago.Platform.Persistence.Postgres" Version="0.18.0" />
+    <PackageVersion Include="Ago.Platform.Hosting" Version="0.18.0" />
   </ItemGroup>
 
   <ItemGroup Label="Hosting">
@@ -32,13 +42,39 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
   </ItemGroup>
 
+  <ItemGroup Label="Persistence">
+    <!-- `20-01`, adr/0004's split applied to this product: EF Core owns writes (aggregates,
+         transactions, migrations). Dapper is deliberately absent - adr/0004's read side needs a read
+         model to serve, and this item builds none; it arrives with `20-02`'s availability query,
+         which is the first read that is genuinely a projection rather than an aggregate load.
+
+         Versions match ago-chat's own pins exactly, and for the same reason it recorded there:
+         Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3 pulls EFCore 10.0.4 transitively, which
+         conflicts with Microsoft.EntityFrameworkCore.Design 10.0.11 unless EFCore itself is pinned
+         explicitly. -->
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+  </ItemGroup>
+
   <ItemGroup Label="Testing">
     <!-- Mono.Cecil: NetArchTest reasons about type-level dependencies only; the assembly-reference
          and IL-body rules (adr/0027's Ago.Chat.* isolation, adr/0011's ambient-clock ban) need to
          read metadata and method bodies directly. It is the library NetArchTest itself is built on,
          so this adds a name to the restore graph, not a dependency. -->
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <!-- `20-01`: migration tooling only (`dotnet ef migrations add`), PrivateAssets="all" at the
+         reference site so it never ships in a container image. -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- `20-01`: a real Postgres for Ago.Calendar.Integration.Tests. testing.md is unambiguous that
+         a mocked database proves the test compiles and nothing else - and this item's central claim
+         (a GiST exclusion constraint that no two concurrent writers can both get past) has no
+         in-memory equivalent at all. Same version ago-chat pins. -->
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.14.0" />
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="Mono.Cecil" Version="0.11.6" />
     <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />
     <PackageVersion Include="xunit" Version="2.9.3" />

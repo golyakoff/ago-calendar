@@ -20,6 +20,8 @@
     <!-- `20-02`: the tz-database adapter. Its own project rather than a class in
          Infrastructure.Postgres - see that project's .csproj for why. -->
     <ProjectReference Include="..\Ago.Calendar.Infrastructure.Time\Ago.Calendar.Infrastructure.Time.csproj" />
+    <!-- `20-03`: the rate limiter behind the public booking endpoint. -->
+    <ProjectReference Include="..\Ago.Calendar.Infrastructure.Redis\Ago.Calendar.Infrastructure.Redis.csproj" />
   </ItemGroup>
 
 </Project>

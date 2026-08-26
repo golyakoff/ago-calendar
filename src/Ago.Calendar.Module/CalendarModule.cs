@@ -1,11 +1,14 @@
-﻿using Ago.Calendar.Application.UseCases.DeleteDayOff;
+﻿using Ago.Calendar.Application.UseCases.BookEvent;
+using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.UseCases.MaterializeAvailability;
 using Ago.Calendar.Infrastructure.Postgres;
+using Ago.Calendar.Infrastructure.Redis;
 using Ago.Calendar.Infrastructure.Time;
 using Ago.Platform.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace Ago.Calendar.Module;
 
@@ -30,12 +33,18 @@ public sealed class CalendarModule : IProductModule
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        // From the environment, never from a checked-in settings file. This repository is public
-        // from its first commit, and a connection string in appsettings.json is how a credential
-        // ends up in git history - the same call ChatModule made for AGO Chat.
-        var connectionString = Environment.GetEnvironmentVariable("AGO_CALENDAR_CONNECTION_STRING")
+        // Configuration first, the environment variable as the fallback. `20-02` read only the
+        // variable; `20-03` widened it because a test host has to be able to point this module at a
+        // Testcontainers Postgres without mutating process-wide state that every other test in the
+        // assembly shares. Nothing is weakened by the widening: what must never happen is a
+        // credential committed to a settings file, and reading *configuration* does not commit
+        // anything - a deployment still supplies the value through the environment.
+        var connectionString =
+            configuration.GetConnectionString("Calendar")
+            ?? Environment.GetEnvironmentVariable("AGO_CALENDAR_CONNECTION_STRING")
             ?? throw new InvalidOperationException(
-                "Set AGO_CALENDAR_CONNECTION_STRING - e.g. the docker-compose Postgres from local-dev.md.");
+                "Set ConnectionStrings:Calendar or AGO_CALENDAR_CONNECTION_STRING - e.g. the " +
+                "docker-compose Postgres from local-dev.md.");
 
         services.AddCalendarPostgresPersistence(connectionString);
 
@@ -43,8 +52,29 @@ public sealed class CalendarModule : IProductModule
         // the Worker: the manual-edit handlers convert too, and they are the API's business.
         services.AddCalendarTimeZoneResolution();
 
+        // `20-03`: Redis, for the one thing this product needs from it - the booking endpoint's two
+        // rate-limit buckets. Registered for every host even though only the API takes a check: the
+        // hosts differ in what they run, not in what the product is (adr/0013), and a connection is
+        // opened lazily on first use, so the Worker pays nothing for the registration.
+        services.AddCalendarRateLimiting(configuration);
+
         services.AddScoped<MaterializeAvailabilityHandler>();
         services.AddScoped<DeleteDayOffHandler>();
         services.AddScoped<EditDayBoundaryHandler>();
+
+        // Bound and validated at startup (naming-and-structure.md). Handlers take the plain value,
+        // never IOptions<T> - Application must not know how a host binds configuration, which is the
+        // same call ago-chat's own rate-limit options make at every call site.
+        services.AddOptions<BookingOptions>()
+            .Bind(configuration.GetSection(BookingOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton(provider => provider.GetRequiredService<IOptions<BookingOptions>>().Value);
+
+        services.AddOptions<BookingRateLimitOptions>()
+            .Bind(configuration.GetSection(BookingRateLimitOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton(provider => provider.GetRequiredService<IOptions<BookingRateLimitOptions>>().Value);
+
+        services.AddScoped<BookEventHandler>();
     }
 }

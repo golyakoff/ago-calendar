@@ -73,6 +73,25 @@ daemon**: they start a real Postgres through Testcontainers and apply the migrat
 That is not a preference - the overlap guarantee and the "two replicas cannot both materialise the
 same day" guarantee are both storage-level constraints, and no in-memory provider has one to prove.
 
+## The booking claim
+
+`POST /api/v1/calendars/{calendarId}/events/{eventId}/book` is the product's only public write
+surface, and it is **unauthenticated by design** - a customer books with a phone number and no
+account. What stands in for authentication is the claim itself: a single
+`UPDATE events SET status = 'PendingConfirmation' ... WHERE id = @id AND calendar_id = @calendarId
+AND status = 'Available' AND starts_at > @now`, whose rows-affected count *is* the verdict, plus two
+rate-limit buckets (per phone, per calendar) treated as correctness properties with tests rather than
+as settings. A row count of zero is an ordinary outcome - somebody else got there first - and is
+never logged at `Error`, never a 500 (`../ago-root/docs/adr/0059-*`).
+
+The customer is told they are booked. The row says `PendingConfirmation` with a deadline, and an
+operator may still veto it (`20-04`). That gap is the product spec's central design decision, and
+`BookingConfirmedResponse` is shaped so no endpoint can leak it: no status field, no deadline field,
+and a test that serialises a real response and fails if the JSON mentions either.
+
+`Ago.Calendar.Infrastructure.Redis` exists for the rate limiter alone - Redis is never a source of
+truth here, and the claim reads nothing from it.
+
 ## Where wall clock becomes an instant
 
 Exactly one place: `Ago.Calendar.Infrastructure.Time`, whose only type is `SystemWallClockResolver`.

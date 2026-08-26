@@ -25,14 +25,22 @@
          and which `20-00`'s own Open questions section is what surfaced. When this host gains an
          HTTP surface and real telemetry, the reference arrives with them, not before.
 
-         Only the four packages this repository actually compiles against are pinned. The other five
-         (Messaging.RabbitMq, Realtime, Caching.Redis, Storage.S3, Resilience) plus Observability get
-         a pin when a project here first references one - a version pinned for a package nothing
-         restores says something about this repository that is not true. -->
+         Only the packages this repository actually compiles against are pinned. `20-03` added two
+         (Caching.Redis, Resilience); the remaining three (Messaging.RabbitMq, Realtime, Storage.S3)
+         plus Observability get a pin when a project here first references one - a version pinned for
+         a package nothing restores says something about this repository that is not true. -->
     <PackageVersion Include="Ago.Platform.Kernel" Version="0.18.0" />
     <PackageVersion Include="Ago.Platform.Abstractions" Version="0.18.0" />
     <PackageVersion Include="Ago.Platform.Persistence.Postgres" Version="0.18.0" />
     <PackageVersion Include="Ago.Platform.Hosting" Version="0.18.0" />
+    <!-- `20-03`: IRateLimiter's own adapter. The booking endpoint is unauthenticated and creates
+         rows on request from the public internet, so it needs a real distributed limiter, not a
+         per-process one - two Api replicas sharing one bucket is the whole point.
+         Ago.Platform.Resilience arrives with it because RedisRateLimiter takes a Polly pipeline the
+         caller builds; see Ago.Calendar.Infrastructure.Redis for why this repository wires those
+         pieces itself instead of calling AddRedisCaching. -->
+    <PackageVersion Include="Ago.Platform.Caching.Redis" Version="0.18.0" />
+    <PackageVersion Include="Ago.Platform.Resilience" Version="0.18.0" />
   </ItemGroup>
 
   <ItemGroup Label="Hosting">
@@ -57,6 +65,13 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <!-- `20-03`: named directly, not taken transitively. Ago.Calendar.Infrastructure.Redis
+         constructs RedisRateLimiter itself, so it has to name IConnectionMultiplexer and
+         ResiliencePipeline in its own code. Versions match ago-chat's pins. -->
+    <PackageVersion Include="StackExchange.Redis" Version="3.1.31" />
+    <PackageVersion Include="Polly.Core" Version="8.5.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup Label="Testing">
@@ -74,6 +89,15 @@
          (a GiST exclusion constraint that no two concurrent writers can both get past) has no
          in-memory equivalent at all. Same version ago-chat pins. -->
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.14.0" />
+    <!-- `20-03`: a real Redis for the rate-limit tests. `3-05`'s own RateLimitingConcurrencyTests
+         set the bar - a token bucket is a Lua script executing inside Redis, and a fake of it proves
+         only that the fake behaves as its author expected. -->
+    <PackageVersion Include="Testcontainers.Redis" Version="4.14.0" />
+    <!-- `20-03`: the booking endpoint's Done-when is an HTTP claim ("a denied attempt returns 429
+         with Retry-After"), and only a real request over a real host can prove a status code and a
+         header. WebApplicationFactory runs Ago.Calendar.Api in-process against the same
+         Testcontainers Postgres and Redis the rest of the suite uses. -->
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="Mono.Cecil" Version="0.11.6" />
     <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />

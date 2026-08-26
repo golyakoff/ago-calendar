@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    `20-03`: this repository's first handler-level test project, matching Ago.Chat.Application.Tests'
+    precedent. Fakes for every port (testing.md's "application units with fakes"), so what is under
+    test is the handler's own decisions - order of checks, which failure it reports, what it refuses
+    to do - and not any database's behaviour, which the integration suite covers against a real one.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
+    <ProjectReference Include="..\..\src\Ago.Calendar.Contracts\Ago.Calendar.Contracts.csproj" />
+  </ItemGroup>
+
+</Project>

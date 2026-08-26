@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Testcontainers.PostgreSql;
+using Testcontainers.Redis;
 
 namespace Ago.Calendar.Integration.Tests;
 
@@ -14,18 +15,32 @@ namespace Ago.Calendar.Integration.Tests;
 public sealed class PostgresFixture : IAsyncLifetime
 {
     private PostgreSqlContainer _container = null!;
+    private RedisContainer _redis = null!;
     private IDisposable _dockerLock = null!;
 
     public NpgsqlDataSource DataSource { get; private set; } = null!;
+
+    /// <summary>`20-03`: what a host is configured with. The booking endpoint's own test runs the
+    /// real <c>Ago.Calendar.Api</c> in-process, and <c>AddCalendarPostgresPersistence</c> takes a
+    /// connection string, not a data source.</summary>
+    public string ConnectionString { get; private set; } = string.Empty;
+
+    /// <summary>`20-03`: a real Redis, because the booking endpoint's rate limiter is a real one.
+    /// Added to this fixture rather than to a third one so the suite pays for one extra container,
+    /// not one per collection.</summary>
+    public string RedisConnectionString { get; private set; } = string.Empty;
 
     public async Task InitializeAsync()
     {
         _dockerLock = await DockerResourceLock.AcquireAsync();
 
         _container = new PostgreSqlBuilder("postgres:17-alpine").Build();
-        await _container.StartAsync();
+        _redis = new RedisBuilder("redis:7-alpine").Build();
+        await Task.WhenAll(_container.StartAsync(), _redis.StartAsync());
 
-        DataSource = new NpgsqlDataSourceBuilder(_container.GetConnectionString()).Build();
+        ConnectionString = _container.GetConnectionString();
+        RedisConnectionString = _redis.GetConnectionString();
+        DataSource = new NpgsqlDataSourceBuilder(ConnectionString).Build();
 
         await using var db = CreateDbContext();
         await db.Database.MigrateAsync();
@@ -34,6 +49,7 @@ public sealed class PostgresFixture : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await DataSource.DisposeAsync();
+        await _redis.DisposeAsync();
         await _container.DisposeAsync();
         _dockerLock.Dispose();
     }

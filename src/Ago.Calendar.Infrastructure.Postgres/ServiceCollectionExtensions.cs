@@ -31,6 +31,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICustomerRepository, CustomerRepository>();
         services.AddScoped<IWorkingHoursRuleRepository, WorkingHoursRuleRepository>();
         services.AddScoped<IEventRepository, EventRepository>();
+        // `20-03`: the booking write - the compare-and-set claim and the lead-card upsert, in one
+        // transaction. Scoped like every other adapter here, because it holds the DbContext whose
+        // connection both statements run on.
+        services.AddScoped<IBookingStore, BookingStore>();
 
         // adr/0017: the platform's own generic outbox/inbox, bound to this product's context. The
         // tables exist from this migration onward; the first writer is `20-05`.

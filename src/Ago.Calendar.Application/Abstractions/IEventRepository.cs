@@ -12,13 +12,21 @@ namespace Ago.Calendar.Application.Abstractions;
 /// find-or-create share one transaction, and what the caller needs back when it loses. Declaring it
 /// now would be guessing at a signature for the one operation in this product that must not be
 /// guessed at. The <c>xmin</c> mapping and the exclusion constraint this item does ship are what
-/// make either shape safe when it arrives; see <see cref="SaveAsync"/>.</para>
+/// make either shape safe when it arrives; see <see cref="SaveAsync"/>. <b>`20-03` answered it</b>:
+/// the claim is a raw <c>UPDATE ... WHERE status = 'Available'</c> sharing one transaction with the
+/// customer upsert, so it went to <see cref="IBookingStore"/> rather than here, and this port never
+/// grew the method - which is what refusing to guess a signature early bought.</para>
 ///
 /// <para>There is also no availability query. "Which slots are free on this day" is a read model
 /// returning DTOs, not aggregates (adr/0004), and it belongs with the Dapper read store that serves
-/// the public booking page - `20-03`, which is the first item with a caller for it. `20-02`'s own
-/// reads are all write-side questions ("has this day been generated", "what is on this day before I
-/// rewrite it"), which is why they are aggregate-shaped and live here.</para>
+/// the public booking page. `20-02` predicted `20-03` would be the first item with a caller for it;
+/// it was not - `20-03` books a slot the caller already chose and never lists any, so the first real
+/// caller is `20-06`'s booking widget. Recorded rather than quietly corrected, because a prediction
+/// about who needs a port is the kind of thing that gets built on.</para>
+///
+/// <para>`20-03` did add the claim, and it is not here either: it is a compare-and-set spanning a
+/// transaction with the lead-card upsert, so it lives on <see cref="IBookingStore"/> (adr/0059).
+/// `20-01` guessed it would land on this port and was right to refuse to declare it early.</para>
 /// </summary>
 public interface IEventRepository
 {

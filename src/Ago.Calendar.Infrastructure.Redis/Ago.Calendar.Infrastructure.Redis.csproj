@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    One project per external technology (naming-and-structure.md), matching Infrastructure.Postgres
+    and `20-02`'s Infrastructure.Time. Redis is an external technology this product now depends on.
+
+    It holds no adapter of its own: the adapter is Ago.Platform.Caching.Redis's RedisRateLimiter,
+    used unchanged. What lives here is the wiring, and the reason it has to live here at all is a
+    finding about the platform's packaging rather than a choice - see ServiceCollectionExtensions.
+  -->
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' != 'true'">
+    <PackageReference Include="Ago.Platform.Abstractions" />
+    <PackageReference Include="Ago.Platform.Caching.Redis" />
+    <PackageReference Include="Ago.Platform.Resilience" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' == 'true'">
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Abstractions\Ago.Platform.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Caching.Redis\Ago.Platform.Caching.Redis.csproj" />
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Resilience\Ago.Platform.Resilience.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Named directly because this project constructs RedisRateLimiter itself and therefore has to
+         name the two types its constructor takes. -->
+    <PackageReference Include="StackExchange.Redis" />
+    <PackageReference Include="Polly.Core" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+</Project>

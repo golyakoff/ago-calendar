@@ -1,4 +1,5 @@
 ﻿using Ago.Calendar.Application.UseCases.BookEvent;
+using Ago.Calendar.Application.UseCases.BookingLifecycle;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.UseCases.MaterializeAvailability;
@@ -76,5 +77,11 @@ public sealed class CalendarModule : IProductModule
         services.AddSingleton(provider => provider.GetRequiredService<IOptions<BookingRateLimitOptions>>().Value);
 
         services.AddScoped<BookEventHandler>();
+
+        // `20-04`: the three operator-facing transitions and the shared queue they act on.
+        services.AddScoped<RejectBookingHandler>();
+        services.AddScoped<CancelBookingHandler>();
+        services.AddScoped<MarkNoShowHandler>();
+        services.AddScoped<GetPendingBookingsForTenantHandler>();
     }
 }

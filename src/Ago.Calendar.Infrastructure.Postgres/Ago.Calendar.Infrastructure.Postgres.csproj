@@ -11,6 +11,7 @@
   -->
   <ItemGroup>
     <!-- adr/0004: EF Core owns writes (aggregates, transactions, migrations). -->
+    <PackageReference Include="Dapper" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <!-- Explicit, not merely transitive via the Npgsql provider - keeps this project resolving the
          same EFCore version as Microsoft.EntityFrameworkCore.Design below. -->

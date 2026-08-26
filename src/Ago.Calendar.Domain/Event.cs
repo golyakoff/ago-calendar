@@ -236,7 +236,7 @@ public sealed class Event
 
         ConfirmationDeadline = null;
         Status = EventStatus.Booked;
-        _domainEvents.Add(new EventConfirmed(Id, TenantId, CustomerId!.Value, Slot, now));
+        _domainEvents.Add(new EventConfirmed(Id, TenantId, CalendarId, CustomerId!.Value, Slot, LocalDate, now));
     }
 
     /// <summary>The operator's veto, inside the window. <c>PendingConfirmation -&gt; Cancelled</c>.

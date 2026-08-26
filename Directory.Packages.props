@@ -52,14 +52,22 @@
 
   <ItemGroup Label="Persistence">
     <!-- `20-01`, adr/0004's split applied to this product: EF Core owns writes (aggregates,
-         transactions, migrations). Dapper is deliberately absent - adr/0004's read side needs a read
-         model to serve, and this item builds none; it arrives with `20-02`'s availability query,
-         which is the first read that is genuinely a projection rather than an aggregate load.
+         transactions, migrations). Dapper was deliberately absent until `20-04` - `20-01` predicted
+         `20-02` would bring the first real projection and it did not; see Dapper's own entry
+         below for where it actually arrived and why.
 
          Versions match ago-chat's own pins exactly, and for the same reason it recorded there:
          Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3 pulls EFCore 10.0.4 transitively, which
          conflicts with Microsoft.EntityFrameworkCore.Design 10.0.11 unless EFCore itself is pinned
          explicitly. -->
+    <!-- `20-04`: adr/0004's read side, finally with something to serve. `20-01` left Dapper out
+         deliberately - "the read side needs a read model, and this item builds none" - and predicted
+         `20-02`'s availability query would be the first; it was not (`20-02` reads are all write-side
+         questions, and `20-03` books a slot the caller already chose). The shared pending-bookings
+         queue is the first genuine projection: rows for a screen, not aggregates. Hand-rolling a
+         positional DataReader loop per read model is exactly the boilerplate this replaces, and
+         ago-chat already pays for the same dependency for the same reason. Same version it pins. -->
+    <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />

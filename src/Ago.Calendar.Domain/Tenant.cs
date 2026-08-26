@@ -13,17 +13,39 @@
 /// </summary>
 public sealed class Tenant
 {
+    private readonly List<string> _allowedOrigins = [];
+
     public TenantId Id { get; }
 
     public string Name { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// What a shop's own page writes into the embed's <c>&lt;script&gt;</c> tag (`20-06`). See
+    /// <see cref="TenantPublicKey"/> for why it is public, chosen rather than generated, and never
+    /// something a request may be authorised by.
+    /// </summary>
+    public TenantPublicKey PublicKey { get; private set; }
+
+    /// <summary>
+    /// The page origins allowed to embed this tenant's booking surface - `5-01`'s
+    /// <c>Site.AllowedOrigins</c>, adapted from "site" to "tenant" exactly as `20-06` scoped it.
+    ///
+    /// <para><b>Empty means no browser may embed this tenant, and that is the safe default.</b> A
+    /// tenant registered without origins is bookable by a server-side caller and by nobody's page,
+    /// which is the failure a shop notices immediately rather than the one nobody notices.</para>
+    /// </summary>
+    public IReadOnlyList<string> AllowedOrigins => _allowedOrigins;
+
     public DateTimeOffset CreatedAt { get; }
 
-    private Tenant(TenantId id, string name, DateTimeOffset now)
+    private Tenant(
+        TenantId id, string name, TenantPublicKey publicKey, IEnumerable<string> allowedOrigins, DateTimeOffset now)
     {
         Id = id;
         Name = name;
+        PublicKey = publicKey;
         CreatedAt = now;
+        _allowedOrigins.AddRange(allowedOrigins);
     }
 
     // EF Core materialization only - never called by domain code.
@@ -31,14 +53,16 @@ public sealed class Tenant
     {
     }
 
-    public static Tenant Register(TenantId id, string name, DateTimeOffset now)
+    public static Tenant Register(
+        TenantId id, string name, TenantPublicKey publicKey, DateTimeOffset now,
+        IEnumerable<string>? allowedOrigins = null)
     {
         // clean-architecture.md: "there is no such thing as a validated-somewhere-else entity". The
         // alternative - a FluentValidation rule in the Application layer - would leave the aggregate
         // constructible in a state the aggregate itself calls illegal, which is the whole failure
         // mode this rule exists to prevent.
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        return new Tenant(id, name.Trim(), now);
+        return new Tenant(id, name.Trim(), publicKey, Normalize(allowedOrigins ?? []), now);
     }
 
     public void Rename(string name)
@@ -46,4 +70,68 @@ public sealed class Tenant
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         Name = name.Trim();
     }
+
+    /// <summary>Replaces the whole list rather than adding one entry, because that is what an editor
+    /// screen submits and because a set with an add but no remove grows forever.</summary>
+    public void SetAllowedOrigins(IEnumerable<string> origins)
+    {
+        var normalized = Normalize(origins);
+        _allowedOrigins.Clear();
+        _allowedOrigins.AddRange(normalized);
+    }
+
+    /// <summary>
+    /// <b>Layer 2 of `5-01`'s two-layer model, expressed where the rule actually lives.</b> The CORS
+    /// policy (layer 1) can only answer "does <i>some</i> tenant allow this origin", because a
+    /// preflight has not yet said which tenant the request is for. This answers the question that
+    /// makes it a tenant boundary: does <i>this</i> tenant allow it. Putting the comparison on the
+    /// aggregate rather than in each handler is what keeps the normalisation rules (lowercase scheme
+    /// and host, no trailing slash) in one place - three handlers each doing their own string compare
+    /// is three chances for one of them to be case-sensitive.
+    /// </summary>
+    public bool Allows(string origin) =>
+        !string.IsNullOrWhiteSpace(origin) && _allowedOrigins.Contains(NormalizeOne(origin), StringComparer.Ordinal);
+
+    private static List<string> Normalize(IEnumerable<string> origins)
+    {
+        ArgumentNullException.ThrowIfNull(origins);
+
+        var normalized = new List<string>();
+        foreach (var origin in origins)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(origin);
+
+            var value = NormalizeOne(origin);
+
+            // An origin is a scheme, a host and an optional port - never a path, a query or a
+            // fragment. Rejecting the longer forms here rather than trimming them is deliberate: a
+            // tenant who typed "https://shop.example/booking" believes the path is doing something,
+            // and silently storing "https://shop.example" would grant more than they asked for.
+            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+                || uri.AbsolutePath != "/"
+                || !string.IsNullOrEmpty(uri.Query)
+                || !string.IsNullOrEmpty(uri.Fragment)
+                || value != uri.GetLeftPart(UriPartial.Authority))
+            {
+                throw new ArgumentException(
+                    $"'{origin}' is not an origin. An origin is scheme://host[:port], with no path.", nameof(origins));
+            }
+
+            if (!normalized.Contains(value, StringComparer.Ordinal))
+            {
+                normalized.Add(value);
+            }
+        }
+
+        return normalized;
+    }
+
+    /// <summary>
+    /// Lowercased and stripped of a trailing slash. A browser sends <c>Origin</c> with a lowercase
+    /// scheme and host and no trailing slash already; this normalises what a <i>human</i> types into
+    /// the console, so the two can be compared with an ordinal equality rather than with a
+    /// case-insensitive compare that would also fold a case-sensitive path if one ever slipped in.
+    /// </summary>
+    private static string NormalizeOne(string origin) =>
+        origin.Trim().TrimEnd('/').ToLowerInvariant();
 }

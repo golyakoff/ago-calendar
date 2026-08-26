@@ -50,6 +50,14 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
   </ItemGroup>
 
+  <ItemGroup Label="Authentication">
+    <!-- `20-06`: adr/0022's mechanism, copied per adr/0027 rather than shared - Ago.Calendar.Api
+         validates a Keycloak-issued token itself and resolves it against *this* product's own
+         operators table. The package is a real direct dependency of the Api host: it is not part of
+         the ASP.NET Core shared framework. Same version line as everything else here. -->
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
+  </ItemGroup>
+
   <ItemGroup Label="Persistence">
     <!-- `20-01`, adr/0004's split applied to this product: EF Core owns writes (aggregates,
          transactions, migrations). Dapper was deliberately absent until `20-04` - `20-01` predicted

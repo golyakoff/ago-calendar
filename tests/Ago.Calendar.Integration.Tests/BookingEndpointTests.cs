@@ -185,27 +185,18 @@ public class BookingEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 }
 
 /// <summary>
-/// <c>Ago.Calendar.Api</c> in-process, pointed at this suite's own containers.
-///
-/// <para>The connection strings arrive as configuration rather than as environment variables, which
-/// is why <c>CalendarModule</c> reads configuration first as of `20-03`: setting a process-wide
-/// variable from a test would leak into every other test in the assembly, and xunit runs collections
-/// in parallel.</para>
+/// <see cref="CalendarApiFactory"/> with a small per-phone bucket that does not refill during a test,
+/// so "the third attempt is denied" is deterministic rather than a race against the clock. The
+/// calendar bucket stays wide so it never interferes; its own behaviour is proven separately, against
+/// a real Redis, in <c>Ago.Calendar.Concurrency.Tests</c>.
 /// </summary>
-internal sealed class BookingApiFactory(PostgresFixture fixture) : WebApplicationFactory<Program>
+internal sealed class BookingApiFactory(PostgresFixture fixture) : CalendarApiFactory(fixture)
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseSetting("ConnectionStrings:Calendar", fixture.ConnectionString);
-        builder.UseSetting("Redis:ConnectionString", fixture.RedisConnectionString);
+        base.ConfigureWebHost(builder);
 
-        // A small phone bucket that does not refill during a test, so "the third attempt is denied"
-        // is deterministic rather than a race against the clock. The calendar bucket is opened wide
-        // so it never interferes; its own behaviour is proven separately, against a real Redis, in
-        // Ago.Calendar.Concurrency.Tests.
         builder.UseSetting("BookingRateLimit:PerPhoneCapacity", "2");
         builder.UseSetting("BookingRateLimit:PerPhoneRefillPerSecond", "0.001");
-        builder.UseSetting("BookingRateLimit:PerCalendarCapacity", "100000");
-        builder.UseSetting("BookingRateLimit:PerCalendarRefillPerSecond", "100000");
     }
 }

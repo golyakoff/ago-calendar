@@ -29,12 +29,35 @@ namespace Ago.Calendar.Application.UseCases.DeleteDayOff;
 /// refused. The failure mode of the race is a retry message, never a lost booking.</para>
 /// </summary>
 public sealed class DeleteDayOffHandler(
+    IBookingCalendarRepository calendars,
+    IPermissionChecker permissions,
     IEventRepository events,
     IIdGenerator idGenerator,
     IClock clock)
 {
     public async Task<Result> HandleAsync(DeleteDayOff command, CancellationToken cancellationToken)
     {
+        // `20-06`. Two checks, not one, and they answer different questions - the same pair
+        // RejectBookingHandler makes. The permission check proves this operator may reshape schedules
+        // in the tenant they *claimed*; the calendar's own tenant proves the calendar is in it.
+        // Skipping the second would let an operator with a legitimate permission blank out another
+        // shop's Tuesday by guessing a uuid.
+        var allowed = await permissions.HasPermissionAsync(
+            command.OperatorId, command.TenantId, Permission.CalendarConfigure, cancellationToken);
+        if (!allowed)
+        {
+            return AvailabilityErrors.Forbidden(Permission.CalendarConfigure);
+        }
+
+        var calendar = await calendars.GetByIdAsync(command.CalendarId, cancellationToken);
+        if (calendar is null || calendar.TenantId != command.TenantId)
+        {
+            // Another tenant's calendar is reported as absent rather than as forbidden - an operator
+            // of tenant A learning that an id exists in tenant B is a cross-tenant leak however
+            // politely it is worded (BookingLifecycleErrors.WrongTenant makes the same call).
+            return AvailabilityErrors.CalendarNotFound(command.CalendarId);
+        }
+
         var day = await events.ListForDayAsync(
             command.CalendarId, command.WorkerId, command.LocalDate, cancellationToken);
 

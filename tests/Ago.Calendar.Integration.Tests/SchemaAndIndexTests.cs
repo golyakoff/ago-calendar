@@ -123,7 +123,10 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         var rule = WorkingHoursRule.For(
             new WorkingHoursRuleId(CalendarSeed.NewId()), seed.Worker, seed.Calendar,
             DayOfWeek.Tuesday, new TimeOnly(9, 30), new TimeOnly(18, 0));
-        var role = Role.SeedOperatorRole(new RoleId(CalendarSeed.NewId()), seed.Tenant.Id);
+        // `20-06`: the seed now writes the v1 role itself, and `ux_roles_tenant_name` means one
+        // tenant cannot hold two roles called "Operator" - so this test grants the seeded role rather
+        // than a second copy of it. The mapping it round-trips is unchanged.
+        var role = seed.Role;
         var @operator = Operator.Create(
             new OperatorId(CalendarSeed.NewId()), seed.Tenant.Id, "Anna", "keycloak-subject-1");
         @operator.Grant(role);
@@ -131,7 +134,6 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         await using (var db = fixture.CreateDbContext())
         {
             db.WorkingHoursRules.Add(rule);
-            db.Roles.Add(role);
             db.Operators.Add(@operator);
             await db.SaveChangesAsync();
         }

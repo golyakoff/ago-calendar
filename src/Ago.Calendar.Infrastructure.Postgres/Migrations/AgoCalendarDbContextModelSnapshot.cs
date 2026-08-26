@@ -349,7 +349,27 @@ namespace Ago.Calendar.Infrastructure.Postgres.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("name");
 
+                    b.Property<string>("PublicKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("public_key");
+
+                    b.Property<string[]>("_allowedOrigins")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("allowed_origins");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("PublicKey")
+                        .IsUnique()
+                        .HasDatabaseName("ux_tenants_public_key");
+
+                    b.HasIndex("_allowedOrigins")
+                        .HasDatabaseName("ix_tenants_allowed_origins");
+
+                    NpgsqlIndexBuilderExtensions.HasMethod(b.HasIndex("_allowedOrigins"), "gin");
 
                     b.ToTable("tenants", (string)null);
                 });

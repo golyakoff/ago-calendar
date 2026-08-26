@@ -27,6 +27,13 @@ public sealed class WorkerRepository(AgoCalendarDbContext db) : IWorkerRepositor
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<Worker>> ListForTenantAsync(
+        TenantId tenantId, CancellationToken cancellationToken) =>
+        await LoadedWorkers()
+            .Where(worker => worker.TenantId == tenantId)
+            .OrderBy(worker => worker.DisplayName)
+            .ToListAsync(cancellationToken);
+
     public async Task AddAsync(Worker worker, CancellationToken cancellationToken)
     {
         db.Workers.Add(worker);

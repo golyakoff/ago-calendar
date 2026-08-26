@@ -169,6 +169,7 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
 
         var handler = new BookEventHandler(
             new BookingCalendarRepository(db),
+            new TenantRepository(db),
             new EventRepository(db),
             new WorkerRepository(db),
             new ServiceRepository(db),
@@ -204,7 +205,7 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
 
     private async Task<SeededCalendar> SeedAsync()
     {
-        var tenant = Tenant.Register(new TenantId(NewId()), "Barbershop", Now);
+        var tenant = Tenant.Register(new TenantId(NewId()), "Barbershop", new TenantPublicKey("shop-" + NewId().ToString("N")), Now);
         var calendar = BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone("Europe/Moscow"), 10, Now);
         var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Alex");

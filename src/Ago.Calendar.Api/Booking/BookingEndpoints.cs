@@ -68,7 +68,10 @@ public static class BookingEndpoints
                 new Domain.EventId(eventId),
                 new ServiceId(request.ServiceId),
                 request.Phone,
-                request.DisplayName),
+                request.DisplayName,
+                // `20-06`, layer 2. Read here and passed in, never reached for from inside the
+                // handler: Application must not know there is an HttpContext (see BookEvent.Origin).
+                PublicBookingEndpoints.OriginOf(httpContext)),
             cancellationToken);
 
         if (outcome.Booking is not { } booking)

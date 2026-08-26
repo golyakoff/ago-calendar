@@ -162,7 +162,7 @@ public class ConcurrentMaterializationTests(ConcurrencyFixture fixture)
 
     private async Task<SeededCalendar> SeedAsync()
     {
-        var tenant = Tenant.Register(new TenantId(NewId()), "Barbershop", Monday);
+        var tenant = Tenant.Register(new TenantId(NewId()), "Barbershop", new TenantPublicKey("shop-" + NewId().ToString("N")), Monday);
         var calendar = BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone("Europe/Moscow"), 10, Monday);
         var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Alex");

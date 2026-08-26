@@ -13,5 +13,14 @@ namespace Ago.Calendar.Application.UseCases.EditDayBoundary;
 /// <see cref="DateTimeOffset"/> instead would push the conversion out to the caller, which is a UI,
 /// which is where a fixed offset gets picked and a shop opens an hour late in March.</para>
 /// </summary>
+/// <param name="OperatorId">Whose permission is checked (`20-06`) - see <c>DeleteDayOff</c> for why
+/// both this and the tenant arrived only once the use case had an HTTP surface.</param>
+/// <param name="TenantId">Whose calendar.</param>
 public readonly record struct EditDayBoundary(
-    CalendarId CalendarId, WorkerId WorkerId, DateOnly LocalDate, TimeOnly OpensAt, TimeOnly ClosesAt);
+    OperatorId OperatorId,
+    TenantId TenantId,
+    CalendarId CalendarId,
+    WorkerId WorkerId,
+    DateOnly LocalDate,
+    TimeOnly OpensAt,
+    TimeOnly ClosesAt);

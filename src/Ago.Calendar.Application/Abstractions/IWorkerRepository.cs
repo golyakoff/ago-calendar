@@ -17,6 +17,12 @@ public interface IWorkerRepository
     /// public booking page offers a customer.</summary>
     Task<IReadOnlyList<Worker>> ListActiveForCalendarAsync(CalendarId calendarId, CancellationToken cancellationToken);
 
+    /// <summary>Every worker of one tenant, inactive ones included - the configuration console's list
+    /// (`20-06`). An inactive worker keeps their history and has to stay visible to whoever might
+    /// reactivate them; hiding them would make deactivation look like deletion, which
+    /// <see cref="Worker.IsActive"/>'s own remarks rule out.</summary>
+    Task<IReadOnlyList<Worker>> ListForTenantAsync(TenantId tenantId, CancellationToken cancellationToken);
+
     Task AddAsync(Worker worker, CancellationToken cancellationToken);
 
     Task SaveAsync(Worker worker, CancellationToken cancellationToken);

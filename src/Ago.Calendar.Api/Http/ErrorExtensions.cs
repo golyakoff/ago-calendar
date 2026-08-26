@@ -36,6 +36,20 @@ public static class ErrorExtensions
             "availability.invalid_day_boundary" or "availability.worker_not_on_calendar" =>
                 StatusCodes.Status400BadRequest,
             "availability.calendar_not_found" => StatusCodes.Status404NotFound,
+            // `20-06`. The public surface's two failures are one status as well as one message: a
+            // 403 for the origin case would tell a page that the tenant it named exists, which is
+            // precisely what PublicBookingErrors refuses to say in words.
+            "booking.surface_not_found" or "booking.origin_not_allowed" => StatusCodes.Status404NotFound,
+            // `20-04`'s operator-facing codes, which had no HTTP surface until this item gave them
+            // one. 403 rather than 404 for a permission failure: the caller is an authenticated
+            // operator of a known tenant, so "you may not" is a thing they are entitled to be told.
+            "booking.forbidden" or "availability.forbidden" or "configuration.forbidden" =>
+                StatusCodes.Status403Forbidden,
+            "booking.not_found" or "configuration.not_found" => StatusCodes.Status404NotFound,
+            // A state the caller can see and act on, not a fault - and 409 rather than 400 because
+            // nothing about the request was malformed; the world moved.
+            "booking.invalid_state" or "booking.concurrency_conflict" => StatusCodes.Status409Conflict,
+            "configuration.invalid" or "provisioning.invalid" => StatusCodes.Status400BadRequest,
             // Anything unmapped is a bug in this switch, not a client error - a 500 says so honestly
             // instead of inventing a 400 that would make a caller retry something that cannot work.
             _ => StatusCodes.Status500InternalServerError,

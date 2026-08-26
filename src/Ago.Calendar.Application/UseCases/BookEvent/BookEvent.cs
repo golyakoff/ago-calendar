@@ -16,9 +16,19 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// <param name="Phone">Raw, as typed. Normalised by <see cref="PhoneNumber"/> so that
 /// <c>+7 (999) 123-45-67</c> and <c>+79991234567</c> are one lead card.</param>
 /// <param name="DisplayName">Optional.</param>
+/// <param name="Origin">
+/// The request's own <c>Origin</c> header, or null when there is none - `20-06`'s layer-2 check.
+///
+/// <para><b>Passed in rather than read from an ambient context, because Application must not know
+/// there is an HTTP request.</b> The alternative, injecting <c>IHttpContextAccessor</c>, would put a
+/// hosting type inside a use case and make this handler untestable without a request pipeline - the
+/// exact coupling <c>ForbiddenTypeTests</c> exists to catch. It is a parameter for the same reason
+/// <c>DateTimeOffset now</c> is one everywhere else in this repository.</para>
+/// </param>
 public readonly record struct BookEvent(
     CalendarId CalendarId,
     EventId EventId,
     ServiceId ServiceId,
     string Phone,
-    string? DisplayName);
+    string? DisplayName,
+    string? Origin = null);

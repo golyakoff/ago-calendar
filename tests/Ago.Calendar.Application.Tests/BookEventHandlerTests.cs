@@ -40,6 +40,61 @@ public class BookEventHandlerTests
     }
 
     [Fact]
+    public async Task ABooking_FromAnOriginThisTenantApproved_Succeeds()
+    {
+        var world = new World();
+
+        var outcome = await world.HandleAsync(
+            BookingFixtures.Command(origin: BookingFixtures.ApprovedOrigin));
+
+        Assert.True(outcome.IsSuccess);
+    }
+
+    [Fact]
+    public async Task ABooking_FromAnotherTenantsApprovedOrigin_IsRefusedBeforeAnyRateLimitIsSpent()
+    {
+        // `20-06`, layer 2 on the write path. The origin belongs to *some* tenant, so layer 1 would
+        // have let the browser read the response - this is the check that makes it a tenant boundary.
+        var world = new World();
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(origin: "https://other.example"));
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.calendar_not_found", outcome.Error!.Value.Code);
+
+        // Two things that must not have happened. Nothing was written, and - the reason the check
+        // sits before the limiters - no page on the internet spent a share of this shop's own
+        // per-calendar budget finding out it was refused.
+        Assert.Empty(world.Bookings.Attempts);
+        Assert.Empty(world.Limiter.Checked);
+    }
+
+    [Fact]
+    public async Task ABooking_WithNoOriginHeader_Succeeds()
+    {
+        // Deliberate asymmetry - see OriginPolicy. A caller with no Origin is not a browser, so the
+        // attack layer 2 exists to stop is not available to them; and `21-01`'s channel adapter is a
+        // legitimate caller with no browser in the path at all.
+        var world = new World();
+
+        Assert.True((await world.HandleAsync(BookingFixtures.Command(origin: null))).IsSuccess);
+    }
+
+    [Fact]
+    public async Task ABooking_AgainstATenantWithNoApprovedOriginsAtAll_IsRefusedForABrowser()
+    {
+        // The safe default made visible: a tenant nobody has configured an origin for is bookable by
+        // a script and by nobody's page.
+        var world = new World(tenant: BookingFixtures.Tenant([]));
+
+        var outcome = await world.HandleAsync(
+            BookingFixtures.Command(origin: BookingFixtures.ApprovedOrigin));
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.calendar_not_found", outcome.Error!.Value.Code);
+    }
+
+    [Fact]
     public async Task APhoneTypedAnyWay_ReachesTheSameLeadCard()
     {
         var world = new World();
@@ -263,12 +318,20 @@ public class BookEventHandlerTests
             bool calendarExists = true,
             bool slotExists = true,
             Worker? worker = null,
-            Service? service = null)
+            Service? service = null,
+            Tenant? tenant = null)
         {
             var resolvedService = service ?? BookingFixtures.HaircutService();
+            var resolvedCalendar = calendar ?? BookingFixtures.Calendar();
 
             _handler = new BookEventHandler(
-                new FakeCalendarRepository(calendarExists ? calendar ?? BookingFixtures.Calendar() : null),
+                new FakeCalendarRepository(calendarExists ? resolvedCalendar : null),
+                // The tenant follows the calendar, because that is how the handler resolves it: the
+                // endpoint is unauthenticated, so the calendar in the route is the only thing that
+                // names a tenant. A fixture whose tenant did not match its calendar would make every
+                // booking fail for a reason no production caller can produce.
+                new FakeTenantRepository(
+                    tenant ?? BookingFixtures.Tenant(tenantId: resolvedCalendar.TenantId)),
                 new FakeEventRepository(slotExists ? BookingFixtures.AvailableSlot() : null),
                 new FakeWorkerRepository(worker ?? BookingFixtures.WorkerOffering(resolvedService)),
                 new FakeServiceRepository(resolvedService),

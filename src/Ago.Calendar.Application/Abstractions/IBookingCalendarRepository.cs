@@ -17,5 +17,19 @@ public interface IBookingCalendarRepository
     /// AGO Chat's single deliberate cross-tenant read).</summary>
     Task<IReadOnlyList<BookingCalendar>> ListPublishedAsync(TenantId tenantId, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Every calendar of one tenant, published or not - the configuration console's own list
+    /// (`20-06`). Separate from <see cref="ListPublishedAsync"/> rather than a boolean parameter on
+    /// it, because the two have opposite defaults: a public read that accidentally included
+    /// unpublished calendars would expose a shop's unlaunched surface, and a console that silently
+    /// hid them would make the publish switch invisible to the only person who can flip it. A flag
+    /// makes the wrong value a typo; two methods make it a different call.
+    /// </summary>
+    Task<IReadOnlyList<BookingCalendar>> ListForTenantAsync(TenantId tenantId, CancellationToken cancellationToken);
+
     Task AddAsync(BookingCalendar calendar, CancellationToken cancellationToken);
+
+    /// <summary>Persists a change to an existing calendar - its name, its buffer, or whether it is
+    /// published.</summary>
+    Task SaveAsync(BookingCalendar calendar, CancellationToken cancellationToken);
 }

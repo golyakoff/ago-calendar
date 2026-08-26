@@ -20,5 +20,14 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<AvailabilityMaterializationJob>();
 
+// `20-04`: the other half of the two-step booking mechanic. Same host, same shape, same reasoning as
+// the materialisation job above - and a much shorter interval, because this one's latency is a
+// customer waiting to be told their booking is settled.
+builder.Services
+    .AddOptions<PendingBookingSweepJobOptions>()
+    .Bind(builder.Configuration.GetSection(PendingBookingSweepJobOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<PendingBookingSweepJob>();
+
 var host = builder.Build();
 host.Run();

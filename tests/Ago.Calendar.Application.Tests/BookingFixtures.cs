@@ -64,4 +64,30 @@ internal static class BookingFixtures
 
     public static BookEvent Command(string? phone = null, ServiceId? serviceId = null) =>
         new(CalendarId, EventId, serviceId ?? ServiceId, phone ?? Phone, "Anna");
+
+    /// <summary>`20-04`: a second tenant, so "another tenant's booking" is a real id rather than a
+    /// missing one - the two must produce the same answer, and only a real one proves it.</summary>
+    public static readonly TenantId OtherTenantId = new(new Guid("88888888-8888-8888-8888-888888888888"));
+
+    public static readonly CustomerId CustomerId = new(new Guid("99999999-9999-9999-9999-999999999999"));
+
+    /// <summary>A booking sitting in the veto window - what the queue shows and what the sweep will
+    /// confirm if nobody acts.</summary>
+    public static Event PendingBooking(TenantId? tenantId = null)
+    {
+        var booking = Event.Materialize(
+            EventId, tenantId ?? TenantId, CalendarId, WorkerId, Slot, LocalDate, Now);
+        booking.Claim(CustomerId, ServiceId, Now, Now.AddMinutes(15));
+        booking.ClearDomainEvents();
+        return booking;
+    }
+
+    /// <summary>The same booking after its window closed with nobody acting.</summary>
+    public static Event ConfirmedBooking(TenantId? tenantId = null)
+    {
+        var booking = PendingBooking(tenantId);
+        booking.Confirm(Now.AddMinutes(15));
+        booking.ClearDomainEvents();
+        return booking;
+    }
 }

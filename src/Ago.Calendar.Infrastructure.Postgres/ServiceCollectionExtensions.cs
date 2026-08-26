@@ -2,6 +2,7 @@
 using Ago.Calendar.Infrastructure.Postgres.Persistence;
 using Ago.Platform.Persistence.Postgres;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Ago.Calendar.Infrastructure.Postgres;
@@ -35,6 +36,18 @@ public static class ServiceCollectionExtensions
         // transaction. Scoped like every other adapter here, because it holds the DbContext whose
         // connection both statements run on.
         services.AddScoped<IBookingStore, BookingStore>();
+
+        // `20-04`: the sweep's one transactional step, and the permission resolution every
+        // operator-facing handler goes through. Scoped like the rest - both hold the DbContext.
+        services.AddScoped<IExpiredBookingConfirmer, ExpiredBookingConfirmer>();
+        services.AddScoped<IPermissionChecker, PermissionChecker>();
+
+        // adr/0004's read side. Its own NpgsqlDataSource rather than the DbContext's connection: a
+        // read model that shared a write context would inherit its change tracker and any ambient
+        // transaction, and a queue screen has no business inside a write transaction. Singleton
+        // because a data source is a pool, not a connection.
+        services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
+        services.AddScoped<IPendingBookingReadStore, PendingBookingReadStore>();
 
         // adr/0017: the platform's own generic outbox/inbox, bound to this product's context. The
         // tables exist from this migration onward; the first writer is `20-05`.

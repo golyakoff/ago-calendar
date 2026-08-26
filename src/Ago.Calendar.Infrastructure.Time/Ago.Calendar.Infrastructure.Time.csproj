@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A whole project for one adapter, deliberately.
+
+    The tz database is an external resource in exactly the sense CLAUDE.md rule 2 means: ambient
+    machine state, updated out of band, different between a Windows dev box and a Linux container.
+    It is not, however, a *Postgres* concern, so the adapter cannot live in
+    Ago.Calendar.Infrastructure.Postgres without that project's name becoming a lie - and a reader
+    looking for "where does wall clock become an instant" would have no reason to open a file about
+    the database.
+
+    Its own assembly also makes the rule enforceable instead of merely documented:
+    TimeZoneInfoIsolationTests asserts that System.TimeZoneInfo is referenced by exactly one product
+    assembly, and this is it. A static helper in Application would have been cheaper to write and
+    impossible to police.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
+    <ProjectReference Include="..\Ago.Calendar.Domain\Ago.Calendar.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+</Project>

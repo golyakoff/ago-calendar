@@ -33,4 +33,17 @@ internal static class IlMemberScanner
 
         return offenders;
     }
+
+    /// <summary>
+    /// Whether an assembly mentions a type at all - in a signature, a field, a local, or a call.
+    ///
+    /// <para>Broader than <see cref="FindCallers"/> on purpose: `20-02`'s rule is that
+    /// <c>TimeZoneInfo</c> is confined to one assembly, and confining only one *method* of it would
+    /// leave a caller free to accept a resolved <c>TimeZoneInfo</c> as a parameter and do the
+    /// conversion somewhere else - which is the same bug with the lookup moved. Reads the module's
+    /// own TypeReference table, so it sees every mention the compiler emitted rather than only the
+    /// ones in method bodies.</para>
+    /// </summary>
+    public static bool ReferencesType(AssemblyDefinition assembly, string typeFullName) =>
+        assembly.MainModule.GetTypeReferences().Any(reference => reference.FullName == typeFullName);
 }

@@ -2,6 +2,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Application.UseCases.PublicBooking;
 using Ago.Calendar.Domain;
 using Ago.Platform.Abstractions;
 using Ago.Platform.Kernel;
@@ -40,6 +41,7 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// </summary>
 public sealed class BookEventHandler(
     IBookingCalendarRepository calendars,
+    ITenantRepository tenants,
     IEventRepository events,
     IWorkerRepository workers,
     IServiceRepository services,
@@ -73,6 +75,24 @@ public sealed class BookEventHandler(
         // which of them have not launched yet.
         if (calendar is null || !calendar.IsPublished)
         {
+            return BookingOutcome.Rejected(BookingErrors.CalendarNotFound());
+        }
+
+        // `20-06`, layer 2 of `5-01`'s two-layer CORS model, and the earliest point at which it can
+        // be applied on this route: the calendar id in the path is the only thing that names a
+        // tenant, so "which tenant is this for" is unanswerable until the line above has run - which
+        // is exactly why the CORS policy itself (layer 1) can only ask the coarse question.
+        //
+        // Before the rate limiters, not after. A request from an origin this tenant never approved is
+        // not a booking attempt, and spending the tenant's own per-calendar budget on it would let
+        // any page on the internet exhaust a shop's bucket. The extra cost is one indexed primary-key
+        // read on a path that has already done one.
+        var tenant = await tenants.GetByIdAsync(calendar.TenantId, cancellationToken);
+        if (tenant is null || !OriginPolicy.IsAcceptable(tenant, command.Origin))
+        {
+            // Reported as "no such calendar", not as "your origin is wrong": the caller is a stranger,
+            // and a distinguishing message would confirm that the calendar exists. Same collapse the
+            // unpublished case above already makes.
             return BookingOutcome.Rejected(BookingErrors.CalendarNotFound());
         }
 

@@ -31,6 +31,19 @@ internal static class BookingFixtures
 
     public const string Phone = "+79990000001";
 
+    /// <summary>`20-06`: the tenant `BookEventHandler` now loads to run layer 2's origin check. The
+    /// default list contains the one origin the tests treat as approved; an empty list is what
+    /// "nobody's page may embed this" looks like.</summary>
+    public const string ApprovedOrigin = "https://shop.example";
+
+    public static Tenant Tenant(IEnumerable<string>? allowedOrigins = null, TenantId? tenantId = null) =>
+        Domain.Tenant.Register(
+            tenantId ?? TenantId,
+            "Barbershop",
+            new TenantPublicKey("barbershop"),
+            Now,
+            allowedOrigins ?? [ApprovedOrigin]);
+
     public static BookingCalendar Calendar(bool published = true)
     {
         var calendar = BookingCalendar.Create(
@@ -62,8 +75,11 @@ internal static class BookingFixtures
     public static Event AvailableSlot() =>
         Event.Materialize(EventId, TenantId, CalendarId, WorkerId, Slot, LocalDate, Now);
 
-    public static BookEvent Command(string? phone = null, ServiceId? serviceId = null) =>
-        new(CalendarId, EventId, serviceId ?? ServiceId, phone ?? Phone, "Anna");
+    /// <param name="origin">`20-06`. Null by default, which is what a non-browser caller sends and
+    /// what <c>OriginPolicy</c> deliberately allows - see its remarks for why an absent
+    /// <c>Origin</c> is not a rejection on this product's booking surface.</param>
+    public static BookEvent Command(string? phone = null, ServiceId? serviceId = null, string? origin = null) =>
+        new(CalendarId, EventId, serviceId ?? ServiceId, phone ?? Phone, "Anna", origin);
 
     /// <summary>`20-04`: a second tenant, so "another tenant's booking" is a real id rather than a
     /// missing one - the two must produce the same answer, and only a real one proves it.</summary>

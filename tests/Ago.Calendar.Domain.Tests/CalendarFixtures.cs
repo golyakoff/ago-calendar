@@ -9,8 +9,12 @@ internal static class CalendarFixtures
 {
     public static readonly DateTimeOffset Now = new(2026, 3, 2, 9, 0, 0, TimeSpan.Zero);
 
-    public static Tenant Tenant(string name = "Barbershop") =>
-        Domain.Tenant.Register(new TenantId(NewId()), name, Now);
+    /// <param name="publicKey">`20-06`. Defaulted so that a test which does not care about the embed
+    /// surface still reads as one line, and named so that the tests which do care can say what the
+    /// key is.</param>
+    public static Tenant Tenant(
+        string name = "Barbershop", string publicKey = "barbershop", IEnumerable<string>? allowedOrigins = null) =>
+        Domain.Tenant.Register(new TenantId(NewId()), name, new TenantPublicKey(publicKey), Now, allowedOrigins);
 
     public static BookingCalendar Calendar(
         Tenant tenant, string zone = "Europe/Moscow", int bufferMinutes = 10) =>

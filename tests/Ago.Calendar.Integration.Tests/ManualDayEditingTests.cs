@@ -20,7 +20,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
     {
         var (seed, harness) = await AMaterializedWeekAsync();
 
-        var result = await harness.DeleteDayOffAsync(seed.Calendar.Id, seed.Worker.Id, Tuesday);
+        var result = await harness.DeleteDayOffAsync(seed, Tuesday);
 
         Assert.True(result.IsSuccess);
 
@@ -44,7 +44,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
         var (seed, harness) = await AMaterializedWeekAsync();
         await ClaimOneSlotOnAsync(seed, Tuesday);
 
-        var result = await harness.DeleteDayOffAsync(seed.Calendar.Id, seed.Worker.Id, Tuesday);
+        var result = await harness.DeleteDayOffAsync(seed, Tuesday);
 
         Assert.True(result.IsFailure);
         Assert.Equal("availability.day_has_bookings", result.Error!.Value.Code);
@@ -61,7 +61,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
         var (seed, harness) = await AMaterializedWeekAsync();
 
         // Well past the six-day horizon the harness generated.
-        var result = await harness.DeleteDayOffAsync(seed.Calendar.Id, seed.Worker.Id, new DateOnly(2026, 9, 1));
+        var result = await harness.DeleteDayOffAsync(seed, new DateOnly(2026, 9, 1));
 
         // Succeeding here would be a lie: with no row to leave behind, the next materialisation run
         // would fill the day in, and the tenant would have been told they were closed when they were
@@ -76,8 +76,8 @@ public class ManualDayEditingTests(PostgresFixture fixture)
     {
         var (seed, harness) = await AMaterializedWeekAsync();
 
-        Assert.True((await harness.DeleteDayOffAsync(seed.Calendar.Id, seed.Worker.Id, Tuesday)).IsSuccess);
-        Assert.True((await harness.DeleteDayOffAsync(seed.Calendar.Id, seed.Worker.Id, Tuesday)).IsSuccess);
+        Assert.True((await harness.DeleteDayOffAsync(seed, Tuesday)).IsSuccess);
+        Assert.True((await harness.DeleteDayOffAsync(seed, Tuesday)).IsSuccess);
 
         // A retried request or a double-clicked button must not leave two blocking rows - which the
         // exclusion constraint would have refused anyway, as a 500 rather than a success.
@@ -88,7 +88,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
     public async Task ADayOff_IsNotResurrectedByTheNextMaterializationRun()
     {
         var (seed, harness) = await AMaterializedWeekAsync();
-        await harness.DeleteDayOffAsync(seed.Calendar.Id, seed.Worker.Id, Tuesday);
+        await harness.DeleteDayOffAsync(seed, Tuesday);
 
         // The run that would have undone it if a day off were an absence rather than a row.
         var rerun = await harness.MaterializeAsync(seed.Calendar.Id, horizonDays: 6);
@@ -104,8 +104,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
     {
         var (seed, harness) = await AMaterializedWeekAsync();
 
-        var result = await harness.EditDayBoundaryAsync(
-            seed.Calendar.Id, seed.Worker.Id, Tuesday, new TimeOnly(12, 0), new TimeOnly(15, 0));
+        var result = await harness.EditDayBoundaryAsync(seed, Tuesday, new TimeOnly(12, 0), new TimeOnly(15, 0));
 
         Assert.True(result.IsSuccess);
 
@@ -126,8 +125,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
         var (seed, harness) = await AMaterializedWeekAsync();
         await ClaimOneSlotOnAsync(seed, Tuesday);
 
-        var result = await harness.EditDayBoundaryAsync(
-            seed.Calendar.Id, seed.Worker.Id, Tuesday, new TimeOnly(12, 0), new TimeOnly(15, 0));
+        var result = await harness.EditDayBoundaryAsync(seed, Tuesday, new TimeOnly(12, 0), new TimeOnly(15, 0));
 
         Assert.True(result.IsFailure);
         Assert.Equal("availability.day_has_bookings", result.Error!.Value.Code);
@@ -138,8 +136,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
     public async Task AnEditedDayBoundary_IsNotRewrittenByTheNextMaterializationRun()
     {
         var (seed, harness) = await AMaterializedWeekAsync();
-        await harness.EditDayBoundaryAsync(
-            seed.Calendar.Id, seed.Worker.Id, Tuesday, new TimeOnly(12, 0), new TimeOnly(15, 0));
+        await harness.EditDayBoundaryAsync(seed, Tuesday, new TimeOnly(12, 0), new TimeOnly(15, 0));
 
         var rerun = await harness.MaterializeAsync(seed.Calendar.Id, horizonDays: 6);
 
@@ -156,10 +153,9 @@ public class ManualDayEditingTests(PostgresFixture fixture)
     public async Task EditDayBoundary_UndoesADayOff()
     {
         var (seed, harness) = await AMaterializedWeekAsync();
-        await harness.DeleteDayOffAsync(seed.Calendar.Id, seed.Worker.Id, Tuesday);
+        await harness.DeleteDayOffAsync(seed, Tuesday);
 
-        var result = await harness.EditDayBoundaryAsync(
-            seed.Calendar.Id, seed.Worker.Id, Tuesday, new TimeOnly(10, 0), new TimeOnly(13, 0));
+        var result = await harness.EditDayBoundaryAsync(seed, Tuesday, new TimeOnly(10, 0), new TimeOnly(13, 0));
 
         // Deliberate, and v1's only way back: a blocked row has no customer attached by
         // construction, so replacing it strands nobody. Rebuilding a day whose blocking row had
@@ -176,8 +172,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
     {
         var (seed, harness) = await AMaterializedWeekAsync();
 
-        var result = await harness.EditDayBoundaryAsync(
-            seed.Calendar.Id, seed.Worker.Id, Tuesday, new TimeOnly(15, 0), new TimeOnly(12, 0));
+        var result = await harness.EditDayBoundaryAsync(seed, Tuesday, new TimeOnly(15, 0), new TimeOnly(12, 0));
 
         Assert.True(result.IsFailure);
         Assert.Equal("availability.invalid_day_boundary", result.Error!.Value.Code);

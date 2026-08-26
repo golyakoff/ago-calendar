@@ -54,19 +54,38 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
         return await handler.HandleAsync(new MaterializeAvailability(calendarId, horizonDays), CancellationToken.None);
     }
 
-    public async Task<Result> DeleteDayOffAsync(CalendarId calendarId, WorkerId workerId, DateOnly localDate)
+    /// <summary>
+    /// Takes the whole seed rather than two ids, because `20-06` gave this use case an actor: the
+    /// handler now checks a real permission against the seed's own operator and role rows through
+    /// the real <c>PermissionChecker</c>. Passing ids would have meant inventing an operator per call
+    /// site.
+    /// </summary>
+    public async Task<Result> DeleteDayOffAsync(SeededTenant seed, DateOnly localDate)
     {
+        ArgumentNullException.ThrowIfNull(seed);
+
         await using var db = fixture.CreateDbContext();
-        var handler = new DeleteDayOffHandler(new EventRepository(db), new UuidV7Generator(), Clock);
-        return await handler.HandleAsync(new DeleteDayOff(calendarId, workerId, localDate), CancellationToken.None);
+        var handler = new DeleteDayOffHandler(
+            new BookingCalendarRepository(db),
+            new PermissionChecker(db),
+            new EventRepository(db),
+            new UuidV7Generator(),
+            Clock);
+
+        return await handler.HandleAsync(
+            new DeleteDayOff(seed.Operator.Id, seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, localDate),
+            CancellationToken.None);
     }
 
     public async Task<Result> EditDayBoundaryAsync(
-        CalendarId calendarId, WorkerId workerId, DateOnly localDate, TimeOnly opensAt, TimeOnly closesAt)
+        SeededTenant seed, DateOnly localDate, TimeOnly opensAt, TimeOnly closesAt)
     {
+        ArgumentNullException.ThrowIfNull(seed);
+
         await using var db = fixture.CreateDbContext();
         var handler = new EditDayBoundaryHandler(
             new BookingCalendarRepository(db),
+            new PermissionChecker(db),
             new WorkerRepository(db),
             new ServiceRepository(db),
             new EventRepository(db),
@@ -75,6 +94,8 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
             Clock);
 
         return await handler.HandleAsync(
-            new EditDayBoundary(calendarId, workerId, localDate, opensAt, closesAt), CancellationToken.None);
+            new EditDayBoundary(
+                seed.Operator.Id, seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, localDate, opensAt, closesAt),
+            CancellationToken.None);
     }
 }

@@ -42,6 +42,7 @@ namespace Ago.Calendar.Application.UseCases.EditDayBoundary;
 /// </summary>
 public sealed class EditDayBoundaryHandler(
     IBookingCalendarRepository calendars,
+    IPermissionChecker permissions,
     IWorkerRepository workers,
     IServiceRepository services,
     IEventRepository events,
@@ -51,6 +52,15 @@ public sealed class EditDayBoundaryHandler(
 {
     public async Task<Result> HandleAsync(EditDayBoundary command, CancellationToken cancellationToken)
     {
+        // `20-06`: the actor check comes before the shape check, so a caller who may not act here
+        // learns nothing about whether their times were well formed.
+        var allowed = await permissions.HasPermissionAsync(
+            command.OperatorId, command.TenantId, Permission.CalendarConfigure, cancellationToken);
+        if (!allowed)
+        {
+            return AvailabilityErrors.Forbidden(Permission.CalendarConfigure);
+        }
+
         if (command.ClosesAt <= command.OpensAt)
         {
             return new Error(
@@ -59,7 +69,9 @@ public sealed class EditDayBoundaryHandler(
         }
 
         var calendar = await calendars.GetByIdAsync(command.CalendarId, cancellationToken);
-        if (calendar is null)
+
+        // The tenant on the calendar, not the tenant on the token - see DeleteDayOffHandler.
+        if (calendar is null || calendar.TenantId != command.TenantId)
         {
             return AvailabilityErrors.CalendarNotFound(command.CalendarId);
         }

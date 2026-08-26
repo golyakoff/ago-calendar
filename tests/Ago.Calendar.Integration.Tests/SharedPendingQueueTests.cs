@@ -182,7 +182,10 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         secondWorker.JoinCalendar(secondCalendar);
         secondWorker.Offer(first.Service);
 
-        var role = Role.SeedOperatorRole(new RoleId(CalendarSeed.NewId()), first.Tenant.Id);
+        // `20-06`: the seed writes the v1 role itself now, and `ux_roles_tenant_name` allows one per
+        // tenant - so both operators here are granted the seeded role rather than a second copy of
+        // it. What this fixture proves (two operators, one shared queue) is unchanged.
+        var role = first.Role;
         var operatorOne = Operator.Create(new OperatorId(CalendarSeed.NewId()), first.Tenant.Id, "Ann");
         var operatorTwo = Operator.Create(new OperatorId(CalendarSeed.NewId()), first.Tenant.Id, "Ben");
         operatorOne.Grant(role);
@@ -192,7 +195,6 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         {
             db.Calendars.Add(secondCalendar);
             db.Workers.Add(secondWorker);
-            db.Roles.Add(role);
             db.Operators.Add(operatorOne);
             db.Operators.Add(operatorTwo);
             await db.SaveChangesAsync();

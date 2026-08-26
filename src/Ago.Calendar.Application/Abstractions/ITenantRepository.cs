@@ -41,4 +41,28 @@ public interface ITenantRepository
     /// way AGO Chat's <c>ISiteRegistrationRepository</c> did, rather than a shared unit-of-work
     /// nobody can see the boundaries of.</summary>
     Task AddAsync(Tenant tenant, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Resolves the tenant a public embed names (`20-06`). The key arrives in a <b>path segment</b>,
+    /// never in a body - see <see cref="TenantPublicKey"/> for the preflight-timing reason `5-01`
+    /// found live.
+    /// </summary>
+    Task<Tenant?> FindByPublicKeyAsync(TenantPublicKey publicKey, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <b>Layer 1 of `5-01`'s two-layer CORS model, and deliberately the weaker of the two.</b> True
+    /// when <i>any</i> tenant lists this origin. That is all an <c>ICorsPolicyProvider</c> can ask,
+    /// because a preflight carries the <c>Origin</c> header and the URL and nothing else - so during
+    /// preflight there is no tenant yet to compare against. It is what lets a legitimate embed's
+    /// preflight succeed; it proves nothing about whose embed it is, which is why
+    /// <see cref="Tenant.Allows"/> exists and why every public handler calls it.
+    ///
+    /// <para>A single indexed <c>@origin = ANY(allowed_origins)</c> rather than "load every tenant
+    /// and union their lists" - the same call `5-01` made, and the reason
+    /// <c>ix_tenants_allowed_origins</c> is a GIN index.</para>
+    /// </summary>
+    Task<bool> AnyAllowsOriginAsync(string origin, CancellationToken cancellationToken);
+
+    /// <summary>Persists a change to an existing tenant - today, its allowed origins.</summary>
+    Task SaveAsync(Tenant tenant, CancellationToken cancellationToken);
 }

@@ -17,9 +17,22 @@ public sealed class BookingCalendarRepository(AgoCalendarDbContext db) : IBookin
             .OrderBy(c => c.Name)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<BookingCalendar>> ListForTenantAsync(
+        TenantId tenantId, CancellationToken cancellationToken) =>
+        await db.Calendars
+            .Where(c => c.TenantId == tenantId)
+            .OrderBy(c => c.Name)
+            .ToListAsync(cancellationToken);
+
     public async Task AddAsync(BookingCalendar calendar, CancellationToken cancellationToken)
     {
         db.Calendars.Add(calendar);
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task SaveAsync(BookingCalendar calendar, CancellationToken cancellationToken)
+    {
+        db.Calendars.Update(calendar);
         await db.SaveChangesAsync(cancellationToken);
     }
 }

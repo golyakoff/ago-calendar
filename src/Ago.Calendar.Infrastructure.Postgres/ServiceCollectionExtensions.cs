@@ -49,6 +49,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
         services.AddScoped<IPendingBookingReadStore, PendingBookingReadStore>();
 
+        // `20-06`: the public booking surface's own read side, and the multi-aggregate provisioning
+        // write ITenantRepository's remarks predicted would be the first use case to need one.
+        services.AddScoped<IBookingSurfaceReadStore, BookingSurfaceReadStore>();
+        services.AddScoped<ITenantProvisioningStore, TenantProvisioningStore>();
+
         // adr/0017: the platform's own generic outbox/inbox, bound to this product's context. The
         // tables exist from this migration onward; the first writer is `20-05`.
         services.AddOutboxInbox<AgoCalendarDbContext>();

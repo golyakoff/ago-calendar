@@ -28,6 +28,12 @@ public static class AvailabilityErrors
     public static Error CalendarNotFound(CalendarId calendarId) => new(
         "availability.calendar_not_found", $"Calendar {calendarId.Value} does not exist.");
 
+    /// <summary>`20-06`: the manual edits became reachable from a browser, so they gained the actor
+    /// and the check that every operator-facing use case in `20-04` already had.</summary>
+    public static Error Forbidden(Permission permission) => new(
+        "availability.forbidden",
+        $"This operator does not hold '{permission.Value}' for this tenant.");
+
     public static Error WorkerNotOnCalendar(WorkerId workerId, CalendarId calendarId) => new(
         "availability.worker_not_on_calendar",
         $"Worker {workerId.Value} does not work in calendar {calendarId.Value}.");

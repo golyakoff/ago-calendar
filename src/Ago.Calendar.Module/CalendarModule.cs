@@ -1,8 +1,12 @@
 ﻿using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
+using Ago.Calendar.Application.UseCases.Configuration;
+using Ago.Calendar.Application.UseCases.Cors;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.UseCases.MaterializeAvailability;
+using Ago.Calendar.Application.UseCases.Provisioning;
+using Ago.Calendar.Application.UseCases.PublicBooking;
 using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Redis;
 using Ago.Calendar.Infrastructure.Time;
@@ -83,5 +87,24 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<CancelBookingHandler>();
         services.AddScoped<MarkNoShowHandler>();
         services.AddScoped<GetPendingBookingsForTenantHandler>();
+
+        // `20-06`. Registered in the module rather than in Ago.Calendar.Api, even though only the Api
+        // host has routes for them: adr/0013's split is by failure profile, and the hosts differ in
+        // what they *run*, never in what the product is. A scoped registration nobody resolves costs
+        // the Worker nothing.
+        services.AddScoped<EmbedScopeResolver>();
+        services.AddScoped<GetBookingSurfaceHandler>();
+        services.AddScoped<GetBookableWorkersHandler>();
+        services.AddScoped<GetOpenSlotsHandler>();
+        services.AddScoped<CheckTenantOriginHandler>();
+
+        services.AddScoped<GetTenantConfigurationHandler>();
+        services.AddScoped<CreateCalendarHandler>();
+        services.AddScoped<UpdateCalendarHandler>();
+        services.AddScoped<CreateServiceHandler>();
+        services.AddScoped<CreateWorkerHandler>();
+        services.AddScoped<AddWorkingHoursRuleHandler>();
+        services.AddScoped<SetAllowedOriginsHandler>();
+        services.AddScoped<RegisterTenantHandler>();
     }
 }

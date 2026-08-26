@@ -41,4 +41,33 @@ public sealed class TenantRepository(AgoCalendarDbContext db) : ITenantRepositor
         db.Tenants.Add(tenant);
         await db.SaveChangesAsync(cancellationToken);
     }
+
+    public Task<Tenant?> FindByPublicKeyAsync(TenantPublicKey publicKey, CancellationToken cancellationToken) =>
+        db.Tenants.FirstOrDefaultAsync(t => t.PublicKey == publicKey, cancellationToken);
+
+    public async Task<bool> AnyAllowsOriginAsync(string origin, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(origin);
+
+        // Raw SQL for the same reason ListIdsAsync above is raw: `allowed_origins` sits behind a
+        // value converter, so EF cannot see through it to translate array containment - the LINQ
+        // form fails at runtime with "could not be translated". In SQL the column is a plain text[]
+        // and `= ANY(...)` is one index probe against ix_tenants_allowed_origins.
+        //
+        // `EXISTS`, not `COUNT`: the question is whether one row exists, and Postgres can stop at the
+        // first.
+        var allowed = await db.Database
+            .SqlQueryRaw<bool>(
+                "SELECT EXISTS (SELECT 1 FROM tenants WHERE @origin = ANY(allowed_origins)) AS \"Value\"",
+                new NpgsqlParameter("origin", origin))
+            .SingleAsync(cancellationToken);
+
+        return allowed;
+    }
+
+    public async Task SaveAsync(Tenant tenant, CancellationToken cancellationToken)
+    {
+        db.Tenants.Update(tenant);
+        await db.SaveChangesAsync(cancellationToken);
+    }
 }

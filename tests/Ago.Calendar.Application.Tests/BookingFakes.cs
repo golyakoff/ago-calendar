@@ -93,10 +93,46 @@ internal sealed class FakeCalendarRepository(BookingCalendar? calendar) : IBooki
 
     public Task<IReadOnlyList<BookingCalendar>> ListPublishedAsync(
         TenantId tenantId, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Not reached by BookEventHandler.");
+        Task.FromResult<IReadOnlyList<BookingCalendar>>(
+            calendar is not null && calendar.TenantId == tenantId && calendar.IsPublished ? [calendar] : []);
+
+    public Task<IReadOnlyList<BookingCalendar>> ListForTenantAsync(
+        TenantId tenantId, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<BookingCalendar>>(
+            calendar is not null && calendar.TenantId == tenantId ? [calendar] : []);
 
     public Task AddAsync(BookingCalendar calendar, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");
+
+    public Task SaveAsync(BookingCalendar calendar, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
+}
+
+/// <summary>
+/// `20-06`: <c>BookEventHandler</c> resolves the tenant to run layer 2's origin check, and the
+/// public-read handlers resolve one by public key. One fake serves both, holding at most one tenant -
+/// which is all a handler test needs, because "another tenant's" is expressed by a key or an origin
+/// that does not match rather than by a second row.
+/// </summary>
+internal sealed class FakeTenantRepository(Tenant? tenant) : ITenantRepository
+{
+    public Task<Tenant?> GetByIdAsync(TenantId id, CancellationToken cancellationToken) =>
+        Task.FromResult(tenant is not null && tenant.Id == id ? tenant : null);
+
+    public Task<IReadOnlyList<TenantId>> ListIdsAsync(
+        TenantId? after, int limit, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by these handlers.");
+
+    public Task AddAsync(Tenant tenant, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by these handlers.");
+
+    public Task<Tenant?> FindByPublicKeyAsync(TenantPublicKey publicKey, CancellationToken cancellationToken) =>
+        Task.FromResult(tenant is not null && tenant.PublicKey == publicKey ? tenant : null);
+
+    public Task<bool> AnyAllowsOriginAsync(string origin, CancellationToken cancellationToken) =>
+        Task.FromResult(tenant is not null && tenant.Allows(origin));
+
+    public Task SaveAsync(Tenant tenant, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 internal sealed class FakeEventRepository(Event? @event) : IEventRepository
@@ -138,6 +174,11 @@ internal sealed class FakeWorkerRepository(Worker? worker) : IWorkerRepository
     public Task<IReadOnlyList<Worker>> ListActiveForCalendarAsync(
         CalendarId calendarId, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");
+
+    public Task<IReadOnlyList<Worker>> ListForTenantAsync(
+        TenantId tenantId, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<Worker>>(
+            worker is not null && worker.TenantId == tenantId ? [worker] : []);
 
     public Task AddAsync(Worker worker, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");

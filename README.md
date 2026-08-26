@@ -7,9 +7,9 @@ working hours, customers book a slot, operators confirm or reject from a queue.
 
 This repository holds the product's Domain, Application, Contracts, Infrastructure and Module, plus
 the two deployables built from them: `Ago.Calendar.Api` (commands, queries) and
-`Ago.Calendar.Worker` (consumers, outbox dispatch, scheduled jobs). There is deliberately no
-`Webhooks` host - nothing here needs an outbound-delivery bulkhead yet the way AGO Chat's CRM
-integrations do (`../ago-root/docs/adr/0013-*`).
+`Ago.Calendar.Worker` (consumers, outbox dispatch, scheduled jobs - `AvailabilityMaterializationJob`
+is the first). There is deliberately no `Webhooks` host - nothing here needs an outbound-delivery
+bulkhead yet the way AGO Chat's CRM integrations do (`../ago-root/docs/adr/0013-*`).
 
 It consumes `Ago.Platform.*` as NuGet packages and **never** reaches into the platform's source -
 except through the dev override below, which must never survive to a merged branch.
@@ -68,9 +68,22 @@ dotnet ef migrations add <StageVerbSubject> \
 `migrations add` never actually connects - schema generation is static from the model - so any
 syntactically valid string satisfies it; `database update` needs a reachable one.
 
-`Ago.Calendar.Integration.Tests` needs a **running Docker daemon**: it starts a real Postgres through
-Testcontainers and applies the migrations from scratch. That is not a preference - the overlap
-guarantee is a storage-level constraint, and no in-memory provider has one to prove.
+`Ago.Calendar.Integration.Tests` and `Ago.Calendar.Concurrency.Tests` each need a **running Docker
+daemon**: they start a real Postgres through Testcontainers and apply the migrations from scratch.
+That is not a preference - the overlap guarantee and the "two replicas cannot both materialise the
+same day" guarantee are both storage-level constraints, and no in-memory provider has one to prove.
+
+## Where wall clock becomes an instant
+
+Exactly one place: `Ago.Calendar.Infrastructure.Time`, whose only type is `SystemWallClockResolver`.
+A `WorkingHoursRule` is a statement about a clock on a wall; an `Event` is an instant; the tz
+database that bridges them is ambient machine state, so it sits behind a port like every other
+external resource (`../ago-root/docs/adr/0049-*`, `../ago-root/docs/adr/0053-*`).
+
+It is its own assembly so the rule is enforceable rather than merely written down:
+`TimeZoneIsolationTests` asserts that **`System.TimeZoneInfo` is referenced by exactly one product
+assembly**. A second conversion anywhere would compile, pass everything else, and be wrong twice a
+year.
 
 ## Dev override
 

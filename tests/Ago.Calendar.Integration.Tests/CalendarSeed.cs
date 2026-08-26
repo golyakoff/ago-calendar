@@ -41,6 +41,32 @@ internal static class CalendarSeed
         return new SeededTenant(tenant, calendar, worker, service, customer);
     }
 
+    /// <summary>Gives the seeded worker the same wall-clock window on every named day. Wall clock,
+    /// not instants - see <see cref="WorkingHoursRule"/>; the conversion is the materialiser's
+    /// single job.</summary>
+    public static async Task AddWorkingHoursAsync(
+        PostgresFixture fixture,
+        SeededTenant seed,
+        TimeOnly opensAt,
+        TimeOnly closesAt,
+        params DayOfWeek[] days)
+    {
+        await using var db = fixture.CreateDbContext();
+        foreach (var day in days)
+        {
+            db.WorkingHoursRules.Add(WorkingHoursRule.For(
+                new WorkingHoursRuleId(NewId()), seed.Worker, seed.Calendar, day, opensAt, closesAt));
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    public static DayOfWeek[] EveryDay =>
+    [
+        DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday,
+        DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday,
+    ];
+
     public static Event Slot(SeededTenant seed, DateTimeOffset startsAt, int minutes = 45) =>
         Event.Materialize(
             new EventId(NewId()), seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id,

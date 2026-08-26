@@ -74,5 +74,22 @@ internal sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         builder.HasIndex(e => new { e.TenantId, e.ConfirmationDeadline })
             .HasDatabaseName("ix_events_pending_confirmation")
             .HasFilter("status = 'PendingConfirmation'");
+
+        // `20-02`: every question the materialiser and the two manual-edit handlers ask is "what is
+        // on this worker's day", so the index is (calendar_id, worker_id, local_date) in exactly
+        // that order - two equalities then a range, which is the only order a B-tree can serve all
+        // three of them from.
+        //
+        // Not filtered, unlike the two above, and that is the interesting half. A partial index on
+        // `status = 'Available'` would be smaller and would answer nothing this item asks: the
+        // non-destructive rule turns on whether a day has *any* row, cancelled and booked included,
+        // so a filter would hide precisely the rows whose presence is the decision. `20-01`'s own
+        // ix_events_available cannot be reused for the same reason.
+        //
+        // It also carries the day-off delete (`ReplaceDayAsync`), which is the query
+        // adr/0049 stored `local_date` for rather than deriving it: `AT TIME ZONE` in the predicate
+        // is non-sargable, so this index would be unusable and every day-scoped edit would scan.
+        builder.HasIndex(e => new { e.CalendarId, e.WorkerId, e.LocalDate })
+            .HasDatabaseName("ix_events_worker_day");
     }
 }

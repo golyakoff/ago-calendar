@@ -203,6 +203,9 @@ namespace Ago.Calendar.Infrastructure.Postgres.Migrations
                         .HasDatabaseName("ix_events_pending_confirmation")
                         .HasFilter("status = 'PendingConfirmation'");
 
+                    b.HasIndex("CalendarId", "WorkerId", "LocalDate")
+                        .HasDatabaseName("ix_events_worker_day");
+
                     b.ToTable("events", (string)null);
                 });
 

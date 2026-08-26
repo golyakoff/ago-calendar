@@ -17,6 +17,24 @@ public interface ITenantRepository
 {
     Task<Tenant?> GetByIdAsync(TenantId id, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// One page of tenant ids in id order, for a background job that has to visit every tenant -
+    /// `20-02`'s materialiser, which then asks <see cref="IBookingCalendarRepository.ListPublishedAsync"/>
+    /// per tenant so that every calendar read it does is still tenant-scoped.
+    ///
+    /// <para><b>Keyset, not offset</b> (data-model.md): <c>WHERE id &gt; @after ORDER BY id LIMIT
+    /// @limit</c> walks the primary key and costs the same on the last page as on the first, whereas
+    /// <c>OFFSET</c> re-reads and discards everything before it and quietly skips rows when the set
+    /// changes mid-walk. A job that runs while tenants are being created is exactly where that
+    /// matters.</para>
+    ///
+    /// <para>Ids only, not aggregates: the caller needs a key to scope the next query with, and
+    /// materialising every <see cref="Tenant"/> in the product to read one column would be the
+    /// same waste <see cref="IEventRepository"/> avoids by not returning rows to compute a
+    /// maximum.</para>
+    /// </summary>
+    Task<IReadOnlyList<TenantId>> ListIdsAsync(TenantId? after, int limit, CancellationToken cancellationToken);
+
     /// <summary>Persists a new tenant. Commits - every mutating method on this product's repositories
     /// does, because no use case here spans two aggregates yet. When one does (`20-06`'s
     /// provisioning transaction is the likely first), it gets an explicit multi-aggregate port the

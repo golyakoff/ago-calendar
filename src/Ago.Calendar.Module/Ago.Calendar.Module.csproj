@@ -17,6 +17,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
     <ProjectReference Include="..\Ago.Calendar.Infrastructure.Postgres\Ago.Calendar.Infrastructure.Postgres.csproj" />
+    <!-- `20-02`: the tz-database adapter. Its own project rather than a class in
+         Infrastructure.Postgres - see that project's .csproj for why. -->
+    <ProjectReference Include="..\Ago.Calendar.Infrastructure.Time\Ago.Calendar.Infrastructure.Time.csproj" />
   </ItemGroup>
 
 </Project>

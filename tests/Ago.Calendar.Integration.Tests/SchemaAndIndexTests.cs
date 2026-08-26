@@ -173,39 +173,91 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
     }
 
     [Fact]
-    public async Task GetMaterializedHorizon_IgnoresCancelledRows()
+    public async Task TheWorkerDayIndex_IsUsedByTheQueryTheNonDestructiveRuleTurnsOn()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
+
+        // `20-02`: "which of this worker's days already have rows" is the query that decides whether
+        // a day is regenerated, so it is the one that must not degrade into a scan of every event
+        // this worker has ever had. Same enable_seqscan trick and the same caveat as above - this
+        // asks whether a usable index exists, not whether it is faster on five rows.
+        var plan = await ExplainAsync(
+            $"""
+            EXPLAIN
+            SELECT DISTINCT local_date FROM events
+            WHERE calendar_id = '{seed.Calendar.Id.Value}'
+              AND worker_id = '{seed.Worker.Id.Value}'
+              AND local_date BETWEEN DATE '2026-05-01' AND DATE '2026-05-31'
+            """);
+
+        Assert.Contains("ix_events_worker_day", plan, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListMaterializedLocalDates_CountsEveryStatus_IncludingCancelled()
+    {
+        // This replaced `20-01`'s GetMaterializedHorizon_IgnoresCancelledRows, and it asserts the
+        // *opposite* rule about cancelled rows - deliberately, because the question changed with the
+        // granularity. An instant-valued horizon asked "how far does this worker's occupied time
+        // reach", and a cancellation frees the worker's time, so it was no evidence. A day-valued
+        // check asks "was this day generated", and a cancelled row is proof that it was. Counting it
+        // is what stops the materialiser writing a fresh grid on top of a day's own history
+        // (adr/0053).
+        var seed = await CalendarSeed.WriteAsync(fixture);
         var start = new DateTimeOffset(2026, 5, 4, 9, 0, 0, TimeSpan.Zero);
-        var kept = CalendarSeed.Slot(seed, start);
-        var cancelled = CalendarSeed.Slot(seed, start.AddHours(2));
+        var available = CalendarSeed.Slot(seed, start);
+        var cancelled = CalendarSeed.Slot(seed, start.AddDays(1).AddHours(2));
 
         await using (var db = fixture.CreateDbContext())
         {
             var repository = new EventRepository(db);
-            await repository.AddRangeAsync([kept, cancelled], CancellationToken.None);
+            await repository.AddRangeAsync([available, cancelled], CancellationToken.None);
             cancelled.Claim(seed.Customer.Id, seed.Service.Id, CalendarSeed.Now, CalendarSeed.Now.AddMinutes(15));
             cancelled.Cancel(CalendarSeed.Now.AddMinutes(1));
             await repository.SaveAsync(cancelled, CancellationToken.None);
         }
 
         await using var reader = fixture.CreateDbContext();
-        var horizon = await new EventRepository(reader)
-            .GetMaterializedHorizonAsync(seed.Calendar.Id, seed.Worker.Id, CancellationToken.None);
+        var days = await new EventRepository(reader).ListMaterializedLocalDatesAsync(
+            seed.Calendar.Id, seed.Worker.Id,
+            available.LocalDate, cancelled.LocalDate, CancellationToken.None);
 
-        // A cancellation at the far end of the window must not convince the materialiser it has
-        // already covered that far.
-        Assert.Equal(kept.EndsAt, horizon);
+        Assert.Equal([available.LocalDate, cancelled.LocalDate], days.Order());
     }
 
     [Fact]
-    public async Task GetMaterializedHorizon_ForAWorkerWithNothingMaterialised_IsNull()
+    public async Task ListMaterializedLocalDates_ForAWorkerWithNothingMaterialised_IsEmpty()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
 
         await using var db = fixture.CreateDbContext();
-        Assert.Null(await new EventRepository(db)
-            .GetMaterializedHorizonAsync(seed.Calendar.Id, seed.Worker.Id, CancellationToken.None));
+        var days = await new EventRepository(db).ListMaterializedLocalDatesAsync(
+            seed.Calendar.Id, seed.Worker.Id,
+            new DateOnly(2026, 5, 1), new DateOnly(2026, 5, 31), CancellationToken.None);
+
+        Assert.Empty(days);
+    }
+
+    [Fact]
+    public async Task ListMaterializedLocalDates_IsBoundedByTheWindow()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var inside = CalendarSeed.Slot(seed, new DateTimeOffset(2026, 6, 10, 9, 0, 0, TimeSpan.Zero));
+        var outside = CalendarSeed.Slot(seed, new DateTimeOffset(2026, 7, 10, 9, 0, 0, TimeSpan.Zero));
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            await new EventRepository(db).AddRangeAsync([inside, outside], CancellationToken.None);
+        }
+
+        await using var reader = fixture.CreateDbContext();
+        var days = await new EventRepository(reader).ListMaterializedLocalDatesAsync(
+            seed.Calendar.Id, seed.Worker.Id,
+            new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 30), CancellationToken.None);
+
+        // A day outside the window is not reported, so a horizon that has been pushed far past the
+        // current one cannot make every day inside it look done.
+        Assert.Equal([inside.LocalDate], days);
     }
 
     private async Task<string> ExplainAsync(string sql)

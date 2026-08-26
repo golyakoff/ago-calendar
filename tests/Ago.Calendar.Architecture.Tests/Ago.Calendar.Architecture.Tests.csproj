@@ -27,6 +27,7 @@
     <ProjectReference Include="..\..\src\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
     <ProjectReference Include="..\..\src\Ago.Calendar.Contracts\Ago.Calendar.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Ago.Calendar.Infrastructure.Postgres\Ago.Calendar.Infrastructure.Postgres.csproj" />
+    <ProjectReference Include="..\..\src\Ago.Calendar.Infrastructure.Time\Ago.Calendar.Infrastructure.Time.csproj" />
     <ProjectReference Include="..\..\src\Ago.Calendar.Module\Ago.Calendar.Module.csproj" />
   </ItemGroup>
 

@@ -22,6 +22,11 @@ internal static class TestAssemblies
     public static ProductAssembly Application { get; } = Load("Ago.Calendar.Application");
     public static ProductAssembly Contracts { get; } = Load("Ago.Calendar.Contracts");
     public static ProductAssembly InfrastructurePostgres { get; } = Load("Ago.Calendar.Infrastructure.Postgres");
+
+    /// <summary>`20-02`: the tz-database adapter, and the one assembly allowed to mention
+    /// <c>TimeZoneInfo</c> - see <see cref="TimeZoneIsolationTests"/>.</summary>
+    public static ProductAssembly InfrastructureTime { get; } = Load("Ago.Calendar.Infrastructure.Time");
+
     public static ProductAssembly Module { get; } = Load("Ago.Calendar.Module");
     public static ProductAssembly PlatformKernel { get; } = Load("Ago.Platform.Kernel");
     public static ProductAssembly PlatformHosting { get; } = Load("Ago.Platform.Hosting");
@@ -34,7 +39,12 @@ internal static class TestAssemblies
     /// <summary>Every product assembly, for rules with no layer exception (the CancellationToken
     /// rule, the Ago.Chat.* isolation rule).</summary>
     public static IReadOnlyList<ProductAssembly> AllProduct { get; } =
-        [Domain, Application, Contracts, InfrastructurePostgres, Module];
+        [Domain, Application, Contracts, InfrastructurePostgres, InfrastructureTime, Module];
+
+    /// <summary>The same list, in the order <see cref="TimeZoneIsolationTests"/> reports offenders
+    /// in - an alias so that "every assembly" reads as the rule's own subject rather than as a
+    /// list borrowed from another rule.</summary>
+    public static IReadOnlyList<ProductAssembly> EveryProductAssembly => AllProduct;
 
     /// <summary>An arch-test fixture assembly, loaded the same way but deliberately outside
     /// <see cref="AllProduct"/> - a fixture that broke the real rules for everyone would defeat the

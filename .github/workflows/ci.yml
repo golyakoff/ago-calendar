@@ -30,6 +30,40 @@ jobs:
         env:
           AGO_PLATFORM_PACKAGES_TOKEN: ${{ secrets.AGO_PLATFORM_PACKAGES_TOKEN }}
 
+      # 17-04: same policy as ago-platform's and ago-chat's own CI, stated in full in ago-platform's
+      # ci.yml and in docs/runbooks/vulnerability-response.md (ago-root) - Critical/High fails the
+      # build, Moderate/Low is reported (job log + step summary) but does not, because a check that
+      # blocks every branch on an untriaged transitive Low advisory nobody can act on trains people to
+      # ignore red CI rather than read it. `--format json` rather than the command's own exit code
+      # (always 0) or its human-readable text (locale-dependent).
+      - name: Vulnerability check (dotnet list package --vulnerable)
+        run: |
+          set -euo pipefail
+          dotnet list Ago.Calendar.slnx package --vulnerable --include-transitive --no-restore \
+            --configfile nuget.ci.config --format json --output-version 1 > vulnerable.json
+        env:
+          AGO_PLATFORM_PACKAGES_TOKEN: ${{ secrets.AGO_PLATFORM_PACKAGES_TOKEN }}
+
+      - name: Report and gate on Critical/High
+        run: |
+          set -euo pipefail
+          total=$(jq '[ .projects[]?.frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?) | .vulnerabilities[]? ] | length' vulnerable.json)
+          high_critical=$(jq '[ .projects[]?.frameworks[]? | (.topLevelPackages[]?, .transitivePackages[]?) | .vulnerabilities[]? | select(.severity=="Critical" or .severity=="High") ] | length' vulnerable.json)
+
+          echo "Vulnerable package references: $total total, $high_critical at Critical/High."
+          jq -r '.projects[] as $p | ($p.frameworks[]? // empty) as $f | (($f.topLevelPackages[]? // empty), ($f.transitivePackages[]? // empty)) | . as $pkg | $pkg.vulnerabilities[]? | "  \($p.path | split("/") | last)  \($pkg.id) \($pkg.resolvedVersion // $pkg.requestedVersion)  \(.severity)  \(.advisoryurl)"' vulnerable.json
+
+          {
+            echo "### Dependency vulnerability check"
+            echo
+            echo "$total vulnerable package reference(s), $high_critical at Critical/High severity."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$high_critical" -gt 0 ]; then
+            echo "::error::$high_critical package(s) at Critical/High severity - failing the build. See the list above."
+            exit 1
+          fi
+
       # Runs before build so a formatting-only branch fails fast, before paying for compilation.
       - name: Format check
         run: dotnet format Ago.Calendar.slnx --verify-no-changes

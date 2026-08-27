@@ -1,0 +1,24 @@
+# 17-04. Schedule: weekly, Monday 06:00 UTC - matches ago-chat's/ago-platform's own cadence, so the
+# project has one weekly rhythm for automated dependency checks rather than a different one per
+# repository.
+#
+# No Docker entry: this repository has no Dockerfile at all yet (repositories.md - "none published
+# yet, nothing deploys them"). Add one alongside the Dockerfile when AGO Calendar gets a real
+# deployment - ago-console's Dockerfile is the template ago-calendar-console's own already followed.
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"

@@ -50,6 +50,18 @@ public static class ErrorExtensions
             // nothing about the request was malformed; the world moved.
             "booking.invalid_state" or "booking.concurrency_conflict" => StatusCodes.Status409Conflict,
             "configuration.invalid" or "provisioning.invalid" => StatusCodes.Status400BadRequest,
+            // `20-07`. A deployment fault - this host's static ChatModule:* configuration does not
+            // resolve to a real, published calendar - not something the caller (Ago.Chat.*) can act
+            // on by retrying differently, so it is mapped to 500 explicitly rather than left to the
+            // catch-all below, which exists to catch a bug in this switch rather than to describe a
+            // real operational state on purpose.
+            "chat_module_task.not_configured" => StatusCodes.Status500InternalServerError,
+            "chat_module_task.not_found" => StatusCodes.Status404NotFound,
+            // 409, not 404: the task exists and the request was well-formed - it simply already
+            // finished. The same reasoning booking.slot_unavailable's own comment gives.
+            "chat_module_task.already_complete" => StatusCodes.Status409Conflict,
+            "chat_module_task.kind_mismatch" or "chat_module_task.invalid_reply_value" =>
+                StatusCodes.Status400BadRequest,
             // Anything unmapped is a bug in this switch, not a client error - a 500 says so honestly
             // instead of inventing a 400 that would make a caller retry something that cannot work.
             _ => StatusCodes.Status500InternalServerError,

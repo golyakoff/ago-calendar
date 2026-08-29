@@ -54,6 +54,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBookingSurfaceReadStore, BookingSurfaceReadStore>();
         services.AddScoped<ITenantProvisioningStore, TenantProvisioningStore>();
 
+        // `20-07`: the chat module's own orchestration state. Plain load/save, unlike IBookingStore -
+        // see IChatBookingTaskStore's own remarks.
+        services.AddScoped<IChatBookingTaskStore, ChatBookingTaskStore>();
+
         // adr/0017: the platform's own generic outbox/inbox, bound to this product's context. The
         // tables exist from this migration onward; the first writer is `20-05`.
         services.AddOutboxInbox<AgoCalendarDbContext>();

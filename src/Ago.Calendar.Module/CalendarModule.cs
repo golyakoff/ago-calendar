@@ -1,5 +1,6 @@
 ﻿using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
+using Ago.Calendar.Application.UseCases.ChatModuleTask;
 using Ago.Calendar.Application.UseCases.Configuration;
 using Ago.Calendar.Application.UseCases.Cors;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
@@ -97,6 +98,21 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<GetBookableWorkersHandler>();
         services.AddScoped<GetOpenSlotsHandler>();
         services.AddScoped<CheckTenantOriginHandler>();
+
+        // `20-07`: the chat entry point. Bound at startup like every other options class here, but
+        // deliberately *not* given a hard `.Validate(...)` the way `Operator:Authority` gets one -
+        // see ChatModuleTaskOptions's own remarks on why an unconfigured value is a per-request
+        // chat_module_task.not_configured rejection rather than a reason to refuse to boot the whole
+        // host. `Operator:Authority`'s no-fallback rule exists because a host with no authority has
+        // no authentication at all; leaving ChatModule:* unset disables one feature, and every other
+        // route - including the widget's own booking flow - keeps working.
+        services.AddOptions<ChatModuleTaskOptions>()
+            .Bind(configuration.GetSection(ChatModuleTaskOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton(provider => provider.GetRequiredService<IOptions<ChatModuleTaskOptions>>().Value);
+
+        services.AddScoped<StartModuleTaskHandler>();
+        services.AddScoped<ReplyToModuleTaskHandler>();
 
         services.AddScoped<GetTenantConfigurationHandler>();
         services.AddScoped<CreateCalendarHandler>();

@@ -18,6 +18,8 @@ internal static class IdConverters
     public static readonly ValueConverter<CustomerId, Guid> Customer = new(id => id.Value, value => new CustomerId(value));
     public static readonly ValueConverter<WorkingHoursRuleId, Guid> WorkingHoursRule = new(id => id.Value, value => new WorkingHoursRuleId(value));
     public static readonly ValueConverter<EventId, Guid> Event = new(id => id.Value, value => new EventId(value));
+    public static readonly ValueConverter<ChatBookingTaskId, Guid> ChatBookingTask = new(
+        id => id.Value, value => new ChatBookingTaskId(value));
 
     public static readonly ValueConverter<ServiceId?, Guid?> NullableService = new(
         id => id.HasValue ? id.Value.Value : (Guid?)null,
@@ -26,6 +28,17 @@ internal static class IdConverters
     public static readonly ValueConverter<CustomerId?, Guid?> NullableCustomer = new(
         id => id.HasValue ? id.Value.Value : (Guid?)null,
         value => value.HasValue ? new CustomerId(value.Value) : (CustomerId?)null);
+
+    /// <summary>`20-07`: <see cref="ChatBookingTask.WorkerId"/> is unset until the visitor picks one.</summary>
+    public static readonly ValueConverter<WorkerId?, Guid?> NullableWorker = new(
+        id => id.HasValue ? id.Value.Value : (Guid?)null,
+        value => value.HasValue ? new WorkerId(value.Value) : (WorkerId?)null);
+
+    /// <summary>`20-07`: <see cref="ChatBookingTask.EventId"/> is unset until a slot is chosen, and
+    /// cleared again by <see cref="Ago.Calendar.Domain.ChatBookingTask.ReopenForSlotChoice"/>.</summary>
+    public static readonly ValueConverter<EventId?, Guid?> NullableEvent = new(
+        id => id.HasValue ? id.Value.Value : (Guid?)null,
+        value => value.HasValue ? new EventId(value.Value) : (EventId?)null);
 
     /// <summary>
     /// The phone number's own converter. Note the asymmetry: writing goes through the already

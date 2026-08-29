@@ -20,6 +20,11 @@ public sealed class AgoCalendarDbContext(DbContextOptions<AgoCalendarDbContext> 
     public DbSet<WorkingHoursRule> WorkingHoursRules => Set<WorkingHoursRule>();
     public DbSet<Event> Events => Set<Event>();
 
+    /// <summary>`20-07`: one visitor's walk through the chat-driven booking flow. See
+    /// <see cref="ChatBookingTask"/>'s own remarks for why this is a separate aggregate from
+    /// <see cref="Event"/> rather than fields on it.</summary>
+    public DbSet<ChatBookingTask> ChatBookingTasks => Set<ChatBookingTask>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AgoCalendarDbContext).Assembly);

@@ -82,15 +82,17 @@ internal sealed class FakeEventRepositoryWithSaves(Event? booking) : IEventRepos
 }
 
 /// <summary>The shared queue, faked. <see cref="AskedFor"/> is what proves the read is tenant-scoped
-/// and never narrowed to one operator or one calendar.</summary>
+/// and never narrowed to one operator or one calendar; its <c>IncludeContactData</c> flag is what
+/// `20-12`'s own handler tests assert against, to prove the phone-visibility decision is made once, in
+/// the handler, and handed to the read store rather than re-decided there.</summary>
 internal sealed class FakePendingBookingReadStore(params PendingBookingRow[] rows) : IPendingBookingReadStore
 {
-    public List<(TenantId TenantId, int Limit)> AskedFor { get; } = [];
+    public List<(TenantId TenantId, int Limit, bool IncludeContactData)> AskedFor { get; } = [];
 
     public Task<IReadOnlyList<PendingBookingRow>> GetPendingForTenantAsync(
-        TenantId tenantId, DateTimeOffset now, int limit, CancellationToken cancellationToken)
+        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, CancellationToken cancellationToken)
     {
-        AskedFor.Add((tenantId, limit));
+        AskedFor.Add((tenantId, limit, includeContactData));
         return Task.FromResult<IReadOnlyList<PendingBookingRow>>(rows);
     }
 }

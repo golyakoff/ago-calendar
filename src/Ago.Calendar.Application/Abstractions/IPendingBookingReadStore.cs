@@ -34,8 +34,16 @@ public interface IPendingBookingReadStore
     /// </summary>
     /// <param name="now">Used only to mark which rows are already past their deadline, never to
     /// filter them out. See <see cref="PendingBookingRow.IsOverdue"/>.</param>
+    /// <param name="includeContactData">
+    /// `20-12`: whether the caller holds <see cref="Permission.CustomerRead"/>, decided once by
+    /// <c>GetPendingBookingsForTenantHandler</c> and passed down rather than re-checked here. When
+    /// <see langword="false"/> the query does not join to <c>customers</c> at all - keeping `20-04`'s
+    /// original PII-minimisation argument alive for exactly the callers it was meant for, instead of
+    /// joining unconditionally and merely hiding the column afterwards. See
+    /// <see cref="PendingBookingRow.Phone"/> for what the caller sees in each case.
+    /// </param>
     Task<IReadOnlyList<PendingBookingRow>> GetPendingForTenantAsync(
-        TenantId tenantId, DateTimeOffset now, int limit, CancellationToken cancellationToken);
+        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -60,6 +68,15 @@ public interface IPendingBookingReadStore
 /// out for exactly that reason: hiding overdue rows would make a broken sweep invisible to the only
 /// person in a position to notice, while the customer has already been told they are booked.
 /// </param>
+/// <param name="Phone">
+/// `20-12`. <see langword="null"/> means exactly one thing in this read store's own output: the caller
+/// was not asked for it (<c>includeContactData: false</c>), because the query never joined to
+/// <c>customers</c> at all. It does <b>not</b> mean "no phone on file" - <see cref="Customer.Phone"/>
+/// is a non-nullable <see cref="PhoneNumber"/>, so every <see cref="Customer"/> a pending booking can
+/// reference always has one; the "permitted but nothing recorded" state the item file asked about is
+/// therefore unreachable given today's model, and this row does not pretend otherwise with a third
+/// state nothing can produce.
+/// </param>
 public readonly record struct PendingBookingRow(
     EventId EventId,
     CalendarId CalendarId,
@@ -70,4 +87,5 @@ public readonly record struct PendingBookingRow(
     DateTimeOffset EndsAt,
     DateOnly LocalDate,
     DateTimeOffset ConfirmationDeadline,
-    bool IsOverdue);
+    bool IsOverdue,
+    PhoneNumber? Phone);

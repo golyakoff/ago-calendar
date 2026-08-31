@@ -31,13 +31,25 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
     /// after the fact, so the whole row arrives already answering the one question that matters about
     /// the sweep's health.</para>
     /// </summary>
-    private const string Sql =
+    /// <summary>
+    /// A literal <c>null::text as "Phone"</c> keeps this query's own row shape identical to
+    /// <see cref="SqlWithContactData"/>'s, at no join cost: Dapper's constructor-matching
+    /// materialisation needs every query to produce the same columns as
+    /// <see cref="PendingBookingQueueRow"/>'s single generated constructor, since a C# default
+    /// parameter value is a caller-side convenience only - it does not create a second, shorter
+    /// constructor for Dapper's reflection to find. Found by running this query for real: the first
+    /// attempt omitted the column entirely and Dapper threw
+    /// "a parameterless default constructor or one matching signature... is required" at
+    /// materialisation, not at compile time.
+    /// </summary>
+    private const string SqlWithoutContactData =
         """
         select id as "EventId", calendar_id as "CalendarId", worker_id as "WorkerId",
                service_id as "ServiceId", customer_id as "CustomerId",
                starts_at as "StartsAt", ends_at as "EndsAt", local_date as "LocalDate",
                confirmation_deadline as "ConfirmationDeadline",
-               (confirmation_deadline <= @Now) as "IsOverdue"
+               (confirmation_deadline <= @Now) as "IsOverdue",
+               null::text as "Phone"
         from events
         where tenant_id = @TenantId
           and status = 'PendingConfirmation'
@@ -45,14 +57,39 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         limit @Limit
         """;
 
+    /// <summary>
+    /// `20-12`: the only difference from <see cref="SqlWithoutContactData"/> is this join and its one
+    /// extra column - chosen over always joining and hiding the result, so a caller without
+    /// <c>customer:read</c> costs the database nothing extra, exactly as `20-04`'s original read store
+    /// intended. <c>left join</c> rather than an inner join: <c>events.customer_id</c> is trusted to
+    /// resolve (see <see cref="ToRow"/>'s own remark on why it is asserted with <c>!</c>), but a join
+    /// condition is cheap insurance against ever turning a data anomaly into a row silently dropped
+    /// from an operator's queue.
+    /// </summary>
+    private const string SqlWithContactData =
+        """
+        select e.id as "EventId", e.calendar_id as "CalendarId", e.worker_id as "WorkerId",
+               e.service_id as "ServiceId", e.customer_id as "CustomerId",
+               e.starts_at as "StartsAt", e.ends_at as "EndsAt", e.local_date as "LocalDate",
+               e.confirmation_deadline as "ConfirmationDeadline",
+               (e.confirmation_deadline <= @Now) as "IsOverdue",
+               c.phone as "Phone"
+        from events e
+        left join customers c on c.id = e.customer_id
+        where e.tenant_id = @TenantId
+          and e.status = 'PendingConfirmation'
+        order by e.confirmation_deadline
+        limit @Limit
+        """;
+
     public async Task<IReadOnlyList<PendingBookingRow>> GetPendingForTenantAsync(
-        TenantId tenantId, DateTimeOffset now, int limit, CancellationToken cancellationToken)
+        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         var rows = await connection.QueryAsync<PendingBookingQueueRow>(new CommandDefinition(
-            Sql,
+            includeContactData ? SqlWithContactData : SqlWithoutContactData,
             new { TenantId = tenantId.Value, Now = now, Limit = limit },
             cancellationToken: cancellationToken));
 
@@ -73,7 +110,11 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         new DateTimeOffset(DateTime.SpecifyKind(row.EndsAt, DateTimeKind.Utc)),
         row.LocalDate,
         new DateTimeOffset(DateTime.SpecifyKind(row.ConfirmationDeadline!.Value, DateTimeKind.Utc)),
-        row.IsOverdue);
+        row.IsOverdue,
+        // null when the query never selected the column at all (SqlWithoutContactData leaves the
+        // Dapper-materialised Phone at its type default) - see PendingBookingRow.Phone's own remarks
+        // on why that is the only state a null here can mean.
+        row.Phone is null ? null : new PhoneNumber(row.Phone));
 
     /// <summary>
     /// The raw shape Dapper materialises, separate from <see cref="PendingBookingRow"/> so the
@@ -91,5 +132,6 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         DateTime EndsAt,
         DateOnly LocalDate,
         DateTime? ConfirmationDeadline,
-        bool IsOverdue);
+        bool IsOverdue,
+        string? Phone);
 }

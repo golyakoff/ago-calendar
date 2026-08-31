@@ -26,6 +26,9 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IOperatorRepository, OperatorRepository>();
+        // `20-12`: the second role and every role-assignment change go through this - see
+        // IRoleRepository's own remarks for why it did not exist before this item.
+        services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IBookingCalendarRepository, BookingCalendarRepository>();
         services.AddScoped<IWorkerRepository, WorkerRepository>();
         services.AddScoped<IServiceRepository, ServiceRepository>();
@@ -48,6 +51,12 @@ public static class ServiceCollectionExtensions
         // because a data source is a pool, not a connection.
         services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
         services.AddScoped<IPendingBookingReadStore, PendingBookingReadStore>();
+
+        // `20-12`: the tenant contacts report's own read side, the same NpgsqlDataSource singleton
+        // above rather than a second pool - PendingBookingReadStore's own remarks on why a read store
+        // never shares the write context still apply, but there is no reason to open a second
+        // connection pool for a second read store.
+        services.AddScoped<IContactsReadStore, ContactsReadStore>();
 
         // `20-06`: the public booking surface's own read side, and the multi-aggregate provisioning
         // write ITenantRepository's remarks predicted would be the first use case to need one.

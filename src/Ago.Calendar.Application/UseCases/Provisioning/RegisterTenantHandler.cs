@@ -56,11 +56,16 @@ public sealed class RegisterTenantHandler(
 
             role = Role.SeedOperatorRole(new RoleId(idGenerator.NewId(now)), tenant.Id);
 
+            // `20-12`: the tenant's first operator is its account owner - the only caller in this
+            // codebase that passes isAccountOwner: true, matching Operator.IsAccountOwner's own
+            // remarks on why that is a fact about how the row came to exist, not a state anything
+            // else should set.
             @operator = Operator.Create(
                 new OperatorId(idGenerator.NewId(now)),
                 tenant.Id,
                 command.OperatorDisplayName,
-                command.ExternalSubjectId);
+                command.ExternalSubjectId,
+                isAccountOwner: true);
 
             // Takes the whole Role, not a RoleId: an id cannot answer "does this role belong to my
             // tenant", so the check would have to move to this caller - which is exactly what

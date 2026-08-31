@@ -1,7 +1,9 @@
-﻿using Ago.Calendar.Application.UseCases.BookEvent;
+﻿using Ago.Calendar.Application.UseCases.AccessControl;
+using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
 using Ago.Calendar.Application.UseCases.ChatModuleTask;
 using Ago.Calendar.Application.UseCases.Configuration;
+using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.Cors;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
@@ -122,5 +124,13 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<AddWorkingHoursRuleHandler>();
         services.AddScoped<SetAllowedOriginsHandler>();
         services.AddScoped<RegisterTenantHandler>();
+
+        // `20-12`: the second role, moving an operator on/off it, and the tenant contacts report.
+        services.AddScoped<CreateRoleHandler>();
+        services.AddScoped<ListRolesForTenantHandler>();
+        services.AddScoped<ListOperatorsForTenantHandler>();
+        services.AddScoped<GrantOperatorRoleHandler>();
+        services.AddScoped<RevokeOperatorRoleHandler>();
+        services.AddScoped<GetTenantContactsHandler>();
     }
 }

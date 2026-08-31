@@ -116,6 +116,41 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task ACallerHoldingCustomerRead_SeesThePhone_OneWithoutIt_DoesNot_OnTheIdenticalBooking()
+    {
+        // `20-12`'s own Done-when: one underlying booking, two callers, two different answers about
+        // the same field - proven against a real Postgres so the read store's own conditional join is
+        // exercised for real, not only the handler's decision to ask for it.
+        var world = await ATenantWithTwoCalendarsAsync();
+        var stranger = await AnOperatorWithoutCustomerReadAsync(world.TenantId);
+
+        var withAccess = await QueueAsync(world.FirstOperator, world.TenantId);
+        var withoutAccess = await QueueAsync(stranger, world.TenantId);
+
+        Assert.All(withAccess, row => Assert.NotNull(row.Phone));
+        Assert.All(withoutAccess, row => Assert.Null(row.Phone));
+
+        // Same rows, same order - the only difference is the one field.
+        Assert.Equal(withAccess.Select(r => r.EventId), withoutAccess.Select(r => r.EventId));
+    }
+
+    private async Task<OperatorId> AnOperatorWithoutCustomerReadAsync(TenantId tenantId)
+    {
+        var role = Role.Create(
+            new RoleId(CalendarSeed.NewId()), tenantId, "Dispatcher-only",
+            [Permission.BookingReject, Permission.BookingCancel]);
+        var @operator = Operator.Create(new OperatorId(CalendarSeed.NewId()), tenantId, "Casey");
+        @operator.Grant(role);
+
+        await using var db = fixture.CreateDbContext();
+        db.Roles.Add(role);
+        db.Operators.Add(@operator);
+        await db.SaveChangesAsync();
+
+        return @operator.Id;
+    }
+
+    [Fact]
     public async Task AConfirmedBookingLeavesTheQueue()
     {
         var world = await ATenantWithTwoCalendarsAsync();

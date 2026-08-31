@@ -24,6 +24,12 @@ internal sealed class OperatorConfiguration : IEntityTypeConfiguration<Operator>
             .HasDatabaseName("ux_operators_external_subject_id")
             .HasFilter("external_subject_id IS NOT NULL");
 
+        // `20-12`: get-only, set once at Operator.Create - see Operator.IsAccountOwner's own remarks
+        // for why there is no mutator. EF materialises a get-only auto-property through its own
+        // backing field with no extra configuration needed here, the same way `Id`/`TenantId` above
+        // already do.
+        builder.Property(o => o.IsAccountOwner).HasColumnName("is_account_owner").IsRequired();
+
         builder.HasOne<Tenant>().WithMany().HasForeignKey(o => o.TenantId);
 
         // Never a settable collection (clean-architecture.md: no public setters) - EF is pointed at

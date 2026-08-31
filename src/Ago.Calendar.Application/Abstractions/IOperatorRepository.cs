@@ -21,5 +21,17 @@ public interface IOperatorRepository
     /// (adr/0027).</summary>
     Task<Operator?> FindByExternalSubjectIdAsync(string externalSubjectId, CancellationToken cancellationToken);
 
+    /// <summary>`20-12`: every operator of one tenant - the role-assignment screen's own list, and the
+    /// same tenant-scoping discipline every other <c>ListForTenantAsync</c> in this product already
+    /// holds itself to.</summary>
+    Task<IReadOnlyList<Operator>> ListForTenantAsync(TenantId tenantId, CancellationToken cancellationToken);
+
     Task AddAsync(Operator @operator, CancellationToken cancellationToken);
+
+    /// <summary>`20-12`: the write side `Operator.Grant`/`Operator.Revoke` never had a caller for
+    /// before now. Named <c>SaveAsync</c> rather than <c>UpdateAsync</c> to match every other
+    /// repository in this product (<c>IBookingCalendarRepository</c>, <c>ICustomerRepository</c>,
+    /// <c>IEventRepository</c>...) - one verb for "persist a change to an entity this port already
+    /// handed out", everywhere.</summary>
+    Task SaveAsync(Operator @operator, CancellationToken cancellationToken);
 }

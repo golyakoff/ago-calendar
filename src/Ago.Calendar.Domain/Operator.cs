@@ -39,12 +39,30 @@ public sealed class Operator
 
     public IReadOnlyList<RoleAssignment> Roles => _roles;
 
-    private Operator(OperatorId id, TenantId tenantId, string displayName, string? externalSubjectId)
+    /// <summary>
+    /// `20-12`: the tenant's own account owner - operationally, the first operator ever created for a
+    /// tenant (`RegisterTenantHandler`'s own provisioning transaction is the only caller that passes
+    /// <see langword="true"/> today). Settable only here, at construction, and never again - there is
+    /// no <c>Rename</c>-shaped mutator for it, on purpose, the same way <c>Id</c> and <c>TenantId</c>
+    /// carry no setter: "who provisioned this tenant" is a fact about how the row came to exist, not a
+    /// state a later request should be able to flip.
+    ///
+    /// <para>Deliberately not AGO's cross-tenant platform-owner concept (adr/0032) and not anything
+    /// `13-07`'s flat, tenant-local role model already names - see `20-12`'s own item file for why
+    /// neither applies here. This is a narrower, Calendar-only idea: one operator per tenant who is
+    /// guaranteed, by <see cref="Grant"/>/<see cref="Revoke"/>'s own invariant below, to always hold a
+    /// role granting <see cref="Permission.CustomerRead"/>.</para>
+    /// </summary>
+    public bool IsAccountOwner { get; }
+
+    private Operator(
+        OperatorId id, TenantId tenantId, string displayName, string? externalSubjectId, bool isAccountOwner)
     {
         Id = id;
         TenantId = tenantId;
         DisplayName = displayName;
         ExternalSubjectId = externalSubjectId;
+        IsAccountOwner = isAccountOwner;
     }
 
     // EF Core materialization only - never called by domain code.
@@ -52,8 +70,16 @@ public sealed class Operator
     {
     }
 
+    /// <param name="isAccountOwner">See <see cref="IsAccountOwner"/>. Defaults to
+    /// <see langword="false"/> because every path that creates an operator is "some other way" except
+    /// one - <c>RegisterTenantHandler</c>'s own provisioning transaction is the only caller expected to
+    /// pass <see langword="true"/>.</param>
     public static Operator Create(
-        OperatorId id, TenantId tenantId, string displayName, string? externalSubjectId = null)
+        OperatorId id,
+        TenantId tenantId,
+        string displayName,
+        string? externalSubjectId = null,
+        bool isAccountOwner = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
 
@@ -63,7 +89,7 @@ public sealed class Operator
                 "An external subject id is either absent or a real value, never blank.", nameof(externalSubjectId));
         }
 
-        return new Operator(id, tenantId, displayName.Trim(), externalSubjectId);
+        return new Operator(id, tenantId, displayName.Trim(), externalSubjectId, isAccountOwner);
     }
 
     /// <summary>
@@ -90,7 +116,63 @@ public sealed class Operator
             return;
         }
 
-        _roles.Add(new RoleAssignment(Id, role.Id));
+        var grantsCustomerRead = role.Grants(Permission.CustomerRead);
+
+        // `20-12`'s account-owner invariant. Grant only ever adds capability, so this can only fire in
+        // one real sequence: the account owner currently holds no role granting CustomerRead at all
+        // (nothing has been granted yet, or every prior grant also lacked it) and the role about to be
+        // granted does not carry it either - meaning this grant would still leave them without one.
+        // Checked before the list is mutated, so a refusal here changes nothing about the operator's
+        // state.
+        if (IsAccountOwner && !grantsCustomerRead && !_roles.Exists(assignment => assignment.GrantsCustomerRead))
+        {
+            throw new AccountOwnerRoleException(
+                $"Operator {Id.Value} is tenant {TenantId.Value}'s account owner and must always hold a " +
+                $"role granting '{Permission.CustomerRead.Value}'; granting '{role.Name}' alone would not " +
+                "give them one.");
+        }
+
+        _roles.Add(new RoleAssignment(Id, role.Id, grantsCustomerRead));
+    }
+
+    /// <summary>
+    /// The counterpart <see cref="Grant"/> never had. Takes the whole <see cref="Role"/> for the same
+    /// reason <see cref="Grant"/> does - a bare <see cref="RoleId"/> cannot answer "does this role
+    /// belong to my tenant".
+    /// </summary>
+    public void Revoke(Role role)
+    {
+        ArgumentNullException.ThrowIfNull(role);
+
+        if (role.TenantId != TenantId)
+        {
+            throw new TenantMismatchException(
+                $"Role {role.Id.Value} belongs to tenant {role.TenantId.Value}, operator {Id.Value} to {TenantId.Value}.");
+        }
+
+        var assignment = _roles.Find(existing => existing.RoleId == role.Id);
+        if (assignment is null)
+        {
+            // Revoking a role never held is a no-op, mirroring Grant's own idempotency - "the caller
+            // already has what they asked for" holds in both directions.
+            return;
+        }
+
+        // `20-12`'s account-owner invariant, the direction Revoke actually exists to guard: refuse to
+        // remove the one remaining role that grants CustomerRead from the tenant's own account owner.
+        // Any other revoke - a role that never carried CustomerRead, or one that did while another
+        // held role still does - is unaffected.
+        if (IsAccountOwner
+            && assignment.GrantsCustomerRead
+            && !_roles.Exists(existing => existing.RoleId != role.Id && existing.GrantsCustomerRead))
+        {
+            throw new AccountOwnerRoleException(
+                $"Operator {Id.Value} is tenant {TenantId.Value}'s account owner and must always hold a " +
+                $"role granting '{Permission.CustomerRead.Value}'; revoking '{role.Name}' would leave them " +
+                "without one.");
+        }
+
+        _roles.Remove(assignment);
     }
 
     /// <summary>Links this operator to a Keycloak subject the first time they sign in. Re-linking to

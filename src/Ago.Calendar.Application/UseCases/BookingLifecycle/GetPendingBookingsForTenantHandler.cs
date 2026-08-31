@@ -45,11 +45,20 @@ public sealed class GetPendingBookingsForTenantHandler(
             return BookingLifecycleErrors.Forbidden(Permission.BookingReject);
         }
 
+        // `20-12`: a *second*, independent permission check - never a reason to refuse the whole
+        // read, only whether the row's phone field is populated. The queue is shared and unassigned
+        // (IPendingBookingReadStore's own remarks), so this cannot be a static per-row property the
+        // way a chat conversation's own visibility might be; it is re-resolved on every request
+        // against this caller's real, current roles.
+        var canReadContacts = await permissions.HasPermissionAsync(
+            query.OperatorId, query.TenantId, Permission.CustomerRead, cancellationToken);
+
         // Clamped rather than rejected: a caller asking for more than the page bound wants "as many
         // as I can have", and an error would make them guess the number.
         var limit = Math.Clamp(query.Limit, 1, MaxLimit);
 
-        var rows = await queue.GetPendingForTenantAsync(query.TenantId, clock.UtcNow, limit, cancellationToken);
+        var rows = await queue.GetPendingForTenantAsync(
+            query.TenantId, clock.UtcNow, limit, canReadContacts, cancellationToken);
         return Result<IReadOnlyList<PendingBookingRow>>.Success(rows);
     }
 }

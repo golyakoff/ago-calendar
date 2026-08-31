@@ -67,6 +67,17 @@ public static class ErrorExtensions
             "chat_module_task.already_complete" => StatusCodes.Status409Conflict,
             "chat_module_task.kind_mismatch" or "chat_module_task.invalid_reply_value" =>
                 StatusCodes.Status400BadRequest,
+            // `20-12`'s own access-control and contacts-report codes, the same 403/404/400 shape as
+            // configuration.* above - these are operator-facing failures an authenticated caller is
+            // entitled to see the reason for, not faults.
+            "access.forbidden" or "contacts.forbidden" => StatusCodes.Status403Forbidden,
+            "access.not_found" => StatusCodes.Status404NotFound,
+            "access.invalid" => StatusCodes.Status400BadRequest,
+            // 409, not 403: the caller *is* allowed to revoke roles in general (they already hold
+            // calendar:configure) - what refuses this particular request is a state the aggregate
+            // itself protects, the same "the world moved" reasoning booking.invalid_state's own
+            // comment gives, not a permission the caller lacks.
+            "access.account_owner_requires_contact_access" => StatusCodes.Status409Conflict,
             // Anything unmapped is a bug in this switch, not a client error - a 500 says so honestly
             // instead of inventing a 400 that would make a caller retry something that cannot work.
             _ => StatusCodes.Status500InternalServerError,

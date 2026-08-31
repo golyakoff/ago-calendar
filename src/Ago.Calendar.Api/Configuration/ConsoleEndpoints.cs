@@ -1,8 +1,10 @@
 ﻿using System.Security.Claims;
 using Ago.Calendar.Api.Auth;
 using Ago.Calendar.Api.Http;
+using Ago.Calendar.Application.UseCases.AccessControl;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
 using Ago.Calendar.Application.UseCases.Configuration;
+using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Contracts;
@@ -58,6 +60,16 @@ public static class ConsoleEndpoints
 
         group.MapPost("/availability/day-off", HandleDayOffAsync).WithName("DeleteDayOff");
         group.MapPost("/availability/day-boundary", HandleDayBoundaryAsync).WithName("EditDayBoundary");
+
+        // `20-12`: the second role, moving an operator on/off it, and the tenant contacts report.
+        group.MapPost("/roles", HandleCreateRoleAsync).WithName("CreateRole");
+        group.MapGet("/roles", HandleListRolesAsync).WithName("ListRoles");
+        group.MapGet("/operators", HandleListOperatorsAsync).WithName("ListOperators");
+        group.MapPost("/operators/{operatorId:guid}/roles/{roleId:guid}", HandleGrantRoleAsync)
+            .WithName("GrantOperatorRole");
+        group.MapDelete("/operators/{operatorId:guid}/roles/{roleId:guid}", HandleRevokeRoleAsync)
+            .WithName("RevokeOperatorRole");
+        group.MapGet("/contacts", HandleContactsAsync).WithName("GetContacts");
 
         return app;
     }
@@ -274,7 +286,8 @@ public static class ConsoleEndpoints
                 row.EndsAt,
                 row.LocalDate,
                 row.ConfirmationDeadline,
-                row.IsOverdue))
+                row.IsOverdue,
+                row.Phone?.Value))
             .ToArray());
     }
 
@@ -355,6 +368,133 @@ public static class ConsoleEndpoints
                     request.LocalDate, request.OpensAt, request.ClosesAt),
                 cancellationToken),
             httpContext);
+    }
+
+    private static async Task<IResult> HandleCreateRoleAsync(
+        CreateRoleRequest request,
+        ClaimsPrincipal principal,
+        CreateRoleHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        Permission[] permissions;
+        try
+        {
+            permissions = [.. (request.Permissions ?? []).Select(value => new Permission(value))];
+        }
+        catch (ArgumentException exception)
+        {
+            return AccessControlErrors.Invalid(exception.Message).ToProblem(httpContext);
+        }
+
+        var result = await handler.HandleAsync(
+            new CreateRole(principal.GetOperatorId(), principal.GetTenantId(), request.Name, permissions),
+            cancellationToken);
+
+        return result.IsSuccess
+            ? Results.Created($"/api/v1/console/roles/{result.Value.Value}", new { roleId = result.Value.Value })
+            : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    private static async Task<IResult> HandleListRolesAsync(
+        ClaimsPrincipal principal,
+        ListRolesForTenantHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new ListRolesForTenant(principal.GetOperatorId(), principal.GetTenantId()), cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok(result.Value
+            .Select(role => new RoleResponse(
+                role.Id.Value, role.Name, [.. role.Permissions.Select(permission => permission.Value)]))
+            .ToArray());
+    }
+
+    private static async Task<IResult> HandleListOperatorsAsync(
+        ClaimsPrincipal principal,
+        ListOperatorsForTenantHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new ListOperatorsForTenant(principal.GetOperatorId(), principal.GetTenantId()), cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok(result.Value
+            .Select(op => new OperatorResponse(
+                op.Id.Value, op.DisplayName, op.IsAccountOwner, [.. op.Roles.Select(r => r.RoleId.Value)]))
+            .ToArray());
+    }
+
+    private static async Task<IResult> HandleGrantRoleAsync(
+        Guid operatorId,
+        Guid roleId,
+        ClaimsPrincipal principal,
+        GrantOperatorRoleHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken) =>
+        Complete(
+            await handler.HandleAsync(
+                new GrantOperatorRole(
+                    principal.GetOperatorId(), principal.GetTenantId(),
+                    new OperatorId(operatorId), new RoleId(roleId)),
+                cancellationToken),
+            httpContext);
+
+    private static async Task<IResult> HandleRevokeRoleAsync(
+        Guid operatorId,
+        Guid roleId,
+        ClaimsPrincipal principal,
+        RevokeOperatorRoleHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken) =>
+        Complete(
+            await handler.HandleAsync(
+                new RevokeOperatorRole(
+                    principal.GetOperatorId(), principal.GetTenantId(),
+                    new OperatorId(operatorId), new RoleId(roleId)),
+                cancellationToken),
+            httpContext);
+
+    private static async Task<IResult> HandleContactsAsync(
+        ClaimsPrincipal principal,
+        GetTenantContactsHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetTenantContacts(principal.GetOperatorId(), principal.GetTenantId()), cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok(result.Value
+            .Select(row => new ContactResponse(
+                row.CustomerId.Value,
+                row.Phone.Value,
+                row.DisplayName,
+                row.Notes,
+                row.NoShowCount,
+                row.FirstSeenAt,
+                row.LastSeenAt))
+            .ToArray());
     }
 
     /// <summary>204 for a successful command that returns nothing. api-design.md's own shape, and it

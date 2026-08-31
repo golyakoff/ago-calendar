@@ -57,6 +57,11 @@ public sealed record WorkingHoursRuleResponse(
 /// <c>PendingBookingRow</c>. Carried to the console rather than filtered out server-side, for exactly
 /// the reason `20-04` gives: hiding overdue rows makes a broken sweep invisible to the only person in
 /// a position to notice.</param>
+/// <param name="Phone">`20-12`. <see langword="null"/> means the caller does not hold
+/// <c>customer:read</c> for this tenant - see <c>PendingBookingRow.Phone</c>'s own remarks for why
+/// that is the only thing a null here can mean. The console renders this as "hidden - you don't have
+/// contact-visibility permission", never as an empty cell indistinguishable from "no phone
+/// recorded".</param>
 public sealed record PendingBookingResponse(
     Guid BookingId,
     Guid CalendarId,
@@ -67,7 +72,29 @@ public sealed record PendingBookingResponse(
     DateTimeOffset EndsAt,
     DateOnly LocalDate,
     DateTimeOffset ConfirmationDeadline,
-    bool IsOverdue);
+    bool IsOverdue,
+    string? Phone);
+
+/// <summary>`20-12`: a tenant provisions a second role. <paramref name="Permissions"/> is any non-empty
+/// subset of the catalogue's own wire names (<c>Permission.Value</c>, e.g. <c>"customer:read"</c>) -
+/// <c>Role.Create</c> is already fully general, so this request adds no rule of its own.</summary>
+public sealed record CreateRoleRequest(string Name, IReadOnlyList<string> Permissions);
+
+public sealed record RoleResponse(Guid RoleId, string Name, IReadOnlyList<string> Permissions);
+
+public sealed record OperatorResponse(
+    Guid OperatorId, string DisplayName, bool IsAccountOwner, IReadOnlyList<Guid> RoleIds);
+
+/// <param name="NoShowCount">Read honestly - see <c>ContactRow.NoShowCount</c>'s own remarks on why
+/// this is zero for every customer in this product's v1, not a bug in the report.</param>
+public sealed record ContactResponse(
+    Guid CustomerId,
+    string Phone,
+    string? DisplayName,
+    string? Notes,
+    int NoShowCount,
+    DateTimeOffset FirstSeenAt,
+    DateTimeOffset LastSeenAt);
 
 /// <param name="LocalDate">The business-local day, as the shop names it - not an instant range. See
 /// <c>DeleteDayOff</c>.</param>

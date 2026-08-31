@@ -48,8 +48,11 @@ internal static class CalendarSeed
             new CustomerId(NewId()), tenant.Id, new PhoneNumber("+79991234567"), Now);
 
         var role = Role.SeedOperatorRole(new RoleId(NewId()), tenant.Id);
+        // `20-12`: the seed's own operator plays the same role RegisterTenantHandler's first operator
+        // does - it is the only operator this tenant has, so it is the account owner - which is what
+        // lets a test seeded through here exercise Operator.IsAccountOwner's invariant meaningfully.
         var @operator = Operator.Create(
-            new OperatorId(NewId()), tenant.Id, "Sam", externalSubjectId ?? $"kc-{NewId():N}");
+            new OperatorId(NewId()), tenant.Id, "Sam", externalSubjectId ?? $"kc-{NewId():N}", isAccountOwner: true);
         @operator.Grant(role);
 
         calendar.Publish();

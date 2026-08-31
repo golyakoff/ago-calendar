@@ -176,6 +176,58 @@ public class BookEventHandlerTests
         Assert.Empty(world.Bookings.Attempts);
     }
 
+    /// <summary>`20-09`'s own Done-when: "a claim carrying no verification assertion is refused." The
+    /// actual, enforced Calendar-side gate this item adds - moved from `Confirm` to immediately before
+    /// `Claim` ever runs, per the backlog item's "Decided 2026-08-31" section. Checked last, after
+    /// every other rejection this handler already makes (unlike the phone-shape check, which is cheap
+    /// enough to fail fast on) - see <c>BookEventHandler</c>'s own remarks on why: so an unrelated
+    /// rejection (an unknown calendar, a rate limit) keeps its own existing precedence and this one
+    /// never leaks "that calendar exists, you are just unverified" ahead of it.</summary>
+    [Fact]
+    public async Task ANullPhoneVerifiedAt_IsRejectedImmediatelyBeforeTheClaim()
+    {
+        var world = new World();
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false));
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.phone_not_verified", outcome.Error!.Value.Code);
+
+        // Every earlier check still ran (both rate-limit buckets were consulted, exactly as they
+        // would be for a verified attempt) - this is the last gate, not a shortcut around the others.
+        Assert.Equal(2, world.Limiter.Checked.Count);
+        Assert.Empty(world.Bookings.Attempts);
+    }
+
+    /// <summary>The phone-verification gate never pre-empts an unrelated rejection that would have
+    /// happened anyway - an unknown calendar is still reported as `booking.calendar_not_found`, not
+    /// `booking.phone_not_verified`, for an unverified caller exactly as for a verified one.</summary>
+    [Fact]
+    public async Task AnUnverifiedBooking_AgainstAnUnknownCalendar_StillReportsCalendarNotFound()
+    {
+        var world = new World(calendarExists: false);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false));
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.calendar_not_found", outcome.Error!.Value.Code);
+    }
+
+    /// <summary>The other half of the same Done-when: a verified attempt carries the assertion through
+    /// to the store unchanged, which is what lets <c>BookingStore</c>'s own SQL snapshot it onto the
+    /// customer row.</summary>
+    [Fact]
+    public async Task AVerifiedPhone_CarriesItsOwnVerificationTimestampToTheStore()
+    {
+        var world = new World();
+        var verifiedAt = BookingFixtures.Now.AddDays(-3);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerifiedAt: verifiedAt));
+
+        Assert.True(outcome.IsSuccess);
+        Assert.Equal(verifiedAt, Assert.Single(world.Bookings.Attempts).PhoneVerifiedAt);
+    }
+
     [Fact]
     public async Task AServiceTheWorkerDoesNotPerform_IsRejected()
     {

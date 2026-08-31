@@ -68,10 +68,14 @@ public class ChatModuleTaskHandlerTests
 
         var afterSlot = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value);
         Assert.True(afterSlot.IsSuccess);
-        Assert.Equal(ModuleStepKind.Form, afterSlot.Value.Step!.Kind);
+        // `20-09`: the phone step's kind is now VerifiedPhoneForm, not plain Form - the signal Chat
+        // reacts to before ever sending a reply here (RouteConversationToModuleHandler's own remarks).
+        // The wire payload shape is unchanged (still a prompt/fieldId/fieldLabel form).
+        Assert.Equal(ModuleStepKind.VerifiedPhoneForm, afterSlot.Value.Step!.Kind);
         Assert.Equal("phone", afterSlot.Value.Step!.FieldId);
 
-        var afterPhone = await world.ReplyAsync(externalTaskId, ModuleStepKinds.Form, "+79990000001");
+        var afterPhone = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000001", phoneVerifiedAt: BookingFixtures.Now);
         Assert.True(afterPhone.IsSuccess);
         Assert.True(afterPhone.Value.Complete);
         Assert.Equal(ModuleStepKind.ConfirmationCard, afterPhone.Value.Step!.Kind);
@@ -98,23 +102,67 @@ public class ChatModuleTaskHandlerTests
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
 
-        var afterPhone = await world.ReplyAsync(externalTaskId, ModuleStepKinds.Form, "+79990000002");
+        var afterPhone = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000002", phoneVerifiedAt: BookingFixtures.Now);
 
         Assert.True(afterPhone.IsSuccess);
         Assert.False(afterPhone.Value.Complete);
         Assert.Equal(ModuleStepKind.DateTimePicker, afterPhone.Value.Step!.Kind);
 
         // The lost attempt still reached the store - losing is something only the write can decide -
-        // and the visitor was handed a fresh choice rather than an error.
-        Assert.Single(world.Bookings.Attempts);
+        // and the visitor was handed a fresh choice rather than an error. It carried a verification
+        // assertion too: losing the availability race is not the same failure as never having verified.
+        Assert.Equal(BookingFixtures.Now, Assert.Single(world.Bookings.Attempts).PhoneVerifiedAt);
 
         // A second attempt against the freshly re-offered slot can still succeed: the task is really
         // back at AwaitingSlotChoice, not stuck.
         var slotAction = Assert.Single(afterPhone.Value.Step!.Actions);
         world.Bookings.SlotIsClaimable = true;
         var retryPhone = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value);
-        var confirmed = await world.ReplyAsync(externalTaskId, ModuleStepKinds.Form, "+79990000002");
+        var confirmed = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000002", phoneVerifiedAt: BookingFixtures.Now);
         Assert.True(confirmed.Value.Complete);
+    }
+
+    /// <summary>
+    /// `20-09`'s own defense-in-depth: in the real, chat-originated flow, `Ago.Chat.*`'s own
+    /// `RouteConversationToModuleHandler` never forwards a phone-step reply without a verified
+    /// `ChannelIdentity` behind it (proven, on the Chat side, in
+    /// <c>Ago.Chat.Integration.Tests.ModuleTaskGatewayIntegrationTests</c> against a real HTTP round
+    /// trip). This test proves the other half: if a reply carrying no assertion ever reached this
+    /// product's real <see cref="ReplyToModuleTaskHandler"/> anyway (a bug upstream, or a future
+    /// caller that is not Chat), <see cref="BookEventHandler"/>'s own refusal - before
+    /// <see cref="Event.Claim"/>'s real SQL path (<see cref="FakeBookingStore"/> standing in for it
+    /// here) is ever reached - stops it, and the visitor is re-offered a choice rather than seeing a
+    /// dead end, the identical no-dead-end shape a lost availability race already gets.
+    /// </summary>
+    [Fact]
+    public async Task APhoneReplyWithNoVerificationAssertion_NeverReachesTheStore_AndReOffersFreshSlots()
+    {
+        var world = new World();
+
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
+
+        // No phoneVerifiedAt at all - exactly what a caller that skipped Chat's own gate would send.
+        var afterPhone = await world.ReplyAsync(externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000009");
+
+        Assert.True(afterPhone.IsSuccess);
+        Assert.False(afterPhone.Value.Complete);
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterPhone.Value.Step!.Kind);
+
+        // BookEventHandler refuses before ever calling IBookingStore.TryBookAsync - BookingAttempt's
+        // own PhoneVerifiedAt is non-nullable by construction, so there is no way to reach the store
+        // with an unverified one at all. Nothing was written - the same "a rejected booking never
+        // reaches the store" data-minimisation property BookEventHandlerTests already proves for every
+        // other rejection reason.
+        Assert.Empty(world.Bookings.Attempts);
     }
 
     [Fact]
@@ -164,9 +212,11 @@ public class ChatModuleTaskHandlerTests
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
-        await world.ReplyAsync(externalTaskId, ModuleStepKinds.Form, "+79990000003");
+        await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000003", phoneVerifiedAt: BookingFixtures.Now);
 
-        var afterCompletion = await world.ReplyAsync(externalTaskId, ModuleStepKinds.Form, "+79990000003");
+        var afterCompletion = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000003", phoneVerifiedAt: BookingFixtures.Now);
 
         Assert.False(afterCompletion.IsSuccess);
         Assert.Equal("chat_module_task.already_complete", afterCompletion.Error!.Value.Code);
@@ -249,8 +299,8 @@ public class ChatModuleTaskHandlerTests
                 CancellationToken.None);
 
         public Task<Ago.Platform.Kernel.Result<ModuleTaskReplied>> ReplyAsync(
-            string externalTaskId, string kind, string value) =>
+            string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null) =>
             _replyHandler.HandleAsync(
-                new ReplyToModuleTask(externalTaskId, Guid.NewGuid(), kind, value), CancellationToken.None);
+                new ReplyToModuleTask(externalTaskId, Guid.NewGuid(), kind, value, phoneVerifiedAt), CancellationToken.None);
     }
 }

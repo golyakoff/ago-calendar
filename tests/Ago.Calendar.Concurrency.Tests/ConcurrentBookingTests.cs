@@ -172,7 +172,8 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
                 "Anna",
                 new CustomerId(NewId()),
                 Now,
-                Now.AddMinutes(15)),
+                Now.AddMinutes(15),
+                Now),
             CancellationToken.None);
     }
 

@@ -84,9 +84,12 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var slotAction = Assert.Single(afterWorker.Step.Actions);
 
         var afterSlot = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value);
-        Assert.Equal(ModuleStepKinds.Form, afterSlot.Step!.Kind);
+        // `20-09`: the phone step's own kind, signalling to Chat that the reply must carry a verified
+        // phone - see ModuleStepFactory.PhoneForm's own remarks. Wire payload shape is unchanged.
+        Assert.Equal(ModuleStepKinds.VerifiedPhoneForm, afterSlot.Step!.Kind);
 
-        var afterPhone = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.Form, "+79997000001");
+        var afterPhone = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79997000001", phoneVerifiedAt: DateTimeOffset.UtcNow);
         Assert.True(afterPhone.Complete);
         Assert.Equal(ModuleStepKinds.ConfirmationCard, afterPhone.Step!.Kind);
 
@@ -122,16 +125,29 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         Assert.Equal(2, offeredSlotValues.Count);
 
         var afterSlot = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, offeredSlotValues[0]);
-        Assert.Equal(ModuleStepKinds.Form, afterSlot.Step!.Kind);
+        Assert.Equal(ModuleStepKinds.VerifiedPhoneForm, afterSlot.Step!.Kind);
 
         // Somebody else takes that exact slot before the phone number arrives - a real race, not a
-        // fake flag, using the same public booking endpoint a widget would.
-        var stolen = await _client.PostAsJsonAsync(
-            $"/api/v1/calendars/{_seed.Calendar.Id.Value}/events/{offeredSlotValues[0]}/book",
-            new BookEventRequest(_seed.Service.Id.Value, "+79997000002", null));
-        Assert.Equal(HttpStatusCode.OK, stolen.StatusCode);
+        // fake flag. `20-09`: claimed directly through the domain aggregate rather than the public
+        // `/book` endpoint a widget would use, because that endpoint can no longer complete any
+        // booking at all (BookingEndpointTests's own remarks) - this is the identical shortcut
+        // ConfirmationSweepTests' own APendingBookingAsync already takes for the same reason (proving
+        // a race outcome, not this item's own verification gate, which is what the phone-step replies
+        // in this test are already exercising).
+        await using (var db = fixture.CreateDbContext())
+        {
+            var stolenSlot = await new EventRepository(db).GetByIdAsync(
+                new EventId(Guid.Parse(offeredSlotValues[0])), CancellationToken.None);
+            var customer = Customer.Register(
+                new CustomerId(CalendarSeed.NewId()), _seed.Tenant.Id, new PhoneNumber("+79997000002"), DateTimeOffset.UtcNow);
+            await new CustomerRepository(db).AddAsync(customer, CancellationToken.None);
+            stolenSlot!.Claim(customer.Id, _seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(15));
+            stolenSlot.ClearDomainEvents();
+            await new EventRepository(db).SaveAsync(stolenSlot, CancellationToken.None);
+        }
 
-        var afterPhone = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.Form, "+79997000003");
+        var afterPhone = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79997000003", phoneVerifiedAt: DateTimeOffset.UtcNow);
 
         Assert.False(afterPhone.Complete);
         Assert.Equal(ModuleStepKinds.DateTimePicker, afterPhone.Step!.Kind);
@@ -140,9 +156,49 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         Assert.Contains(offeredSlotValues[1], reofferedValues);
 
         var retry = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, offeredSlotValues[1]);
-        Assert.Equal(ModuleStepKinds.Form, retry.Step!.Kind);
-        var confirmed = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.Form, "+79997000003");
+        Assert.Equal(ModuleStepKinds.VerifiedPhoneForm, retry.Step!.Kind);
+        var confirmed = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79997000003", phoneVerifiedAt: DateTimeOffset.UtcNow);
         Assert.True(confirmed.Complete);
+    }
+
+    /// <summary>
+    /// `20-09`'s own defense-in-depth, over real HTTP against the real host: a phone-step reply
+    /// carrying no <c>phoneVerifiedAt</c> at all never claims the slot - the same property
+    /// <c>Ago.Calendar.Application.Tests.ChatModuleTaskHandlerTests.APhoneReplyWithNoVerificationAssertion_...</c>
+    /// proves with fakes, proven here against the real <see cref="ReplyToModuleTaskHandler"/>, the real
+    /// <see cref="BookEventHandler"/> and a real Postgres. The counterpart proof - that Chat's own real
+    /// <c>HttpModuleGateway</c> never sends this request at all when no verified identity exists - lives
+    /// in <c>ago-chat</c>'s own <c>Ago.Chat.Integration.Tests.ModuleTaskGatewayIntegrationTests</c>
+    /// (a separate repository test, since the two products share no reference to call one test across
+    /// both).
+    /// </summary>
+    [Fact]
+    public async Task APhoneStepReply_WithNoVerificationAssertion_NeverClaimsTheSlot()
+    {
+        var started = (await (await _client.PostAsJsonAsync(
+                "/api/v1/module-tasks",
+                new ModuleTaskStartRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking")))
+            .Content.ReadFromJsonAsync<ModuleTaskStartResponse>())!;
+
+        var afterService = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
+        var afterWorker = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList, Assert.Single(afterService.Step!.Actions).Value);
+        var slotValue = Assert.Single(afterWorker.Step!.Actions).Value;
+        var afterSlot = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, slotValue);
+        Assert.Equal(ModuleStepKinds.VerifiedPhoneForm, afterSlot.Step!.Kind);
+
+        // No phoneVerifiedAt - exactly what a caller that skipped Chat's own gate would send.
+        var afterPhone = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79997000009");
+
+        // Not a dead end - the same re-offer path a lost availability race already produces.
+        Assert.False(afterPhone.Complete);
+        Assert.Equal(ModuleStepKinds.DateTimePicker, afterPhone.Step!.Kind);
+
+        await using var db = fixture.CreateDbContext();
+        var stillAvailable = await db.Events.SingleAsync(e => e.Id == new EventId(Guid.Parse(slotValue)));
+        Assert.Equal(EventStatus.Available, stillAvailable.Status);
     }
 
     [Fact]
@@ -198,11 +254,12 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    private async Task<ModuleTaskReplyResponse> ReplyAsync(string externalTaskId, string kind, string value)
+    private async Task<ModuleTaskReplyResponse> ReplyAsync(
+        string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null)
     {
         var response = await _client.PostAsJsonAsync(
             $"/api/v1/module-tasks/{externalTaskId}/replies",
-            new ModuleTaskReplyRequest(Guid.NewGuid(), kind, value));
+            new ModuleTaskReplyRequest(Guid.NewGuid(), kind, value, phoneVerifiedAt));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return (await response.Content.ReadFromJsonAsync<ModuleTaskReplyResponse>())!;
     }

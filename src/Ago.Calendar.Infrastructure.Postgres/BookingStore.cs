@@ -46,14 +46,26 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
     /// who corrected "jon" to "Jonathan Reed" on the lead card has curated that field; the next
     /// booking from that phone must not silently undo it because the customer typed the short form
     /// into a public form again.</para>
+    ///
+    /// <para><b>`20-09`: <c>phone_verified_at</c> follows the identical "keep what's already there"
+    /// rule as <c>display_name</c>, for a related but distinct reason.</b> <see cref="BookingAttempt"/>'s
+    /// own value is always non-null (the caller already refused to reach this point without one), but
+    /// once a phone has been proven reachable, that proof does not expire just because a later booking
+    /// from the same number happens to arrive with an older or (structurally impossible today, but not
+    /// worth relying on) different assertion - the first verification is the honest "since when" answer
+    /// (`RouteConversationToModuleHandler`'s own remarks on Chat's side make the identical choice,
+    /// reading <c>ChannelIdentity.FirstSeenAt</c> rather than "now"). <c>COALESCE</c> in this direction
+    /// means a customer row can only ever move from unverified to verified, never the reverse and never
+    /// to a different timestamp once set.</para>
     /// </summary>
     private const string UpsertCustomerSql =
         """
-        INSERT INTO customers (id, tenant_id, phone, display_name, no_show_count, first_seen_at, last_seen_at)
-        VALUES (@id, @tenantId, @phone, @displayName, 0, @now, @now)
+        INSERT INTO customers (id, tenant_id, phone, display_name, phone_verified_at, no_show_count, first_seen_at, last_seen_at)
+        VALUES (@id, @tenantId, @phone, @displayName, @phoneVerifiedAt, 0, @now, @now)
         ON CONFLICT (tenant_id, phone) DO UPDATE
             SET last_seen_at = GREATEST(customers.last_seen_at, EXCLUDED.last_seen_at),
-                display_name = COALESCE(customers.display_name, EXCLUDED.display_name)
+                display_name = COALESCE(customers.display_name, EXCLUDED.display_name),
+                phone_verified_at = COALESCE(customers.phone_verified_at, EXCLUDED.phone_verified_at)
         RETURNING id
         """;
 
@@ -72,6 +84,19 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
     ///   where it cannot go stale. Checked in application code it would be checked against a reading
     ///   of the row from milliseconds ago.</item>
     /// </list>
+    ///
+    /// <para><b>`20-09`: deliberately does <em>not</em> add a <c>phone_verified_at IS NOT NULL</c>
+    /// condition here, and that is a considered choice, not an oversight.</b> The reason every other
+    /// condition above lives in this <c>WHERE</c> clause is that each checks a fact read from a row
+    /// other callers are actively contending for at the instant of the check - staleness is the risk a
+    /// separate application-code read-then-decide cannot close. <see cref="BookingAttempt.PhoneVerifiedAt"/>
+    /// is not such a fact: it is a value the caller supplies directly on the very attempt this statement
+    /// is already processing, with no interceding read of anything that could change between a
+    /// hypothetical check and this write - <c>BookEventHandler</c>'s own remarks make the identical
+    /// argument for why refusing an unverified attempt there, before this method is ever called, is
+    /// safe. Making the type non-nullable (this parameter cannot be <see langword="null"/>) is the
+    /// stronger guarantee besides: it holds for every future caller of this port by construction, not
+    /// only for the one caller that happens to remember a runtime check.</para>
     ///
     /// <para><c>RETURNING</c> hands back what the confirmation needs, from the write itself. A
     /// follow-up <c>SELECT</c> would be a second round trip reading a row that `20-04`'s sweep could
@@ -131,6 +156,7 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
         command.Parameters.AddWithValue("tenantId", attempt.TenantId.Value);
         command.Parameters.AddWithValue("phone", attempt.Phone.Value);
         command.Parameters.AddWithValue("displayName", Blank(attempt.DisplayName) ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("phoneVerifiedAt", (object?)attempt.PhoneVerifiedAt ?? DBNull.Value);
         command.Parameters.AddWithValue("now", attempt.Now);
 
         // Always non-null: DO UPDATE returns a row on both the insert and the conflict path, which is

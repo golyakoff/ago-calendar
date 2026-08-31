@@ -183,8 +183,13 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
             new UuidV7Generator(),
             new FixedClock(Now));
 
+        // `20-09`: verified by construction - this file's own concern is rate-limit ordering and
+        // correctness, not the verification gate (BookEventHandlerTests owns that), and an unverified
+        // phone would be refused before the limiter is ever consulted at all, defeating every test
+        // here.
         return await handler.HandleAsync(
-            new BookEvent(seed.CalendarId, eventId, seed.ServiceId, phone, "Anna"), CancellationToken.None);
+            new BookEvent(seed.CalendarId, eventId, seed.ServiceId, phone, "Anna", PhoneVerifiedAt: Now),
+            CancellationToken.None);
     }
 
     private async Task<IReadOnlyList<Event>> AvailableSlotsAsync(SeededCalendar seed, int count)

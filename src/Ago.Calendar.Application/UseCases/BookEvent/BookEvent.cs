@@ -25,10 +25,31 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// exact coupling <c>ForbiddenTypeTests</c> exists to catch. It is a parameter for the same reason
 /// <c>DateTimeOffset now</c> is one everywhere else in this repository.</para>
 /// </param>
+/// <param name="RequiresVerifiedPhone">
+/// `20-09`: whether *this calling surface* enforces the phone-verification gate at all - a fact about
+/// which caller is booking, not about whether verification happened to occur. <c>true</c> only from the
+/// chat-originated flow (<see cref="Ago.Calendar.Application.UseCases.ChatModuleTask.ReplyToModuleTaskHandler"/>),
+/// which can obtain a real assertion via `14-15`. <c>false</c> from the public booking widget
+/// (<see cref="BookEventHandler"/>'s own remarks): making the gate universal without first building a
+/// *secure* way for an anonymous, browser-reachable endpoint to supply this assertion would mean either
+/// leaving the widget permanently unable to book, or accepting a self-asserted value any caller could
+/// forge - neither acceptable, so this item's own scope is chat-only until a real widget-side
+/// verification mechanism exists (a named, separate follow-up item, not silently deferred).
+/// </param>
+/// <param name="PhoneVerifiedAt">
+/// The calling side's assertion that <paramref name="Phone"/> has been proven reachable by the visitor
+/// making this booking - `14-15`'s own verification, run to completion on the other product's side of
+/// the wire before this command was ever built. Null when no verification happened, which is
+/// unconditionally true for the public widget today (see <see cref="RequiresVerifiedPhone"/>) and
+/// refused by <see cref="BookEventHandler"/> whenever <see cref="RequiresVerifiedPhone"/> is true and
+/// this is still null.
+/// </param>
 public readonly record struct BookEvent(
     CalendarId CalendarId,
     EventId EventId,
     ServiceId ServiceId,
     string Phone,
     string? DisplayName,
-    string? Origin = null);
+    string? Origin = null,
+    bool RequiresVerifiedPhone = false,
+    DateTimeOffset? PhoneVerifiedAt = null);

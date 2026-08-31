@@ -26,8 +26,12 @@ internal static class ModuleStepFactory
             [.. slots.Select(s => new SlotOption(s.EventId.Value.ToString(), s.StartsAt, DescribeSlot(s)))],
             [.. slots.Select(s => new ModuleAction(DescribeSlot(s), s.EventId.Value.ToString()))]);
 
+    /// <summary>`20-09`: emits <see cref="ModuleStepKind.VerifiedPhoneForm"/>, not plain
+    /// <see cref="ModuleStepKind.Form"/> - the signal to Chat that the next reply must carry proof of
+    /// control over the number, not merely the number itself (`docs/adr/0082-*`). The wire payload is
+    /// unchanged either way (<c>ChatModuleTaskEndpoints.ToStepDto</c>'s own remarks).</summary>
     public static ModuleStep PhoneForm() =>
-        ModuleStep.FormStep("What's the best phone number to reach you on?", "phone", "Phone number");
+        ModuleStep.VerifiedPhoneFormStep("What's the best phone number to reach you on?", "phone", "Phone number");
 
     public static ModuleStep Confirmation(
         string serviceName, string workerName, DateTimeOffset startsAt, DateTimeOffset endsAt) =>

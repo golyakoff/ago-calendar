@@ -22,6 +22,17 @@ public static class ModuleStepKinds
     public const string Form = "form";
     public const string ConfirmationCard = "confirmation_card";
     public const string DateTimePicker = "date_time_picker";
+
+    /// <summary>
+    /// `20-09`: Chat's own <c>PrimitiveKinds.VerifiedPhoneForm</c> - a <c>form</c> whose payload is
+    /// wire-identical (prompt, field id, field label) but whose reply must carry proof of control over
+    /// the phone number, not merely the number itself. Calendar never checks that proof; it only ever
+    /// emits this kind (<c>ModuleStepFactory.PhoneForm</c>) and reads the assertion Chat attaches to
+    /// the reply (<see cref="ModuleTaskReplyRequest.PhoneVerifiedAt"/>) - the identical "modules fill
+    /// primitives in, Chat owns what they mean" split every other kind here already respects, applied
+    /// in the direction where this product is the module rather than Chat.
+    /// </summary>
+    public const string VerifiedPhoneForm = "verified_phone_form";
 }
 
 /// <summary>Chat's own <c>MessageAction</c> shape (adr/0061) - <c>value</c> is opaque to Chat and is
@@ -61,7 +72,17 @@ public sealed record ModuleTaskStartResponse(string ExternalTaskId, StepDto Step
 /// <param name="Kind">Echoes the step's own <see cref="StepDto.Kind"/>.</param>
 /// <param name="Value">For a choice-shaped step, one of that step's own action values. For a
 /// <c>form</c> step, the visitor's raw typed text, unvalidated by Chat.</param>
-public sealed record ModuleTaskReplyRequest(Guid ChatTaskId, string Kind, string Value);
+/// <param name="PhoneVerifiedAt">
+/// `20-09`: additive (api-design.md - "new optional fields are fine" within a version), null on every
+/// reply predating this item and on every reply that does not answer a <c>verified_phone_form</c> step.
+/// When present, Chat's own assertion that it checked a `14-15` <c>ChannelIdentity</c> for this exact
+/// visitor and phone before ever sending this request - trusted, not re-derived, the identical
+/// service-to-service boundary this wire already accepts for the module task itself (adr/0077:
+/// "authenticity is checked; the deeper claim is trusted"). Threaded to
+/// <c>Ago.Calendar.Application.UseCases.BookEvent.BookEvent.PhoneVerifiedAt</c> unchanged; see that
+/// type and <c>BookEventHandler</c>'s own remarks for what refuses a claim carrying none.
+/// </param>
+public sealed record ModuleTaskReplyRequest(Guid ChatTaskId, string Kind, string Value, DateTimeOffset? PhoneVerifiedAt = null);
 
 /// <param name="Step">Null exactly when <see cref="Complete"/> is true - no further reply is
 /// expected.</param>

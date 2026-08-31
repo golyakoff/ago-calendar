@@ -26,6 +26,17 @@ public static class BookingErrors
 
     public static Error InvalidPhone(string reason) => new("booking.invalid_phone", reason);
 
+    /// <summary>`20-09`: the caller supplied no <c>PhoneVerifiedAt</c> assertion at all. Distinct from
+    /// <see cref="SlotUnavailable"/> deliberately, unlike that error's own "collapse every reason into
+    /// one vague code" choice - this is not a fact about the slot two callers could legitimately race
+    /// for, it is a fact about the request itself (did the caller do the one thing this item now
+    /// requires), and a caller integrating against this endpoint needs to be able to tell the two
+    /// apart rather than retry a booking that will never succeed without a code change on their own
+    /// side.</summary>
+    public static Error PhoneNotVerified() => new(
+        "booking.phone_not_verified",
+        "This phone number has not been verified. Verify it before this booking can be made.");
+
     public static Error ServiceNotOffered() => new(
         "booking.service_not_offered",
         "That service is not offered by the person working this slot.");

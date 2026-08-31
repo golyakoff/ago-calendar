@@ -41,6 +41,19 @@ public sealed class Customer
 
     public DateTimeOffset LastSeenAt { get; private set; }
 
+    /// <summary>
+    /// `20-09`: when this phone number was first proven reachable by whoever books with it, or
+    /// <see langword="null"/> if it never has been. This aggregate's own C# writers - <see cref="Register"/>
+    /// and <see cref="RecordVerifiedPhone"/> - are never actually called in production; the real,
+    /// load-bearing write is <c>Ago.Calendar.Infrastructure.Postgres.BookingStore</c>'s own raw SQL
+    /// upsert (that type's own remarks), the identical "the domain method is the precondition's
+    /// canonical statement, the SQL is what runs" split <see cref="Event.Claim"/> already has with
+    /// <c>ClaimSlotSql</c>. Kept here so the domain model stays an honest description of the rule -
+    /// nothing about it is *about* an <see cref="Event"/>, so it is not stated as a precondition on
+    /// <see cref="Event.Claim"/>, which never inspects a customer's own fields.
+    /// </summary>
+    public DateTimeOffset? PhoneVerifiedAt { get; private set; }
+
     private Customer(CustomerId id, TenantId tenantId, PhoneNumber phone, DateTimeOffset now)
     {
         Id = id;
@@ -72,6 +85,12 @@ public sealed class Customer
         DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
         Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
     }
+
+    /// <summary>`20-09`: the domain's own canonical statement of "once verified, stays verified" -
+    /// idempotent and earliest-wins, the identical rule <c>BookingStore</c>'s own SQL <c>COALESCE</c>
+    /// applies at the row level (that type's own remarks on why a later, different timestamp must never
+    /// silently replace an earlier one).</summary>
+    public void RecordVerifiedPhone(DateTimeOffset verifiedAt) => PhoneVerifiedAt ??= verifiedAt;
 
     public void RecordNoShow(DateTimeOffset now)
     {

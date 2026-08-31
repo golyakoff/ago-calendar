@@ -78,8 +78,21 @@ internal static class BookingFixtures
     /// <param name="origin">`20-06`. Null by default, which is what a non-browser caller sends and
     /// what <c>OriginPolicy</c> deliberately allows - see its remarks for why an absent
     /// <c>Origin</c> is not a rejection on this product's booking surface.</param>
-    public static BookEvent Command(string? phone = null, ServiceId? serviceId = null, string? origin = null) =>
-        new(CalendarId, EventId, serviceId ?? ServiceId, phone ?? Phone, "Anna", origin);
+    /// <param name="phoneVerified">`20-09`. Verified by default - the overwhelming majority of this
+    /// file's own tests exist to prove facts unrelated to the verification gate, and would otherwise
+    /// all have to opt in to a verified phone individually. Pass <see langword="false"/> to model a
+    /// chat-originated caller whose own verification attempt did not (yet) succeed - this fixture always
+    /// requires verification (<c>RequiresVerifiedPhone: true</c>), the chat-flow's own shape; the public
+    /// widget's own "does not require it at all" shape has no fixture here since none of this file's
+    /// tests exercise that surface - see the Integration-level <c>BookingEndpointTests</c> for that
+    /// one.</param>
+    /// <param name="phoneVerifiedAt">`20-09`. Only meaningful when <paramref name="phoneVerified"/> is
+    /// <see langword="true"/>; defaults to <see cref="Now"/> when omitted.</param>
+    public static BookEvent Command(
+        string? phone = null, ServiceId? serviceId = null, string? origin = null,
+        bool phoneVerified = true, DateTimeOffset? phoneVerifiedAt = null) =>
+        new(CalendarId, EventId, serviceId ?? ServiceId, phone ?? Phone, "Anna", origin,
+            RequiresVerifiedPhone: true, phoneVerified ? phoneVerifiedAt ?? Now : null);
 
     /// <summary>`20-04`: a second tenant, so "another tenant's booking" is a real id rather than a
     /// missing one - the two must produce the same answer, and only a real one proves it.</summary>

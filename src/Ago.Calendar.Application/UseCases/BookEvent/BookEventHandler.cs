@@ -145,6 +145,36 @@ public sealed class BookEventHandler(
             return BookingOutcome.Rejected(BookingErrors.ServiceNotOffered());
         }
 
+        // `20-09`: the last precondition, checked immediately before the claim itself - deliberately
+        // not moved earlier, alongside the phone-shape check, despite being equally cheap and equally
+        // free of any check-then-act race (see the remarks below for why it is safe regardless of
+        // position). Placed here so every other rejection this handler already makes - calendar not
+        // found, rate-limited, slot/service mismatch - keeps its own existing precedence over this
+        // one; a stranger probing an unknown calendar id still learns nothing more than
+        // `booking.calendar_not_found`, never this item's own refusal, which would otherwise leak
+        // "that calendar exists, you just are not verified" ahead of the identity check that already
+        // owns collapsing unknown-vs-unpublished into one answer.
+        //
+        // Gated on RequiresVerifiedPhone, not on PhoneVerifiedAt alone - see BookEvent.RequiresVerifiedPhone's
+        // own remarks for why: this item's own scope is chat-only for now, deliberately, because the public
+        // booking widget has no secure way to supply this assertion yet and a self-asserted field on an
+        // anonymous endpoint would be a real hole, not a convenience.
+        //
+        // Not a check-then-act race of the kind `status = 'Available'` genuinely is: PhoneVerifiedAt
+        // is not a fact read from a row two concurrent callers contend over and that can go stale
+        // between a read and a write - it is a value the caller supplies directly on this exact
+        // command, with no interceding read of anything this handler does not already own. There is
+        // no window for it to change out from under this decision, so refusing here is safe in a way
+        // a pre-check on the slot's own live status would not be - see IBookingStore's own remarks for
+        // that distinction. What this check cannot catch - a caller lying about having verified
+        // something it never did - is the same trust boundary adr/0077 already accepts for the module
+        // task wire itself ("authenticity is checked; the deeper claim is trusted"), not a gap specific
+        // to this check.
+        if (command.RequiresVerifiedPhone && command.PhoneVerifiedAt is null)
+        {
+            return BookingOutcome.Rejected(BookingErrors.PhoneNotVerified());
+        }
+
         var now = clock.UtcNow;
 
         var confirmation = await bookings.TryBookAsync(
@@ -157,7 +187,8 @@ public sealed class BookEventHandler(
                 command.DisplayName,
                 new CustomerId(idGenerator.NewId(now)),
                 now,
-                now + bookingOptions.ConfirmationWindow),
+                now + bookingOptions.ConfirmationWindow,
+                command.PhoneVerifiedAt),
             cancellationToken);
 
         // Null is the loser of the race, and it is an ordinary Tuesday: reported as a rejection the

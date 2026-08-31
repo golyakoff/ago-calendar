@@ -65,6 +65,34 @@ public class ConfirmationSweepTests(PostgresFixture fixture)
         Assert.Equal(EventStatus.Booked, await StatusOfAsync(booking.Id));
     }
 
+    /// <summary>
+    /// `20-09`'s own regression guard: "the sweep is unmodified and still proven to confirm an
+    /// (already-verified-at-claim-time) PendingConfirmation row normally." Nothing in this test touches
+    /// `ExpiredBookingConfirmer`'s own query or handler - it seeds a customer whose phone was verified
+    /// before the claim (the shape every row now reaches `PendingConfirmation` in, by construction of
+    /// `20-09`'s own gate) and asserts the real, unmodified sweep still confirms it exactly like
+    /// <see cref="ADeadlineThatHasPassed_IsConfirmed_AndDoingNothingIsWhatConfirmedIt"/> already proves
+    /// for an ordinary one - the decision this item made ("verify before claiming, not before
+    /// confirming") left no unverified row for the sweep to ever wrongly confirm, so there is nothing
+    /// here for the sweep itself to check.
+    /// </summary>
+    [Fact]
+    public async Task AnAlreadyVerifiedPendingBooking_StillSweepsToBookedNormally()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var booking = await APendingBookingAsync(seed, "+79997000009", phoneVerifiedAt: Now.AddDays(-1));
+
+        var confirmed = await SweepAsync(seed.Tenant.Id, at: Deadline);
+
+        Assert.Equal(1, confirmed);
+        Assert.Equal(EventStatus.Booked, await StatusOfAsync(booking.Id));
+
+        await using var db = fixture.CreateDbContext();
+        var customer = await new CustomerRepository(db).FindByPhoneAsync(
+            seed.Tenant.Id, new PhoneNumber("+79997000009"), CancellationToken.None);
+        Assert.Equal(Now.AddDays(-1), customer!.PhoneVerifiedAt);
+    }
+
     [Fact]
     public async Task ASecondSweepAfterTheFirst_ConfirmsNothingAndStagesNothing()
     {
@@ -283,7 +311,8 @@ public class ConfirmationSweepTests(PostgresFixture fixture)
     }
 
     private async Task<Event> APendingBookingAsync(
-        SeededTenant seed, string phone, DateTimeOffset? deadline = null, DateTimeOffset? startsAt = null)
+        SeededTenant seed, string phone, DateTimeOffset? deadline = null, DateTimeOffset? startsAt = null,
+        DateTimeOffset? phoneVerifiedAt = null)
     {
         var slot = CalendarSeed.Slot(seed, startsAt ?? Now.AddDays(3));
 
@@ -296,6 +325,15 @@ public class ConfirmationSweepTests(PostgresFixture fixture)
         {
             customer = Customer.Register(
                 new CustomerId(CalendarSeed.NewId()), seed.Tenant.Id, new PhoneNumber(phone), Now);
+            if (phoneVerifiedAt is { } verifiedAt)
+            {
+                // `20-09`: the domain's own canonical statement of the precondition - see Customer's
+                // own remarks on why the real write for this item is BookingStore's SQL, not this
+                // method; this harness already bypasses BookingStore entirely (this method's own
+                // remarks below), so setting it here through the aggregate is the honest equivalent.
+                customer.RecordVerifiedPhone(verifiedAt);
+            }
+
             await new CustomerRepository(db).AddAsync(customer, CancellationToken.None);
         }
 

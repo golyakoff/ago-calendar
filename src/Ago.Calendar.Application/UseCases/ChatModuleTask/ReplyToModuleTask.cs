@@ -6,6 +6,11 @@
 /// waiting on (<see cref="Domain.ChatBookingTaskState"/>) before the value is interpreted.</param>
 /// <param name="Value">For a choice-shaped step, one of that step's own action values. For a
 /// <c>form</c> step, the visitor's raw typed text, unvalidated by Chat.</param>
-public readonly record struct ReplyToModuleTask(string ExternalTaskId, Guid ChatTaskId, string Kind, string Value);
+/// <param name="PhoneVerifiedAt">`20-09`: Chat's own assertion, present only on a reply answering a
+/// <c>verified_phone_form</c> step for which it found a completed `14-15` verification - see
+/// <c>Ago.Calendar.Contracts.ModuleTaskReplyRequest.PhoneVerifiedAt</c>'s own remarks. Threaded
+/// unchanged into <c>BookEvent.PhoneVerifiedAt</c> by <see cref="ReplyToModuleTaskHandler"/>.</param>
+public readonly record struct ReplyToModuleTask(
+    string ExternalTaskId, Guid ChatTaskId, string Kind, string Value, DateTimeOffset? PhoneVerifiedAt = null);
 
 public readonly record struct ModuleTaskReplied(ModuleStep? Step, bool Complete);

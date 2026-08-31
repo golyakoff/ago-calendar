@@ -143,6 +143,47 @@ public class BookingStoreTests(PostgresFixture fixture)
         Assert.Equal("Anna", card.DisplayName);
     }
 
+    /// <summary>`20-09`'s own Done-when: the claim writes the caller's asserted verification timestamp
+    /// onto the lead card, in the same transaction as the claim itself.</summary>
+    [Fact]
+    public async Task AVerifiedClaim_SnapshotsThePhoneVerifiedAtTimestampOntoTheLeadCard()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var slot = await AnAvailableSlotAsync(seed);
+        var verifiedAt = Now.AddDays(-2);
+
+        var confirmation = await BookAsync(seed, slot.Id, "+79990000020", phoneVerifiedAt: verifiedAt);
+
+        Assert.NotNull(confirmation);
+        await using var db = fixture.CreateDbContext();
+        var card = await db.Customers.SingleAsync(c => c.Id == confirmation!.Value.CustomerId);
+        Assert.Equal(verifiedAt, card.PhoneVerifiedAt);
+    }
+
+    /// <summary>The identical "keep what's already there" rule <c>display_name</c> already follows,
+    /// applied to <c>phone_verified_at</c> for a related but distinct reason (`UpsertCustomerSql`'s own
+    /// remarks): a phone verified once for an earlier booking must not need re-proving for a later one
+    /// from the same number, and the *first* verification is the honest "since when" answer - a later,
+    /// different assertion must never silently replace it.</summary>
+    [Fact]
+    public async Task ARepeatedBookingFromAnAlreadyVerifiedPhone_KeepsTheEarlierVerificationTimestamp()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var first = await AnAvailableSlotAsync(seed);
+        var second = await AnAvailableSlotAsync(seed, startsAt: Now.AddHours(4));
+        var firstVerifiedAt = Now.AddDays(-5);
+        var laterVerifiedAt = Now.AddMinutes(5);
+
+        await BookAsync(seed, first.Id, "+79990000021", phoneVerifiedAt: firstVerifiedAt);
+        await BookAsync(seed, second.Id, "+79990000021", at: Now.AddMinutes(5), phoneVerifiedAt: laterVerifiedAt);
+
+        await using var db = fixture.CreateDbContext();
+        var card = await db.Customers.SingleAsync(
+            c => c.TenantId == seed.Tenant.Id && c.Phone == new PhoneNumber("+79990000021"));
+
+        Assert.Equal(firstVerifiedAt, card.PhoneVerifiedAt);
+    }
+
     [Fact]
     public async Task TheSamePhoneAtTwoTenants_IsTwoLeadCards()
     {
@@ -222,7 +263,8 @@ public class BookingStoreTests(PostgresFixture fixture)
         EventId eventId,
         string phone,
         string? displayName = null,
-        DateTimeOffset? at = null)
+        DateTimeOffset? at = null,
+        DateTimeOffset? phoneVerifiedAt = null)
     {
         var now = at ?? Now;
         await using var db = fixture.CreateDbContext();
@@ -236,7 +278,8 @@ public class BookingStoreTests(PostgresFixture fixture)
                 displayName,
                 new CustomerId(CalendarSeed.NewId()),
                 now,
-                now.AddMinutes(15)),
+                now.AddMinutes(15),
+                phoneVerifiedAt ?? now),
             CancellationToken.None);
     }
 }

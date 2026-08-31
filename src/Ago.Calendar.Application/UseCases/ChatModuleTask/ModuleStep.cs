@@ -24,6 +24,10 @@ public enum ModuleStepKind
     Form,
     ConfirmationCard,
     DateTimePicker,
+
+    /// <summary>`20-09`: wire-identical to <see cref="Form"/> - see <c>Ago.Calendar.Contracts.ModuleStepKinds.VerifiedPhoneForm</c>'s
+    /// own remarks for why this is a distinct kind rather than a flag.</summary>
+    VerifiedPhoneForm,
 }
 
 /// <summary>Chat's own <c>MessageAction</c> shape (label, opaque value) - <c>value</c> is meaningful
@@ -57,6 +61,11 @@ public sealed record ModuleStep(
 
     public static ModuleStep FormStep(string prompt, string fieldId, string fieldLabel) =>
         new(ModuleStepKind.Form, prompt, fieldId, fieldLabel, null, null, null, []);
+
+    /// <summary>`20-09`: same payload shape as <see cref="FormStep"/> - only <see cref="Kind"/>
+    /// differs, which is the whole signal.</summary>
+    public static ModuleStep VerifiedPhoneFormStep(string prompt, string fieldId, string fieldLabel) =>
+        new(ModuleStepKind.VerifiedPhoneForm, prompt, fieldId, fieldLabel, null, null, null, []);
 
     public static ModuleStep ConfirmationStep(string title, IReadOnlyList<ConfirmationLine> lines) =>
         new(ModuleStepKind.ConfirmationCard, null, null, null, title, lines, null, []);

@@ -82,7 +82,7 @@ public static class ChatModuleTaskEndpoints
         }
 
         var result = await handler.HandleAsync(
-            new ReplyToModuleTask(externalTaskId, request.ChatTaskId, request.Kind, request.Value),
+            new ReplyToModuleTask(externalTaskId, request.ChatTaskId, request.Kind, request.Value, request.PhoneVerifiedAt),
             cancellationToken);
 
         if (!result.IsSuccess)
@@ -108,6 +108,13 @@ public static class ChatModuleTaskEndpoints
 
         ModuleStepKind.Form => new StepDto(
             ModuleStepKinds.Form,
+            new FormPayload(step.Prompt!, step.FieldId!, step.FieldLabel!),
+            []),
+
+        // `20-09`: wire-identical to Form - only Kind differs, which is the whole signal (ModuleStepFactory's
+        // own remarks).
+        ModuleStepKind.VerifiedPhoneForm => new StepDto(
+            ModuleStepKinds.VerifiedPhoneForm,
             new FormPayload(step.Prompt!, step.FieldId!, step.FieldLabel!),
             []),
 

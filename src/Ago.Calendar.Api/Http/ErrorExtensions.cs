@@ -28,7 +28,12 @@ public static class ErrorExtensions
             // got there first. A client that sees this refreshes availability and offers another
             // time, which is a different behaviour from "that URL is wrong".
             "booking.slot_unavailable" => StatusCodes.Status409Conflict,
-            "booking.invalid_phone" or "booking.service_not_offered" => StatusCodes.Status400BadRequest,
+            // `20-09`. A caller error, not a fault - the identical reasoning `booking.invalid_phone`'s
+            // own placement already gives: the request was well-formed but incomplete, and 400 (not
+            // 403 - nobody is being denied a permission they hold) is what tells a caller integrating
+            // against this endpoint that no retry of this exact request will ever succeed.
+            "booking.invalid_phone" or "booking.service_not_offered" or "booking.phone_not_verified" =>
+                StatusCodes.Status400BadRequest,
             "booking.rate_limited" => StatusCodes.Status429TooManyRequests,
             "availability.day_not_materialized" => StatusCodes.Status404NotFound,
             "availability.day_has_bookings" or "availability.day_changed_concurrently" =>

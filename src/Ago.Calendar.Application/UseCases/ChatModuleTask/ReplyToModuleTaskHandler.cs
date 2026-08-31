@@ -75,7 +75,7 @@ public sealed class ReplyToModuleTaskHandler(
             ChatBookingTaskState.AwaitingSlotChoice =>
                 await HandleSlotChosenAsync(task, command.Value, now, cancellationToken),
             ChatBookingTaskState.AwaitingPhone =>
-                await HandlePhoneProvidedAsync(task, command.Value, now, cancellationToken),
+                await HandlePhoneProvidedAsync(task, command.Value, command.PhoneVerifiedAt, now, cancellationToken),
             _ => ChatModuleTaskErrors.AlreadyComplete(),
         };
     }
@@ -149,17 +149,24 @@ public sealed class ReplyToModuleTaskHandler(
     }
 
     private async Task<Result<ModuleTaskReplied>> HandlePhoneProvidedAsync(
-        ChatBookingTask task, string phone, DateTimeOffset now, CancellationToken cancellationToken)
+        ChatBookingTask task, string phone, DateTimeOffset? phoneVerifiedAt, DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
         // Qualified, not a bare `new BookEvent(...)`: this file's `using` for the BookEvent use-case
         // folder brings in a namespace named BookEvent alongside the command record of the same
         // name, and the compiler resolves the bare identifier to the namespace (CS0118) - the same
         // family of collision BookingEndpoints already documents for the domain's own EventId versus
         // Microsoft.Extensions.Logging's.
+        //
+        // `20-09`: phoneVerifiedAt is threaded through unchanged - Chat's own assertion, checked
+        // against its own `14-15` evidence before this reply was ever sent (RouteConversationToModuleHandler's
+        // own remarks). This handler does not re-check it; BookEventHandler is where a missing
+        // assertion is refused, the same "the module never re-validates what the caller already
+        // validated" split this file's own remarks draw for a reply's id.
         var outcome = await bookHandler.HandleAsync(
             new UseCases.BookEvent.BookEvent(
                 task.CalendarId, task.EventId!.Value, task.ServiceId!.Value, phone,
-                DisplayName: null, Origin: null),
+                DisplayName: null, Origin: null, RequiresVerifiedPhone: true, PhoneVerifiedAt: phoneVerifiedAt),
             cancellationToken);
 
         if (outcome.Booking is { } booking)
@@ -223,7 +230,9 @@ public sealed class ReplyToModuleTaskHandler(
         ChatBookingTaskState.AwaitingServiceChoice => kind == ModuleStepKinds.ChoiceList,
         ChatBookingTaskState.AwaitingWorkerChoice => kind == ModuleStepKinds.ChoiceList,
         ChatBookingTaskState.AwaitingSlotChoice => kind == ModuleStepKinds.DateTimePicker,
-        ChatBookingTaskState.AwaitingPhone => kind == ModuleStepKinds.Form,
+        // `20-09`: PhoneForm() now emits VerifiedPhoneForm, not plain Form - see ModuleStepFactory's
+        // own remarks.
+        ChatBookingTaskState.AwaitingPhone => kind == ModuleStepKinds.VerifiedPhoneForm,
         _ => false,
     };
 }

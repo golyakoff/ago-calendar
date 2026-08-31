@@ -88,6 +88,16 @@ public interface IBookingStore
 /// <param name="Now">The instant the booking is being made, from <c>IClock</c>. Also the claim's
 /// "this slot has not started yet" predicate.</param>
 /// <param name="ConfirmationDeadline">When the operator's veto window closes.</param>
+/// <param name="PhoneVerifiedAt">
+/// `20-09`: nullable, because this item's own scope is chat-only for now (<c>BookEvent.RequiresVerifiedPhone</c>'s
+/// own remarks) - <c>BookEventHandler</c> only refuses to build a <see cref="BookingAttempt"/> when the
+/// *calling surface itself* requires one and none was supplied, so a claim from the public widget still
+/// reaches here with this genuinely null. When non-null, snapshotted onto the <c>customers</c> row by
+/// the adapter (kept, never overwritten, once first set - the identical "keep what's already there" rule
+/// <c>display_name</c> already follows) so a customer who verified once for an earlier booking does not
+/// have to re-prove it for a later one from the same phone, matching `20-09`'s own "Chat later unlinking
+/// the identity does not retroactively un-verify an already-claimed booking" acceptance.
+/// </param>
 public readonly record struct BookingAttempt(
     TenantId TenantId,
     CalendarId CalendarId,
@@ -97,7 +107,8 @@ public readonly record struct BookingAttempt(
     string? DisplayName,
     CustomerId NewCustomerId,
     DateTimeOffset Now,
-    DateTimeOffset ConfirmationDeadline);
+    DateTimeOffset ConfirmationDeadline,
+    DateTimeOffset? PhoneVerifiedAt);
 
 /// <summary>
 /// What a successful claim returns, read back by the same statement that performed it

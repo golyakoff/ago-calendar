@@ -227,6 +227,53 @@ internal sealed class FakeWorkerRepository(Worker? worker) : IWorkerRepository
         throw new NotSupportedException("Not reached by BookEventHandler.");
 }
 
+/// <summary>`20-10`: <see cref="PhoneVerificationAssertionResolver"/>'s own returning-customer
+/// shortcut. Defaults to "no returning customer" - the identical no-op-by-default shape every other
+/// fake in this file uses, so a test that never mentions phone verification exercises the exact same
+/// path it always did.</summary>
+internal sealed class FakeCustomerRepository(Customer? customer = null) : ICustomerRepository
+{
+    public Task<Customer?> FindByPhoneAsync(TenantId tenantId, PhoneNumber phone, CancellationToken cancellationToken) =>
+        Task.FromResult(
+            customer is not null && customer.TenantId == tenantId && customer.Phone.Value == phone.Value
+                ? customer
+                : null);
+
+    public Task<Customer?> GetByIdAsync(CustomerId id, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
+
+    public Task AddAsync(Customer customer, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
+
+    public Task SaveAsync(Customer customer, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
+}
+
+/// <summary>`20-10`: backs both <see cref="PhoneVerificationAssertionResolver"/>'s own fresh-proof
+/// lookup (read-only there - defaults to "no such row" for the identical no-op-by-default reason
+/// <see cref="FakeCustomerRepository"/> gives) and <c>InitiatePhoneVerificationHandler</c>/
+/// <c>ConfirmPhoneVerificationHandler</c>'s own real reads and writes, which do need
+/// <see cref="SaveAsync"/> to actually persist - unlike the other fakes in this file, whose "not
+/// reached" throw only ever needs to hold for <c>BookEventHandler</c>'s own call graph.</summary>
+internal sealed class FakePendingPhoneVerificationRepository(PendingPhoneVerification? verification = null)
+    : IPendingPhoneVerificationRepository
+{
+    private PendingPhoneVerification? _verification = verification;
+
+    public List<PendingPhoneVerification> Saved { get; } = [];
+
+    public Task<PendingPhoneVerification?> GetByIdAsync(
+        PendingPhoneVerificationId id, CancellationToken cancellationToken) =>
+        Task.FromResult(_verification is not null && _verification.Id == id ? _verification : null);
+
+    public Task SaveAsync(PendingPhoneVerification verification, CancellationToken cancellationToken)
+    {
+        _verification = verification;
+        Saved.Add(verification);
+        return Task.CompletedTask;
+    }
+}
+
 internal sealed class FakeServiceRepository(Service? service) : IServiceRepository
 {
     public Task<Service?> GetByIdAsync(ServiceId id, CancellationToken cancellationToken) =>

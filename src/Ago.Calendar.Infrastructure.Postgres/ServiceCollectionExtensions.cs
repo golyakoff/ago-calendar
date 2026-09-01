@@ -74,6 +74,15 @@ public static class ServiceCollectionExtensions
         // see IChatBookingTaskStore's own remarks.
         services.AddScoped<IChatBookingTaskStore, ChatBookingTaskStore>();
 
+        // `20-10`: the public widget's own phone-verification aggregate, plus its two CSPRNG-backed
+        // generators - code and proof token. Scoped like every other aggregate repository here; the
+        // generators hold no state and could be singletons, but are registered scoped for the same
+        // "everything behind this method is an implementation detail, not a decision the host makes"
+        // uniformity the rest of this method already follows.
+        services.AddScoped<IPendingPhoneVerificationRepository, PendingPhoneVerificationRepository>();
+        services.AddScoped<IPhoneVerificationCodeGenerator, PhoneVerificationCodeGenerator>();
+        services.AddScoped<IPhoneVerificationProofTokenGenerator, PhoneVerificationProofTokenGenerator>();
+
         // adr/0017: the platform's own generic outbox/inbox, bound to this product's context. The
         // tables exist from this migration onward; the first writer is `20-05`.
         services.AddOutboxInbox<AgoCalendarDbContext>();

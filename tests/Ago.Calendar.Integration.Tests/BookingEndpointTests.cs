@@ -154,10 +154,61 @@ public class BookingEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, (await BookAsync(seed, slot.Id, "+79996000006")).StatusCode);
     }
 
-    private Task<HttpResponseMessage> BookAsync(SeededTenant seed, EventId eventId, string phone) =>
-        _client.PostAsJsonAsync(
+    /// <summary>
+    /// `20-10`: the endpoint now requires a verified phone unconditionally
+    /// (<c>BookEvent.RequiresVerifiedPhone</c>), so every booking call below has to clear that gate
+    /// somehow. This file's own concern is the HTTP wiring this class-level summary already
+    /// states - status codes, headers, response shape, rate limiting, race outcomes - not phone
+    /// verification itself, which <c>PhoneVerificationEndpointTests</c> owns end to end, including the
+    /// real send-code/confirm-code round trip. Pre-seeding an already-verified <c>Customer</c> row
+    /// exercises the real returning-customer shortcut
+    /// (<c>PhoneVerificationAssertionResolver</c>/`20-10`'s own Scope item (b)) over real HTTP and real
+    /// Postgres on every call, which is the cheapest way to clear the same gate every test here now has
+    /// to pass through without turning each of them into an unrelated three-request round trip.
+    /// </summary>
+    private async Task<HttpResponseMessage> BookAsync(SeededTenant seed, EventId eventId, string phone)
+    {
+        await SeedVerifiedCustomerIfValidAsync(seed, phone);
+
+        return await _client.PostAsJsonAsync(
             $"/api/v1/calendars/{seed.Calendar.Id.Value}/events/{eventId.Value}/book",
             new BookEventRequest(seed.Service.Id.Value, phone, "Anna"));
+    }
+
+    /// <summary>Silently does nothing for a phone that will not even parse - <see cref="AMalformedPhone_Returns400"/>'s
+    /// own "12345" - so that test still reaches <c>BookEventHandler</c>'s own phone-shape check, which
+    /// runs before the verification gate, rather than failing here first for an unrelated reason.</summary>
+    private async Task SeedVerifiedCustomerIfValidAsync(SeededTenant seed, string phone)
+    {
+        PhoneNumber parsed;
+        try
+        {
+            parsed = new PhoneNumber(phone);
+        }
+        catch (ArgumentException)
+        {
+            return;
+        }
+
+        await using var db = fixture.CreateDbContext();
+
+        // Idempotent: several tests (e.g. ADeniedBooking_Returns429WithARetryAfterHeader) reuse the
+        // same phone against the same tenant across several BookAsync calls, and ux_customers_tenant_phone
+        // is real - a second unconditional insert would violate it.
+        var existing = await db.Customers.FirstOrDefaultAsync(c => c.TenantId == seed.Tenant.Id && c.Phone == parsed);
+        if (existing is not null)
+        {
+            existing.RecordVerifiedPhone(CalendarSeed.Now);
+        }
+        else
+        {
+            var customer = Customer.Register(new CustomerId(Guid.CreateVersion7()), seed.Tenant.Id, parsed, CalendarSeed.Now);
+            customer.RecordVerifiedPhone(CalendarSeed.Now);
+            db.Customers.Add(customer);
+        }
+
+        await db.SaveChangesAsync();
+    }
 
     private async Task<(SeededTenant Seed, Event Slot)> ABookableSlotAsync()
     {

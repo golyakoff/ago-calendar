@@ -71,7 +71,17 @@ public static class BookingEndpoints
                 request.DisplayName,
                 // `20-06`, layer 2. Read here and passed in, never reached for from inside the
                 // handler: Application must not know there is an HttpContext (see BookEvent.Origin).
-                PublicBookingEndpoints.OriginOf(httpContext)),
+                PublicBookingEndpoints.OriginOf(httpContext),
+                // `20-10`: this endpoint's own actual "done" signal at the code level - the public
+                // widget now enforces the identical guarantee `20-09` gave the chat-originated flow,
+                // through its own independent verification mechanism (PendingPhoneVerification) rather
+                // than a self-asserted field. PhoneVerifiedAt stays null here: this surface never has
+                // one in hand directly, only the two proof fields below, which
+                // PhoneVerificationAssertionResolver resolves into an equivalent instant.
+                RequiresVerifiedPhone: true,
+                PhoneVerifiedAt: null,
+                request.PhoneVerificationId,
+                request.PhoneVerificationProofToken),
             cancellationToken);
 
         if (outcome.Booking is not { } booking)

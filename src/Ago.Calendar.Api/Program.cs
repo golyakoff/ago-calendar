@@ -3,6 +3,7 @@ using Ago.Calendar.Api.Booking;
 using Ago.Calendar.Api.ChatModule;
 using Ago.Calendar.Api.Configuration;
 using Ago.Calendar.Api.Cors;
+using Ago.Calendar.Api.PhoneVerification;
 using Ago.Calendar.Api.Provisioning;
 using Ago.Calendar.Module;
 using Ago.Platform.Hosting;
@@ -44,6 +45,10 @@ app.UseAuthorization();
 // `20-03`: the product's first public write surface.
 app.MapBookingEndpoints();
 
+// `20-10`: the public widget's own phone-verification round trip - unlocks the booking endpoint above,
+// which now requires it (BookEvent.RequiresVerifiedPhone).
+app.MapPhoneVerificationEndpoints();
+
 // `20-06`: the unauthenticated reads an embed makes, and the authenticated console behind adr/0022.
 app.MapPublicBookingEndpoints();
 app.MapConsoleEndpoints();
@@ -56,6 +61,10 @@ app.MapChatModuleTaskEndpoints();
 if (!app.Environment.IsProduction())
 {
     app.MapDevProvisioningEndpoints();
+
+    // `20-10`: read back the code FakePhoneVerificationSender captured, for a person clicking through
+    // the widget by hand - see PhoneVerificationDevEndpoints's own remarks.
+    app.MapPhoneVerificationDevEndpoints();
 }
 
 // Still here, and still earning its place: it answers with the loaded module's name rather than a

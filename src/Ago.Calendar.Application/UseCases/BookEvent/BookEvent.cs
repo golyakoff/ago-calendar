@@ -26,23 +26,41 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// <c>DateTimeOffset now</c> is one everywhere else in this repository.</para>
 /// </param>
 /// <param name="RequiresVerifiedPhone">
-/// `20-09`: whether *this calling surface* enforces the phone-verification gate at all - a fact about
-/// which caller is booking, not about whether verification happened to occur. <c>true</c> only from the
-/// chat-originated flow (<see cref="Ago.Calendar.Application.UseCases.ChatModuleTask.ReplyToModuleTaskHandler"/>),
-/// which can obtain a real assertion via `14-15`. <c>false</c> from the public booking widget
-/// (<see cref="BookEventHandler"/>'s own remarks): making the gate universal without first building a
-/// *secure* way for an anonymous, browser-reachable endpoint to supply this assertion would mean either
-/// leaving the widget permanently unable to book, or accepting a self-asserted value any caller could
-/// forge - neither acceptable, so this item's own scope is chat-only until a real widget-side
-/// verification mechanism exists (a named, separate follow-up item, not silently deferred).
+/// `20-09`/`20-10`: whether *this calling surface* enforces the phone-verification gate at all - a fact
+/// about which caller is booking, not about whether verification happened to occur. <c>true</c> from
+/// both callers this command has today: the chat-originated flow
+/// (<see cref="Ago.Calendar.Application.UseCases.ChatModuleTask.ReplyToModuleTaskHandler"/>), which
+/// obtains a real assertion via `14-15` and passes it directly as <see cref="PhoneVerifiedAt"/>; and,
+/// as of `20-10`, the public booking widget itself (<see cref="Ago.Calendar.Api.Booking.BookingEndpoints"/>),
+/// which has its own independent verification mechanism now (<c>PendingPhoneVerification</c>) instead of
+/// the self-asserted value that would have been the only alternative - see that item's own backlog file
+/// for why a universal gate had to wait for a real mechanism rather than either shipping a forgeable
+/// field or leaving the widget permanently unable to book. There is no longer a caller of this command
+/// that supplies <see langword="false"/>; the parameter default remains <see langword="false"/> only so
+/// that a future third caller must decide the question explicitly rather than inheriting a value that
+/// happens to have been safe for the two callers that exist today.
 /// </param>
 /// <param name="PhoneVerifiedAt">
-/// The calling side's assertion that <paramref name="Phone"/> has been proven reachable by the visitor
-/// making this booking - `14-15`'s own verification, run to completion on the other product's side of
-/// the wire before this command was ever built. Null when no verification happened, which is
-/// unconditionally true for the public widget today (see <see cref="RequiresVerifiedPhone"/>) and
-/// refused by <see cref="BookEventHandler"/> whenever <see cref="RequiresVerifiedPhone"/> is true and
-/// this is still null.
+/// The calling side's own assertion that <paramref name="Phone"/> has been proven reachable, when the
+/// caller already has one in hand - the chat-originated flow's own shape, unchanged since `20-09`. Null
+/// from the public widget, which instead supplies <see cref="PhoneVerificationId"/>/
+/// <see cref="PhoneVerificationProofToken"/> for <see cref="BookEventHandler"/>'s own
+/// <c>PhoneVerificationAssertionResolver</c> to resolve into an equivalent instant - see that type's own
+/// remarks for the three sources it tries, in order. Refused by <see cref="BookEventHandler"/> whenever
+/// <see cref="RequiresVerifiedPhone"/> is true and every source the resolver tries comes back
+/// empty.
+/// </param>
+/// <param name="PhoneVerificationId">
+/// `20-10`: the id of a <c>PendingPhoneVerification</c> the public widget's own confirm step returned -
+/// paired with <paramref name="PhoneVerificationProofToken"/>, the caller's evidence that
+/// <paramref name="Phone"/> was actually verified through this item's own mechanism. Null on the
+/// chat-originated path, which never has one.
+/// </param>
+/// <param name="PhoneVerificationProofToken">
+/// `20-10`: the plaintext bearer proof <c>ConfirmPhoneVerificationHandler</c> minted, once, on a
+/// confirmed verification - unforgeable (only its hash is ever stored) and phone-bound
+/// (<c>PendingPhoneVerification.IsProofValid</c> refuses it against any phone number other than the one
+/// it was issued for).
 /// </param>
 public readonly record struct BookEvent(
     CalendarId CalendarId,
@@ -52,4 +70,6 @@ public readonly record struct BookEvent(
     string? DisplayName,
     string? Origin = null,
     bool RequiresVerifiedPhone = false,
-    DateTimeOffset? PhoneVerifiedAt = null);
+    DateTimeOffset? PhoneVerifiedAt = null,
+    Guid? PhoneVerificationId = null,
+    string? PhoneVerificationProofToken = null);

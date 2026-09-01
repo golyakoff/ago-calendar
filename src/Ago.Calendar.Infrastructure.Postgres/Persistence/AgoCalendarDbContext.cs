@@ -31,6 +31,11 @@ public sealed class AgoCalendarDbContext(DbContextOptions<AgoCalendarDbContext> 
     /// <see cref="Event"/> rather than fields on it.</summary>
     public DbSet<ChatBookingTask> ChatBookingTasks => Set<ChatBookingTask>();
 
+    /// <summary>`20-10`: the public booking widget's own phone-verification primitive - a second,
+    /// independent aggregate from `ago-chat`'s own <c>PendingPhoneVerification</c>, in this product's
+    /// own database (adr/0027).</summary>
+    public DbSet<PendingPhoneVerification> PendingPhoneVerifications => Set<PendingPhoneVerification>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AgoCalendarDbContext).Assembly);

@@ -216,6 +216,48 @@ public sealed record WorkerSlotResponse(
 /// A value the realm already contains, never one this call creates: adr/0022 provisions Keycloak by
 /// realm import so the demo user's id is deterministic, and this endpoint only writes it into
 /// <c>operators.external_subject_id</c>.</param>
+/// <summary>`20-16`: the request behind <c>POST /workers/{id}/schedule/recut/preview</c>.</summary>
+public sealed record RecutPreviewRequest(DateOnly From);
+
+/// <param name="Fingerprint">Opaque - hand back exactly what the preview response carried.</param>
+public sealed record RecutPreviewResponse(IReadOnlyList<RecutDayPreviewResponse> Days, string Fingerprint);
+
+public sealed record RecutDayPreviewResponse(
+    DateOnly LocalDate, int AvailableSlotsToDelete, IReadOnlyList<RecutBookingPreviewResponse> Bookings);
+
+/// <param name="Status">The domain enum's wire name verbatim - <c>"PendingConfirmation"</c>,
+/// <c>"Booked"</c> or <c>"NoShow"</c>; this list never carries any other status.</param>
+/// <param name="CanDecide"><see langword="false"/> only for a <c>"NoShow"</c> row - the console should
+/// show it with no cancel/keep control at all, since it always forces its day to be skipped.</param>
+public sealed record RecutBookingPreviewResponse(
+    Guid BookingId,
+    DateTimeOffset StartsAt,
+    DateTimeOffset EndsAt,
+    string Status,
+    Guid? ServiceId,
+    string? ServiceName,
+    Guid? CustomerId,
+    string? CustomerDisplayName,
+    string? Phone,
+    bool CanDecide);
+
+/// <summary>`20-16`: the request behind <c>POST /workers/{id}/schedule/recut</c>.</summary>
+/// <param name="Decisions">One entry per <see cref="RecutBookingPreviewResponse.CanDecide"/> booking
+/// the preview showed - see <c>RecutConfirm</c>'s own remarks on how an extra or missing entry is
+/// treated.</param>
+public sealed record RecutConfirmRequest(
+    DateOnly From, string Fingerprint, IReadOnlyList<RecutDecisionRequest> Decisions);
+
+/// <param name="Decision"><c>"Cancel"</c> or <c>"Keep"</c>.</param>
+public sealed record RecutDecisionRequest(Guid BookingId, string Decision);
+
+public sealed record RecutConfirmResponse(
+    IReadOnlyList<DateOnly> RecutDays,
+    IReadOnlyList<DateOnly> SkippedDays,
+    int SlotsDeleted,
+    int SlotsInserted,
+    int BookingsCancelled);
+
 public sealed record RegisterTenantRequest(
     string Name, string PublicKey, string OperatorDisplayName, string ExternalSubjectId,
     IReadOnlyList<string>? AllowedOrigins);

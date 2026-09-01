@@ -211,6 +211,66 @@ public sealed class WorkerScheduleTests
     }
 
     [Fact]
+    public void RecutFrom_MovesMaterializeFromBackwards()
+    {
+        // `20-16`'s own entry point - the one, deliberate exception to the forward-only rule every
+        // other method above enforces.
+        var schedule = WorkerSchedule.CreateWeekly(
+            NewScheduleId(), NewWorkerId(), slotMinutes: 30, bufferMinutes: 0, horizonDays: 30,
+            materializeFrom: new DateOnly(2026, 3, 13), Now);
+
+        schedule.RecutFrom(new DateOnly(2026, 3, 2), Later);
+
+        Assert.Equal(new DateOnly(2026, 3, 2), schedule.MaterializeFrom);
+        Assert.Equal(Later, schedule.UpdatedAt);
+    }
+
+    [Fact]
+    public void RecutFrom_RefusesACursorThatIsNotEarlierThanTheCurrentOne()
+    {
+        var schedule = WorkerSchedule.CreateWeekly(
+            NewScheduleId(), NewWorkerId(), slotMinutes: 30, bufferMinutes: 0, horizonDays: 30,
+            materializeFrom: new DateOnly(2026, 3, 13), Now);
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => schedule.RecutFrom(new DateOnly(2026, 3, 13), Later));
+
+        // No partial application - a refused RecutFrom moves nothing, exactly like a refused
+        // AdvanceCursor.
+        Assert.Equal(new DateOnly(2026, 3, 13), schedule.MaterializeFrom);
+        Assert.Equal(Now, schedule.UpdatedAt);
+        Assert.Contains("backwards only", exception.Message);
+    }
+
+    [Fact]
+    public void RecutFrom_RefusesACursorLaterThanTheCurrentOne()
+    {
+        var schedule = WorkerSchedule.CreateWeekly(
+            NewScheduleId(), NewWorkerId(), slotMinutes: 30, bufferMinutes: 0, horizonDays: 30,
+            materializeFrom: new DateOnly(2026, 3, 13), Now);
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => schedule.RecutFrom(new DateOnly(2026, 3, 20), Later));
+    }
+
+    [Fact]
+    public void RecutFrom_TouchesOnlyTheCursorAndUpdatedAt_NeverTheTemplate()
+    {
+        var schedule = WorkerSchedule.CreateWeekly(
+            NewScheduleId(), NewWorkerId(), slotMinutes: 45, bufferMinutes: 10, horizonDays: 30,
+            materializeFrom: new DateOnly(2026, 3, 13), Now);
+
+        schedule.RecutFrom(new DateOnly(2026, 3, 2), Later);
+
+        // A re-cut regenerates what is already there from the template that is already active - it
+        // is not a second way to change the template itself.
+        Assert.Equal(45, schedule.SlotMinutes);
+        Assert.Equal(10, schedule.BufferMinutes);
+        Assert.Equal(30, schedule.HorizonDays);
+        Assert.Equal(ScheduleKind.Weekly, schedule.Kind);
+    }
+
+    [Fact]
     public void IsCycleWorkingDay_DelegatesToCycleGrid()
     {
         var anchor = new DateOnly(2026, 3, 2);

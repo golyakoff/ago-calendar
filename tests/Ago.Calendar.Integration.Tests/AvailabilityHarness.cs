@@ -1,6 +1,8 @@
-﻿using Ago.Calendar.Application.UseCases.DeleteDayOff;
+﻿using Ago.Calendar.Application.UseCases.BookingLifecycle;
+using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.UseCases.MaterializeAvailability;
+using Ago.Calendar.Application.UseCases.RecutSchedule;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Postgres.Persistence;
@@ -96,6 +98,58 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
         return await handler.HandleAsync(
             new EditDayBoundary(
                 seed.Operator.Id, seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, localDate, opensAt, closesAt),
+            CancellationToken.None);
+    }
+
+    /// <summary>`20-16`'s own preview - read-only, so a fresh short-lived context and the shared
+    /// <see cref="PostgresFixture.DataSource"/> for the read store, the identical shape
+    /// `WorkerSlotsTests` already uses for `GetWorkerSlotsHandler`.</summary>
+    public async Task<Result<RecutPreviewResult>> RecutPreviewAsync(SeededTenant seed, DateOnly from)
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+
+        await using var db = fixture.CreateDbContext();
+        var handler = new RecutPreviewHandler(
+            new BookingCalendarRepository(db),
+            new WorkerRepository(db),
+            new WorkerScheduleRepository(db),
+            new WorkerSlotReadStore(fixture.DataSource),
+            Resolver,
+            new PermissionChecker(db),
+            Clock);
+
+        return await handler.HandleAsync(
+            new RecutPreview(seed.Operator.Id, seed.Tenant.Id, seed.Worker.Id, from), CancellationToken.None);
+    }
+
+    /// <summary>
+    /// `20-16`'s own confirm. One <see cref="AgoCalendarDbContext"/> for every dependency, including
+    /// the <see cref="CancelBookingHandler"/> passed to <see cref="RecutConfirmHandler"/>'s own
+    /// constructor - matching the production shape exactly: both are scoped in <c>CalendarModule</c>,
+    /// so both resolve against the same context within one request, and a test that gave them two
+    /// contexts would not be testing what production actually does.
+    /// </summary>
+    public async Task<Result<RecutConfirmResult>> RecutConfirmAsync(
+        SeededTenant seed, DateOnly from, string fingerprint, params RecutBookingDecision[] decisions)
+    {
+        ArgumentNullException.ThrowIfNull(seed);
+
+        await using var db = fixture.CreateDbContext();
+        var cancelHandler = new CancelBookingHandler(new EventRepository(db), new PermissionChecker(db), Clock);
+        var handler = new RecutConfirmHandler(
+            new BookingCalendarRepository(db),
+            new WorkerRepository(db),
+            new WorkerScheduleRepository(db),
+            new WorkingHoursRuleRepository(db),
+            new EventRepository(db),
+            Resolver,
+            new UuidV7Generator(),
+            new PermissionChecker(db),
+            Clock,
+            cancelHandler);
+
+        return await handler.HandleAsync(
+            new RecutConfirm(seed.Operator.Id, seed.Tenant.Id, seed.Worker.Id, from, fingerprint, decisions),
             CancellationToken.None);
     }
 }

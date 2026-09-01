@@ -7,6 +7,7 @@ using Ago.Calendar.Application.UseCases.Configuration;
 using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
+using Ago.Calendar.Application.UseCases.RecutSchedule;
 using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
@@ -85,6 +86,12 @@ public static class ConsoleEndpoints
         // one worker, over a date range. Read-only; see the item's own scope for why it offers no
         // edit of its own.
         group.MapGet("/workers/{workerId:guid}/slots", HandleWorkerSlotsAsync).WithName("GetWorkerSlots");
+
+        // `20-16`: the one deliberate, human-triggered exception to the forward-only cursor.
+        group.MapPost("/workers/{workerId:guid}/schedule/recut/preview", HandleRecutPreviewAsync)
+            .WithName("RecutSchedulePreview");
+        group.MapPost("/workers/{workerId:guid}/schedule/recut", HandleRecutConfirmAsync)
+            .WithName("RecutSchedule");
 
         return app;
     }
@@ -693,6 +700,107 @@ public static class ConsoleEndpoints
                 row.CustomerDisplayName,
                 row.Phone?.Value))
             .ToArray());
+    }
+
+    private static async Task<IResult> HandleRecutPreviewAsync(
+        Guid workerId,
+        RecutPreviewRequest request,
+        ClaimsPrincipal principal,
+        RecutPreviewHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        var result = await handler.HandleAsync(
+            new RecutPreview(principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId), request.From),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        var preview = result.Value;
+        return Results.Ok(new RecutPreviewResponse(
+            [
+                .. preview.Days.Select(day => new RecutDayPreviewResponse(
+                    day.LocalDate,
+                    day.AvailableSlotsToDelete,
+                    [
+                        .. day.Bookings.Select(booking => new RecutBookingPreviewResponse(
+                            booking.BookingId.Value,
+                            booking.StartsAt,
+                            booking.EndsAt,
+                            booking.Status.ToString(),
+                            booking.ServiceId?.Value,
+                            booking.ServiceName,
+                            booking.CustomerId?.Value,
+                            booking.CustomerDisplayName,
+                            booking.Phone?.Value,
+                            booking.CanDecide)),
+                    ])),
+            ],
+            preview.Fingerprint));
+    }
+
+    private static async Task<IResult> HandleRecutConfirmAsync(
+        Guid workerId,
+        RecutConfirmRequest request,
+        ClaimsPrincipal principal,
+        RecutConfirmHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        RecutBookingDecision[] decisions;
+        try
+        {
+            decisions = [.. request.Decisions.Select(ToDecision)];
+        }
+        catch (ArgumentException exception)
+        {
+            return new Error("recut.invalid", exception.Message).ToProblem(httpContext);
+        }
+
+        var result = await handler.HandleAsync(
+            new RecutConfirm(
+                principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId),
+                request.From, request.Fingerprint, decisions),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        var confirmed = result.Value;
+        return Results.Ok(new RecutConfirmResponse(
+            [.. confirmed.RecutDays],
+            [.. confirmed.SkippedDays],
+            confirmed.SlotsDeleted,
+            confirmed.SlotsInserted,
+            confirmed.BookingsCancelled));
+    }
+
+    private static RecutBookingDecision ToDecision(RecutDecisionRequest request)
+    {
+        var decision = request.Decision switch
+        {
+            "Cancel" => RecutDecision.Cancel,
+            "Keep" => RecutDecision.Keep,
+            _ => throw new ArgumentException(
+                $"Unknown recut decision '{request.Decision}'; expected 'Cancel' or 'Keep'."),
+        };
+
+        return new RecutBookingDecision(new Domain.EventId(request.BookingId), decision);
     }
 
     /// <summary>204 for a successful command that returns nothing. api-design.md's own shape, and it

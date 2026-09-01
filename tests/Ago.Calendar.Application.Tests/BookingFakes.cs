@@ -185,6 +185,9 @@ internal sealed class FakeWorkerRepository(Worker? worker) : IWorkerRepository
 
     public Task SaveAsync(Worker worker, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");
+
+    public Task<bool> DeleteIfNeverBookedAsync(WorkerId id, TenantId tenantId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
 }
 
 internal sealed class FakeServiceRepository(Service? service) : IServiceRepository

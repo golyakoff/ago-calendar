@@ -223,7 +223,8 @@ public class AvailabilityMaterializationTests(PostgresFixture fixture)
     public async Task AWorkerWhoPerformsNoService_GetsNoSlots()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
-        var bare = Worker.Create(new WorkerId(CalendarSeed.NewId()), seed.Tenant.Id, "Bare");
+        var bare = Worker.Create(
+            new WorkerId(CalendarSeed.NewId()), seed.Tenant.Id, "Bare", "Bare", null, CalendarSeed.Now);
         bare.JoinCalendar(seed.Calendar);
 
         await using (var db = fixture.CreateDbContext())

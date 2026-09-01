@@ -133,7 +133,7 @@ public class SlotOverlapConstraintTests(PostgresFixture fixture)
     public async Task TwoWorkers_MayHoldTheSameTime()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
-        var second = Worker.Create(new WorkerId(CalendarSeed.NewId()), seed.Tenant.Id, "Bo");
+        var second = Worker.Create(new WorkerId(CalendarSeed.NewId()), seed.Tenant.Id, "Bo", "Bo", null, CalendarSeed.Now);
         second.JoinCalendar(seed.Calendar);
 
         await using (var db = fixture.CreateDbContext())

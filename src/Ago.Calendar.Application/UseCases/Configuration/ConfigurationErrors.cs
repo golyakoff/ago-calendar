@@ -34,4 +34,14 @@ public static class ConfigurationErrors
     /// every log (<c>BookEventHandler</c> makes the same call for a malformed phone number).
     /// </summary>
     public static Error Invalid(string reason) => new("configuration.invalid", reason);
+
+    /// <summary>`20-13`: the one refusal <c>DELETE /workers/{id}</c> can give that is not
+    /// "not found" - a worker with an <see cref="EventStatus.PendingConfirmation"/>,
+    /// <see cref="EventStatus.Booked"/> or <see cref="EventStatus.NoShow"/> row cannot be deleted, and
+    /// the message says why and what to do instead, the same way every other error here does for an
+    /// operator who already passed the permission check.</summary>
+    public static Error WorkerHasBookingHistory(WorkerId workerId) => new(
+        "configuration.worker_has_booking_history",
+        $"Worker {workerId.Value} has a booking that is pending, confirmed, or a recorded no-show, " +
+        "and cannot be deleted. Deactivate him instead.");
 }

@@ -205,7 +205,7 @@ public class ConcurrentConfirmationSweepTests(ConcurrencyFixture fixture)
         var tenant = Tenant.Register(new TenantId(NewId()), "Barbershop", new TenantPublicKey("shop-" + NewId().ToString("N")), Now);
         var calendar = BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone("Europe/Moscow"), 10, Now);
-        var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Alex");
+        var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);
         var service = Service.Create(new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45));
 
         calendar.Publish();

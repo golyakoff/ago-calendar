@@ -16,10 +16,8 @@ internal static class CalendarFixtures
         string name = "Barbershop", string publicKey = "barbershop", IEnumerable<string>? allowedOrigins = null) =>
         Domain.Tenant.Register(new TenantId(NewId()), name, new TenantPublicKey(publicKey), Now, allowedOrigins);
 
-    public static BookingCalendar Calendar(
-        Tenant tenant, string zone = "Europe/Moscow", int bufferMinutes = 10) =>
-        BookingCalendar.Create(
-            new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), bufferMinutes, Now);
+    public static BookingCalendar Calendar(Tenant tenant, string zone = "Europe/Moscow") =>
+        BookingCalendar.Create(new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), Now);
 
     public static Worker Worker(Tenant tenant, string firstName = "Alex", string lastName = "Doe") =>
         Domain.Worker.Create(new WorkerId(NewId()), tenant.Id, lastName, firstName, null, Now);

@@ -16,6 +16,13 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 /// </summary>
 public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBookingSurfaceReadStore
 {
+    // `20-14`: a service longer than a worker's own slot is not offered *for that worker* - a LEFT
+    // JOIN rather than an inner one, and deliberately so: a worker with a schedule whose slot is too
+    // short is excluded, but a worker with *no* schedule row at all is not silently excluded from
+    // ever appearing here. In real operation that second case cannot produce a bookable slot anyway
+    // (MaterializeAvailabilityHandler and EditDayBoundaryHandler both refuse a schedule-less worker),
+    // so the predicate is written to fail open on "no schedule" rather than to double as an implicit
+    // "has a schedule" gate this query was never asked to enforce.
     private const string ServicesSql =
         """
         select distinct s.id as "ServiceId", s.name as "Name", s.duration_minutes as "DurationMinutes"
@@ -23,6 +30,8 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
         join worker_services ws on ws.service_id = s.id
         join workers w on w.id = ws.worker_id and w.is_active
         join calendar_workers cw on cw.worker_id = w.id and cw.calendar_id = @CalendarId
+        left join worker_schedules wsc on wsc.worker_id = w.id
+        where wsc.worker_id is null or wsc.slot_minutes >= s.duration_minutes
         order by s.name
         """;
 
@@ -32,7 +41,9 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
         from workers w
         join calendar_workers cw on cw.worker_id = w.id and cw.calendar_id = @CalendarId
         join worker_services ws on ws.worker_id = w.id and ws.service_id = @ServiceId
-        where w.is_active
+        join services s on s.id = ws.service_id
+        left join worker_schedules wsc on wsc.worker_id = w.id
+        where w.is_active and (wsc.worker_id is null or wsc.slot_minutes >= s.duration_minutes)
         order by w.display_name
         """;
 
@@ -42,11 +53,12 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
     /// is written as a literal rather than a parameter: a partial index is only usable when the
     /// planner can prove the query's predicate implies the index's own.
     ///
-    /// <para>The duration filter is on the *slot*, not on the service: `20-02` sizes every
-    /// materialised slot to the worker's longest offered service, so a shorter service fits a longer
-    /// slot and a longer one does not fit a shorter. <c>BookEventHandler</c> asserts the same rule at
-    /// claim time; offering a slot here that it would then refuse would be a picker whose choices are
-    /// not choices.</para>
+    /// <para>The duration filter is on the *slot*, not on the service: `20-14` sizes every
+    /// materialised slot to the worker's own <c>WorkerSchedule.SlotMinutes</c>, so a shorter service
+    /// fits a longer slot and a longer one does not fit a shorter. <c>BookEventHandler</c> asserts the
+    /// same rule at claim time; offering a slot here that it would then refuse would be a picker whose
+    /// choices are not choices. <see cref="ListWorkersAsync"/>'s own join keeps a service that does
+    /// not fit a worker's slot from being offered for him one step earlier than this.</para>
     /// </summary>
     private const string OpenSlotsSql =
         """

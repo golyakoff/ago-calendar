@@ -3,17 +3,17 @@
 namespace Ago.Calendar.Application.UseCases.MaterializeAvailability;
 
 /// <summary>
-/// Extend one calendar's availability to <paramref name="HorizonDays"/> business-local days past
-/// today.
+/// Extend one calendar's availability - every active worker on it, out to whatever each worker's own
+/// <see cref="WorkerSchedule.HorizonDays"/> and <see cref="WorkerSchedule.MaterializeFrom"/> cursor
+/// say.
 ///
-/// <para>Scoped to a single calendar rather than "do everything", because the calendar is the unit
-/// that carries the two inputs the whole operation depends on - the IANA zone the rules are read in
-/// and the buffer between slots - and a handler that looped over calendars internally would hold
-/// one transaction open across tenants for no reason. Looping is the job's business
-/// (<c>Ago.Calendar.Worker</c>), and it is why one slow or broken calendar cannot stop the
-/// rest.</para>
+/// <para><b>`20-14` removed the horizon parameter this command used to carry.</b> It was one number
+/// for the whole calendar; the item's own "Decided" section moved the horizon to the worker's own
+/// schedule, so a calendar with a fast-growing barber and a part-time colourist can keep two different
+/// windows generated. Scoped to a single calendar for the same reason the pre-`20-14` version was -
+/// the calendar is still the unit that carries the IANA zone every wall-clock conversion resolves
+/// against, and looping over calendars stays the job's business, not this handler's
+/// (<c>Ago.Calendar.Worker</c>).</para>
 /// </summary>
 /// <param name="CalendarId">The calendar to extend.</param>
-/// <param name="HorizonDays">How many days past today to cover. A configuration value with no
-/// claimed-optimal default - see <c>AvailabilityMaterializationJobOptions.HorizonDays</c>.</param>
-public readonly record struct MaterializeAvailability(CalendarId CalendarId, int HorizonDays);
+public readonly record struct MaterializeAvailability(CalendarId CalendarId);

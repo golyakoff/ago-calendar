@@ -131,10 +131,20 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
             new OperatorId(CalendarSeed.NewId()), seed.Tenant.Id, "Anna", "keycloak-subject-1");
         @operator.Grant(role);
 
+        // `20-14`: a cycle schedule, chosen over a weekly one here specifically because it is the
+        // half of the mapping with the most columns (five nullable ones) to round-trip.
+        var schedule = WorkerSchedule.CreateCycle(
+            new WorkerScheduleId(CalendarSeed.NewId()), seed.Worker.Id,
+            anchor: new DateOnly(2026, 3, 2), workingDays: 2, restDays: 2,
+            startsAt: new TimeOnly(8, 0), endsAt: new TimeOnly(20, 0),
+            slotMinutes: 45, bufferMinutes: 10, horizonDays: 60,
+            materializeFrom: new DateOnly(2026, 3, 2), CalendarSeed.Now);
+
         await using (var db = fixture.CreateDbContext())
         {
             db.WorkingHoursRules.Add(rule);
             db.Operators.Add(@operator);
+            db.WorkerSchedules.Add(schedule);
             await db.SaveChangesAsync();
         }
 
@@ -151,7 +161,19 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         var storedCalendar = await new BookingCalendarRepository(reader)
             .GetByIdAsync(seed.Calendar.Id, CancellationToken.None);
         Assert.Equal("America/New_York", storedCalendar!.TimeZone.Value);
-        Assert.Equal(10, storedCalendar.BufferMinutes);
+
+        // `20-14`: the cycle's own nullable columns, and the enum stored as its name.
+        var storedSchedule = await new WorkerScheduleRepository(reader)
+            .GetByWorkerIdAsync(seed.Worker.Id, CancellationToken.None);
+        Assert.Equal(ScheduleKind.Cycle, storedSchedule!.Kind);
+        Assert.Equal(new DateOnly(2026, 3, 2), storedSchedule.CycleAnchor);
+        Assert.Equal(2, storedSchedule.CycleWorkingDays);
+        Assert.Equal(2, storedSchedule.CycleRestDays);
+        Assert.Equal(new TimeOnly(8, 0), storedSchedule.CycleStartsAt);
+        Assert.Equal(new TimeOnly(20, 0), storedSchedule.CycleEndsAt);
+        Assert.Equal(45, storedSchedule.SlotMinutes);
+        Assert.Equal(10, storedSchedule.BufferMinutes);
+        Assert.Equal(60, storedSchedule.HorizonDays);
 
         // text[] round-trips through the value converter, and the operator's roles come back with it.
         var storedOperator = await new OperatorRepository(reader)

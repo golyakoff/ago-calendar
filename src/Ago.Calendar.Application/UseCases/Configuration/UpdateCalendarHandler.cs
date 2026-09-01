@@ -36,7 +36,7 @@ public sealed class UpdateCalendarHandler(
 
         try
         {
-            calendar.Reconfigure(command.Name, command.BufferMinutes);
+            calendar.Reconfigure(command.Name);
         }
         catch (Exception exception) when (exception is ArgumentException or ArgumentOutOfRangeException)
         {

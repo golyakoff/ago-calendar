@@ -46,7 +46,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 
         var calendarId = await CreatedIdAsync(
             "/api/v1/console/calendars",
-            new CreateCalendarRequest("Second chair", "Europe/Moscow", 5, Publish: true),
+            new CreateCalendarRequest("Second chair", "Europe/Moscow", Publish: true),
             seed,
             "calendarId");
 
@@ -72,7 +72,6 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 
         Assert.Equal(seed.Tenant.PublicKey.Value, configuration.PublicKey);
         var created = Assert.Single(configuration.Calendars, calendar => calendar.CalendarId == calendarId);
-        Assert.Equal(5, created.BufferMinutes);
         Assert.True(created.IsPublished);
         Assert.Contains(workerId, created.WorkerIds);
         Assert.Equal(workerId, Assert.Single(created.WorkingHours).WorkerId);
@@ -90,7 +89,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         var seed = await ProvisionAsync();
         var secondCalendarId = await CreatedIdAsync(
             "/api/v1/console/calendars",
-            new CreateCalendarRequest("Second chair", "Europe/Moscow", 10, Publish: true),
+            new CreateCalendarRequest("Second chair", "Europe/Moscow", Publish: true),
             seed,
             "calendarId");
 
@@ -227,6 +226,76 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
             "availability.calendar_not_found",
             await response.Content.ReadAsStringAsync(),
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ATenant_CanSaveAndReadBackAWorkersSchedule()
+    {
+        // `20-14`'s own console-level Done-when, over real HTTP: create-or-replace, then read the
+        // same shape back - the schedule section of `20-13`'s worker card needs both in one round
+        // trip to prefill an edit form without a second, different-shaped request.
+        var seed = await ProvisionAsync();
+
+        var saveResponse = await PutAsync(
+            $"/api/v1/console/workers/{seed.Worker.Id.Value}/schedule",
+            new SaveWorkerScheduleRequest(
+                "Weekly", null, null, null, null, null,
+                SlotMinutes: 45, BufferMinutes: 10, HorizonDays: 30, MaterializeFrom: new DateOnly(2026, 3, 2)),
+            seed);
+        Assert.Equal(HttpStatusCode.OK, saveResponse.StatusCode);
+        var saved = await saveResponse.Content.ReadFromJsonAsync<WorkerScheduleResponse>();
+        Assert.Equal("Weekly", saved!.Kind);
+        Assert.Equal(45, saved.SlotMinutes);
+
+        using var getRequest = new HttpRequestMessage(
+            HttpMethod.Get, $"/api/v1/console/workers/{seed.Worker.Id.Value}/schedule");
+        getRequest.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.Operator.ExternalSubjectId);
+        var getResponse = await _client.SendAsync(getRequest);
+        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+        var fetched = await getResponse.Content.ReadFromJsonAsync<WorkerScheduleResponse>();
+        Assert.Equal(saved.ScheduleId, fetched!.ScheduleId);
+        Assert.Equal(10, fetched.BufferMinutes);
+    }
+
+    [Fact]
+    public async Task AHorizonAboveOneEightyDays_IsRefusedByTheApiItself()
+    {
+        // CLAUDE.md's own instruction: the 180-day cap is enforced in the handler (which delegates to
+        // WorkerSchedule's own validation), not only in the console's form - so a direct API call
+        // cannot bypass it. This is that direct call.
+        var seed = await ProvisionAsync();
+
+        var response = await PutAsync(
+            $"/api/v1/console/workers/{seed.Worker.Id.Value}/schedule",
+            new SaveWorkerScheduleRequest(
+                "Weekly", null, null, null, null, null,
+                SlotMinutes: 45, BufferMinutes: 10, HorizonDays: 181, MaterializeFrom: new DateOnly(2026, 3, 2)),
+            seed);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("configuration.invalid", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SavingASchedule_RefusesToMoveMaterializeFromBackwards()
+    {
+        var seed = await ProvisionAsync();
+        await PutAsync(
+            $"/api/v1/console/workers/{seed.Worker.Id.Value}/schedule",
+            new SaveWorkerScheduleRequest(
+                "Weekly", null, null, null, null, null,
+                SlotMinutes: 45, BufferMinutes: 10, HorizonDays: 30, MaterializeFrom: new DateOnly(2026, 3, 13)),
+            seed);
+
+        var response = await PutAsync(
+            $"/api/v1/console/workers/{seed.Worker.Id.Value}/schedule",
+            new SaveWorkerScheduleRequest(
+                "Weekly", null, null, null, null, null,
+                SlotMinutes: 45, BufferMinutes: 10, HorizonDays: 30, MaterializeFrom: new DateOnly(2026, 3, 2)),
+            seed);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("configuration.invalid", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     private async Task<SeededTenant> ProvisionAsync() => await CalendarSeed.WriteAsync(fixture);

@@ -21,13 +21,13 @@ namespace Ago.Calendar.Application.UseCases.Configuration;
 /// no setter, and its remarks say why re-zoning a live calendar is a data migration with a human in
 /// the loop rather than an edit.</param>
 public readonly record struct CreateCalendar(
-    OperatorId OperatorId, TenantId TenantId, string Name, string TimeZone, int BufferMinutes, bool Publish);
+    OperatorId OperatorId, TenantId TenantId, string Name, string TimeZone, bool Publish);
 
 /// <param name="Publish">The publish switch, sent on every update rather than as its own endpoint:
-/// a console screen with a name field, a buffer field and a checkbox submits all three, and a separate
-/// publish call would let the two drift while a user watched.</param>
+/// a console screen with a name field and a checkbox submits both, and a separate publish call would
+/// let the two drift while a user watched.</param>
 public readonly record struct UpdateCalendar(
-    OperatorId OperatorId, TenantId TenantId, CalendarId CalendarId, string Name, int BufferMinutes, bool Publish);
+    OperatorId OperatorId, TenantId TenantId, CalendarId CalendarId, string Name, bool Publish);
 
 /// <param name="DurationMinutes">Whole minutes - <see cref="Service"/> refuses anything else, and its
 /// remarks say why a slot boundary on a fraction of a minute is unreadable in every UI that renders
@@ -107,3 +107,33 @@ public readonly record struct SetAllowedOrigins(
 
 /// <summary>Everything the configuration screen draws, in one read.</summary>
 public readonly record struct GetTenantConfiguration(OperatorId OperatorId, TenantId TenantId);
+
+/// <summary>`20-14`: <c>GET /workers/{id}/schedule</c>.</summary>
+public readonly record struct GetWorkerSchedule(OperatorId OperatorId, TenantId TenantId, WorkerId WorkerId);
+
+/// <summary>
+/// `20-14`: <c>PUT /workers/{id}/schedule</c> - create-or-replace, the same upsert shape a schedule's
+/// "one worker, one schedule" rule makes natural: there is nothing a second, separate create call
+/// would let a caller do that this one cannot.
+/// </summary>
+/// <param name="Kind">Which five fields below are meaningful. Cycle fields are ignored when
+/// <see cref="ScheduleKind.Weekly"/> is requested and required when <see cref="ScheduleKind.Cycle"/>
+/// is - <see cref="SaveWorkerScheduleHandler"/> is where that is enforced, because a
+/// <see langword="record struct"/> cannot make five nullable fields "required together" on its own.</param>
+/// <param name="MaterializeFrom">Refused if it would move the schedule's own cursor backwards - see
+/// <see cref="WorkerSchedule"/>'s own remarks for why that check lives on the aggregate rather than
+/// here.</param>
+public readonly record struct SaveWorkerSchedule(
+    OperatorId OperatorId,
+    TenantId TenantId,
+    WorkerId WorkerId,
+    ScheduleKind Kind,
+    DateOnly? CycleAnchor,
+    int? CycleWorkingDays,
+    int? CycleRestDays,
+    TimeOnly? CycleStartsAt,
+    TimeOnly? CycleEndsAt,
+    int SlotMinutes,
+    int BufferMinutes,
+    int HorizonDays,
+    DateOnly MaterializeFrom);

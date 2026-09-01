@@ -6,9 +6,9 @@
 /// everything here is behind adr/0022's OIDC scheme and may be precise about what went wrong, and
 /// everything there is public and must not be.
 /// </summary>
-public sealed record CreateCalendarRequest(string Name, string TimeZone, int BufferMinutes, bool Publish);
+public sealed record CreateCalendarRequest(string Name, string TimeZone, bool Publish);
 
-public sealed record UpdateCalendarRequest(string Name, int BufferMinutes, bool Publish);
+public sealed record UpdateCalendarRequest(string Name, bool Publish);
 
 public sealed record CreateServiceRequest(string Name, int DurationMinutes);
 
@@ -69,7 +69,6 @@ public sealed record ConfiguredCalendarResponse(
     Guid CalendarId,
     string Name,
     string TimeZone,
-    int BufferMinutes,
     bool IsPublished,
     IReadOnlyList<Guid> WorkerIds,
     IReadOnlyList<WorkingHoursRuleResponse> WorkingHours);
@@ -131,6 +130,49 @@ public sealed record DayOffRequest(Guid CalendarId, Guid WorkerId, DateOnly Loca
 
 public sealed record DayBoundaryRequest(
     Guid CalendarId, Guid WorkerId, DateOnly LocalDate, TimeOnly OpensAt, TimeOnly ClosesAt);
+
+/// <summary>
+/// `20-14`: the request behind <c>PUT /workers/{id}/schedule</c>. <paramref name="Kind"/> is the
+/// string <c>"Weekly"</c> or <c>"Cycle"</c> - a stable wire name rather than the ordinal
+/// <see cref="System.Text.Json"/> would otherwise serialise a bare C# enum as, which the console's
+/// own TypeScript union type can then mirror verbatim.
+/// </summary>
+/// <param name="CycleAnchor">ISO <c>yyyy-MM-dd</c>, required when <paramref name="Kind"/> is
+/// <c>"Cycle"</c> and ignored otherwise.</param>
+/// <param name="CycleStartsAt">Wall clock <c>"HH:mm"</c> in the worker's calendar's own zone -
+/// see <c>AddWorkingHoursRuleRequest.StartsAt</c> for the same convention.</param>
+/// <param name="MaterializeFrom">Refused if it would move the schedule's cursor backwards - see
+/// <c>SaveWorkerSchedule</c>'s own remarks.</param>
+public sealed record SaveWorkerScheduleRequest(
+    string Kind,
+    DateOnly? CycleAnchor,
+    int? CycleWorkingDays,
+    int? CycleRestDays,
+    TimeOnly? CycleStartsAt,
+    TimeOnly? CycleEndsAt,
+    int SlotMinutes,
+    int BufferMinutes,
+    int HorizonDays,
+    DateOnly MaterializeFrom);
+
+/// <summary>`20-14`: one worker's schedule, in full - the schedule section of `20-13`'s worker card
+/// prefills straight from this, the same one-shape-for-read-and-edit pattern <see cref="WorkerResponse"/>
+/// already uses.</summary>
+public sealed record WorkerScheduleResponse(
+    Guid ScheduleId,
+    Guid WorkerId,
+    string Kind,
+    DateOnly? CycleAnchor,
+    int? CycleWorkingDays,
+    int? CycleRestDays,
+    TimeOnly? CycleStartsAt,
+    TimeOnly? CycleEndsAt,
+    int SlotMinutes,
+    int BufferMinutes,
+    int HorizonDays,
+    DateOnly MaterializeFrom,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
 
 /// <summary>
 /// `20-15`: one worker's materialised schedule, whatever it currently is. The item's own plainest-

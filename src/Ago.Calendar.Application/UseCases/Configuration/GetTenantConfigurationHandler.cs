@@ -11,7 +11,6 @@ public readonly record struct ConfiguredCalendar(
     CalendarId CalendarId,
     string Name,
     string TimeZone,
-    int BufferMinutes,
     bool IsPublished,
     IReadOnlyList<Guid> WorkerIds,
     IReadOnlyList<ConfiguredWorkingHoursRule> WorkingHours);
@@ -87,7 +86,6 @@ public sealed class GetTenantConfigurationHandler(
                 calendar.Id,
                 calendar.Name,
                 calendar.TimeZone.Value,
-                calendar.BufferMinutes,
                 calendar.IsPublished,
                 [.. tenantWorkers.Where(worker => worker.WorksIn(calendar.Id)).Select(worker => worker.Id.Value)],
                 [

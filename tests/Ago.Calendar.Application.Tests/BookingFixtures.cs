@@ -47,7 +47,7 @@ internal static class BookingFixtures
     public static BookingCalendar Calendar(bool published = true)
     {
         var calendar = BookingCalendar.Create(
-            CalendarId, TenantId, "Main", new CalendarTimeZone("Europe/Moscow"), 10, Now);
+            CalendarId, TenantId, "Main", new CalendarTimeZone("Europe/Moscow"), Now);
         if (published)
         {
             calendar.Publish();

@@ -38,20 +38,20 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
 
     public FixedClock Clock { get; } = clock;
 
-    public async Task<AvailabilityMaterialized> MaterializeAsync(CalendarId calendarId, int horizonDays)
+    public async Task<AvailabilityMaterialized> MaterializeAsync(CalendarId calendarId)
     {
         await using var db = fixture.CreateDbContext();
         var handler = new MaterializeAvailabilityHandler(
             new BookingCalendarRepository(db),
             new WorkerRepository(db),
             new WorkingHoursRuleRepository(db),
-            new ServiceRepository(db),
+            new WorkerScheduleRepository(db),
             new EventRepository(db),
             Resolver,
             new UuidV7Generator(),
             Clock);
 
-        return await handler.HandleAsync(new MaterializeAvailability(calendarId, horizonDays), CancellationToken.None);
+        return await handler.HandleAsync(new MaterializeAvailability(calendarId), CancellationToken.None);
     }
 
     /// <summary>
@@ -87,7 +87,7 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
             new BookingCalendarRepository(db),
             new PermissionChecker(db),
             new WorkerRepository(db),
-            new ServiceRepository(db),
+            new WorkerScheduleRepository(db),
             new EventRepository(db),
             Resolver,
             new UuidV7Generator(),

@@ -91,7 +91,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
         await harness.DeleteDayOffAsync(seed, Tuesday);
 
         // The run that would have undone it if a day off were an absence rather than a row.
-        var rerun = await harness.MaterializeAsync(seed.Calendar.Id, horizonDays: 6);
+        var rerun = await harness.MaterializeAsync(seed.Calendar.Id);
 
         Assert.Equal(0, rerun.SlotsInserted);
 
@@ -138,7 +138,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
         var (seed, harness) = await AMaterializedWeekAsync();
         await harness.EditDayBoundaryAsync(seed, Tuesday, new TimeOnly(12, 0), new TimeOnly(15, 0));
 
-        var rerun = await harness.MaterializeAsync(seed.Calendar.Id, horizonDays: 6);
+        var rerun = await harness.MaterializeAsync(seed.Calendar.Id);
 
         Assert.Equal(0, rerun.SlotsInserted);
 
@@ -184,9 +184,11 @@ public class ManualDayEditingTests(PostgresFixture fixture)
         var seed = await CalendarSeed.WriteAsync(fixture);
         await CalendarSeed.AddWorkingHoursAsync(
             fixture, seed, new TimeOnly(9, 0), new TimeOnly(18, 0), CalendarSeed.EveryDay);
+        // `20-14`: slot length, buffer and horizon now come from the worker's own schedule.
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, seed, horizonDays: 6);
 
         var harness = new AvailabilityHarness(fixture, new FixedClock(Monday));
-        await harness.MaterializeAsync(seed.Calendar.Id, horizonDays: 6);
+        await harness.MaterializeAsync(seed.Calendar.Id);
         return (seed, harness);
     }
 

@@ -211,7 +211,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         // is per worker, so two calendars sharing one would constrain the fixture for no reason.
         var secondCalendar = BookingCalendar.Create(
             new CalendarId(CalendarSeed.NewId()), first.Tenant.Id, "Second",
-            new CalendarTimeZone("Europe/Moscow"), 10, Now);
+            new CalendarTimeZone("Europe/Moscow"), Now);
         secondCalendar.Publish();
         var secondWorker = Worker.Create(
             new WorkerId(CalendarSeed.NewId()), first.Tenant.Id, "Bo", "Bo", null, CalendarSeed.Now);

@@ -56,18 +56,15 @@ public class ConfigurationHandlerTests
     }
 
     [Theory]
-    [InlineData("", "Europe/Moscow", 10)]
-    [InlineData("Main", "+03:00", 10)]
-    [InlineData("Main", "Europe/Moscow", -1)]
-    [InlineData("Main", "Europe/Moscow", 100_000)]
-    public async Task CreatingACalendar_TurnsADomainRefusalIntoAnOrdinaryRejection(
-        string name, string zone, int buffer)
+    [InlineData("", "Europe/Moscow")]
+    [InlineData("Main", "+03:00")]
+    public async Task CreatingACalendar_TurnsADomainRefusalIntoAnOrdinaryRejection(string name, string zone)
     {
-        // A tenant typing "-5" into a buffer field is a caller mistake. Letting the aggregate's
-        // ArgumentOutOfRangeException escape would make a 400 look like a 500 in every log.
+        // A tenant typing an unresolvable zone id is a caller mistake. Letting the aggregate's
+        // ArgumentException escape would make a 400 look like a 500 in every log.
         var world = new World();
 
-        var result = await world.CreateCalendarAsync(name: name, timeZone: zone, bufferMinutes: buffer);
+        var result = await world.CreateCalendarAsync(name: name, timeZone: zone);
 
         Assert.True(result.IsFailure);
         Assert.Equal("configuration.invalid", result.Error!.Value.Code);
@@ -298,7 +295,7 @@ public class ConfigurationHandlerTests
         public RecordingWorkerRepository Workers { get; } = new();
 
         public Task<Result<CalendarId>> CreateCalendarAsync(
-            string name = "Main", string timeZone = "Europe/Moscow", int bufferMinutes = 10, bool publish = true) =>
+            string name = "Main", string timeZone = "Europe/Moscow", bool publish = true) =>
             new CreateCalendarHandler(
                     new FakeTenantRepository(Tenant),
                     Calendars,
@@ -306,7 +303,7 @@ public class ConfigurationHandlerTests
                     new SequentialIdGenerator(),
                     new FakeClock(BookingFixtures.Now))
                 .HandleAsync(
-                    new CreateCalendar(Actor, BookingFixtures.TenantId, name, timeZone, bufferMinutes, publish),
+                    new CreateCalendar(Actor, BookingFixtures.TenantId, name, timeZone, publish),
                     CancellationToken.None);
 
         public Task<Result<WorkerId>> CreateWorkerAsync(

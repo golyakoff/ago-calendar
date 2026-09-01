@@ -56,6 +56,11 @@ public static class ConsoleEndpoints
         group.MapGet("/workers/{workerId:guid}", HandleGetWorkerAsync).WithName("GetWorker");
         group.MapPut("/workers/{workerId:guid}", HandleUpdateWorkerAsync).WithName("UpdateWorker");
         group.MapDelete("/workers/{workerId:guid}", HandleDeleteWorkerAsync).WithName("DeleteWorker");
+
+        // `20-14`: a worker's own schedule template - weekly or cycle, slot length, buffer, horizon.
+        group.MapGet("/workers/{workerId:guid}/schedule", HandleGetWorkerScheduleAsync).WithName("GetWorkerSchedule");
+        group.MapPut("/workers/{workerId:guid}/schedule", HandleSaveWorkerScheduleAsync).WithName("SaveWorkerSchedule");
+
         group.MapPost("/working-hours", HandleAddWorkingHoursAsync).WithName("AddWorkingHoursRule");
 
         group.MapGet("/pending-bookings", HandlePendingBookingsAsync).WithName("GetPendingBookings");
@@ -108,7 +113,6 @@ public static class ConsoleEndpoints
                     calendar.CalendarId.Value,
                     calendar.Name,
                     calendar.TimeZone,
-                    calendar.BufferMinutes,
                     calendar.IsPublished,
                     calendar.WorkerIds,
                     [
@@ -160,7 +164,7 @@ public static class ConsoleEndpoints
         var result = await handler.HandleAsync(
             new CreateCalendar(
                 principal.GetOperatorId(), principal.GetTenantId(),
-                request.Name, request.TimeZone, request.BufferMinutes, request.Publish),
+                request.Name, request.TimeZone, request.Publish),
             cancellationToken);
 
         // 201 with a Location, because this one genuinely creates a resource and there is a real URL
@@ -187,7 +191,7 @@ public static class ConsoleEndpoints
         var result = await handler.HandleAsync(
             new UpdateCalendar(
                 principal.GetOperatorId(), principal.GetTenantId(), new CalendarId(calendarId),
-                request.Name, request.BufferMinutes, request.Publish),
+                request.Name, request.Publish),
             cancellationToken);
 
         return Complete(result, httpContext);
@@ -303,6 +307,79 @@ public static class ConsoleEndpoints
                 new DeleteWorker(principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId)),
                 cancellationToken),
             httpContext);
+
+    private static async Task<IResult> HandleGetWorkerScheduleAsync(
+        Guid workerId,
+        ClaimsPrincipal principal,
+        GetWorkerScheduleHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetWorkerSchedule(principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId)),
+            cancellationToken);
+
+        return result.IsSuccess
+            ? Results.Ok(ToWorkerScheduleResponse(result.Value))
+            : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    private static async Task<IResult> HandleSaveWorkerScheduleAsync(
+        Guid workerId,
+        SaveWorkerScheduleRequest request,
+        ClaimsPrincipal principal,
+        SaveWorkerScheduleHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        ScheduleKind kind;
+        if (string.Equals(request.Kind, "Weekly", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = ScheduleKind.Weekly;
+        }
+        else if (string.Equals(request.Kind, "Cycle", StringComparison.OrdinalIgnoreCase))
+        {
+            kind = ScheduleKind.Cycle;
+        }
+        else
+        {
+            return new Error("configuration.invalid", $"Unknown schedule kind '{request.Kind}'; expected 'Weekly' or 'Cycle'.")
+                .ToProblem(httpContext);
+        }
+
+        var result = await handler.HandleAsync(
+            new SaveWorkerSchedule(
+                principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId), kind,
+                request.CycleAnchor, request.CycleWorkingDays, request.CycleRestDays,
+                request.CycleStartsAt, request.CycleEndsAt,
+                request.SlotMinutes, request.BufferMinutes, request.HorizonDays, request.MaterializeFrom),
+            cancellationToken);
+
+        return result.IsSuccess
+            ? Results.Ok(ToWorkerScheduleResponse(result.Value))
+            : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    private static WorkerScheduleResponse ToWorkerScheduleResponse(WorkerScheduleDetail schedule) => new(
+        schedule.ScheduleId.Value,
+        schedule.WorkerId.Value,
+        schedule.Kind.ToString(),
+        schedule.CycleAnchor,
+        schedule.CycleWorkingDays,
+        schedule.CycleRestDays,
+        schedule.CycleStartsAt,
+        schedule.CycleEndsAt,
+        schedule.SlotMinutes,
+        schedule.BufferMinutes,
+        schedule.HorizonDays,
+        schedule.MaterializeFrom,
+        schedule.CreatedAt,
+        schedule.UpdatedAt);
 
     private static WorkerResponse ToWorkerResponse(WorkerDetail worker) => new(
         worker.WorkerId.Value,

@@ -5,8 +5,8 @@ using Ago.Platform.Kernel;
 namespace Ago.Calendar.Application.UseCases.MaterializeAvailability;
 
 /// <summary>
-/// Generates the <see cref="EventStatus.Available"/> rows a customer will later claim, out to a
-/// rolling horizon, for every active worker on one calendar.
+/// Generates the <see cref="EventStatus.Available"/> rows a customer will later claim, out to each
+/// worker's own rolling horizon, for every active worker on one calendar.
 ///
 /// <para><b>Why rows exist before anybody books them.</b> The rejected alternative is to compute
 /// availability on the fly - take the worker's rules, subtract the bookings, hand the customer the
@@ -15,11 +15,17 @@ namespace Ago.Calendar.Application.UseCases.MaterializeAvailability;
 /// it needs a lock invented over an interval, and two customers who both computed the same gap both
 /// pass every check an application layer can make. A materialised row turns the whole race into
 /// <c>UPDATE ... WHERE id = @id AND status = 'Available'</c>, whose rows-affected count is the
-/// verdict and whose arbiter is Postgres. data-model.md already made this exact call once, for the
-/// same reason, when it made AGO Chat's <c>active_chats</c> a real column instead of a count over
-/// assignments. The second win is the feature this item is named after: with rows, "I am closed next
-/// Tuesday" is an edit to Tuesday, not a declarative exception language bolted onto the recurrence
-/// rule.</para>
+/// verdict and whose arbiter is Postgres.</para>
+///
+/// <para><b>`20-14`: what feeds the grid moved from the calendar to the worker.</b> Slot length used
+/// to be the longest service a worker offers, the buffer used to be per calendar, and the horizon used
+/// to be one deployment-wide number. All three now come from <see cref="WorkerSchedule"/>, which also
+/// decides *which days* are working ones: a <see cref="ScheduleKind.Weekly"/> schedule still reads
+/// <see cref="WorkingHoursRule"/> exactly as `20-02` always did, and a <see cref="ScheduleKind.Cycle"/>
+/// schedule asks <see cref="WorkerSchedule.IsCycleWorkingDay"/> instead - the same
+/// <c>GenerateDay</c> call either way, branched once on <see cref="WorkerSchedule.Kind"/>. A worker
+/// with no schedule at all has nothing bookable, the same conclusion this handler already drew for a
+/// worker who offers no service, before this item.</para>
 ///
 /// <para><b>The non-destructive rule, stated once and enforced twice.</b> <i>This handler only ever
 /// inserts, and only into business-local days that have no event row at all.</i> It never updates,
@@ -30,19 +36,29 @@ namespace Ago.Calendar.Application.UseCases.MaterializeAvailability;
 /// <c>events</c> is the half that holds when two <c>Ago.Calendar.Worker</c> replicas run this at the
 /// same instant and both see the same empty day (adr/0049, adr/0053).</para>
 ///
+/// <para><b>The cursor is the other half of "safe to repeat", and it is cheaper than the row check.</b>
+/// <see cref="WorkerSchedule.MaterializeFrom"/> only ever advances, to one past the last day this run
+/// covered - so a second run with the same wall clock has nothing left in
+/// <c>[max(today, MaterializeFrom), today + HorizonDays]</c> to consider at all and returns without
+/// touching the database a second time. In real, daily operation the window this collapses to is a
+/// single new day: the day the rolling horizon just grew into. One consequence worth stating plainly,
+/// because it is easy to miss: a <see cref="WorkingHoursRule"/> added for a day that already fell
+/// inside a previously-cut window is not retroactively backfilled once the cursor has passed it - the
+/// job only ever looks forward from the cursor, never back below it. `20-14`'s own "Decided" section
+/// states the cursor rule in exactly these terms; the trade is deliberate; re-cutting a day the cursor
+/// has already passed is `20-16`'s job.</para>
+///
 /// <para><b>Where wall clock becomes an instant.</b> Exactly one call, on the line that resolves a
-/// rule's <c>09:00 .. 18:00</c> against <see cref="BookingCalendar.TimeZone"/>, plus the one that
-/// asks which local day "now" falls on. Everything after that - <see cref="SlotGrid"/>, the buffer
-/// arithmetic, the "has this slot already ended" filter, the constraint - is absolute time. That is
-/// the entire DST story: a rule at 09:00 local is 09:00 local on both sides of a transition because
-/// each day is resolved on its own, and the day the clocks move is simply a shorter or longer window
-/// than its neighbours.</para>
+/// day's working hours - a <see cref="WorkingHoursRule"/> or the schedule's own cycle hours - against
+/// <see cref="BookingCalendar.TimeZone"/>, plus the one that asks which local day "now" falls on.
+/// Everything after that - <see cref="SlotGrid"/>, the buffer arithmetic, the "has this slot already
+/// ended" filter, the constraint - is absolute time.</para>
 /// </summary>
 public sealed class MaterializeAvailabilityHandler(
     IBookingCalendarRepository calendars,
     IWorkerRepository workers,
     IWorkingHoursRuleRepository rules,
-    IServiceRepository services,
+    IWorkerScheduleRepository schedules,
     IEventRepository events,
     IWallClockResolver wallClock,
     IIdGenerator idGenerator,
@@ -51,8 +67,6 @@ public sealed class MaterializeAvailabilityHandler(
     public async Task<AvailabilityMaterialized> HandleAsync(
         MaterializeAvailability command, CancellationToken cancellationToken)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(command.HorizonDays);
-
         var calendar = await calendars.GetByIdAsync(command.CalendarId, cancellationToken);
         if (calendar is null)
         {
@@ -63,11 +77,10 @@ public sealed class MaterializeAvailabilityHandler(
 
         var now = clock.UtcNow;
 
-        // Conversion #1 of 2. "Today" is a question about a place, not about UTC - 21:00 in New York
-        // is already tomorrow in UTC, so a horizon counted from the UTC date would be a day out for
-        // every calendar west of Greenwich for part of every day.
-        var firstDay = wallClock.ToLocalDate(calendar.TimeZone, now);
-        var lastDay = firstDay.AddDays(command.HorizonDays);
+        // "Today" is a question about a place, not about UTC - 21:00 in New York is already tomorrow
+        // in UTC, so a horizon counted from the UTC date would be a day out for every calendar west
+        // of Greenwich for part of every day.
+        var today = wallClock.ToLocalDate(calendar.TimeZone, now);
 
         var calendarWorkers = await workers.ListActiveForCalendarAsync(calendar.Id, cancellationToken);
         if (calendarWorkers.Count == 0)
@@ -76,8 +89,8 @@ public sealed class MaterializeAvailabilityHandler(
         }
 
         var allRules = await rules.ListForCalendarAsync(calendar.Id, cancellationToken);
-        var durations = await LoadServiceDurationsAsync(calendar.TenantId, cancellationToken);
-        var buffer = TimeSpan.FromMinutes(calendar.BufferMinutes);
+        var schedulesByWorker = (await schedules.ListForCalendarAsync(calendar.Id, cancellationToken))
+            .ToDictionary(schedule => schedule.WorkerId);
 
         var daysConsidered = 0;
         var daysSkipped = 0;
@@ -85,20 +98,27 @@ public sealed class MaterializeAvailabilityHandler(
 
         foreach (var worker in calendarWorkers)
         {
-            var slotLength = SlotLengthFor(worker, durations);
-            if (slotLength is null)
+            if (!schedulesByWorker.TryGetValue(worker.Id, out var schedule))
             {
-                // A worker who performs no service has nothing bookable, so there is nothing to
-                // generate. Silently producing zero-length or guessed-length slots would be worse
-                // than producing none: a customer would see time they cannot actually book.
+                // A worker with no schedule yet has nothing bookable - `20-14`'s open question,
+                // decided: a schedule is written by a human, never conjured as a default. Silently
+                // producing slots of a guessed length would be worse than producing none.
                 continue;
             }
 
-            var workerRules = allRules.Where(rule => rule.WorkerId == worker.Id).ToList();
-            if (workerRules.Count == 0)
+            var firstDay = today > schedule.MaterializeFrom ? today : schedule.MaterializeFrom;
+            var lastDay = today.AddDays(schedule.HorizonDays);
+            if (lastDay < firstDay)
             {
+                // The cursor already reaches past this run's horizon - e.g. a tenant paused the
+                // schedule into the future. Nothing to do, and nothing to advance: there is no "past
+                // what it cut" when nothing was cut.
                 continue;
             }
+
+            var workerRules = schedule.Kind == ScheduleKind.Weekly
+                ? allRules.Where(rule => rule.WorkerId == worker.Id).ToList()
+                : [];
 
             var alreadyMaterialized = await events.ListMaterializedLocalDatesAsync(
                 calendar.Id, worker.Id, firstDay, lastDay, cancellationToken);
@@ -118,10 +138,17 @@ public sealed class MaterializeAvailabilityHandler(
                     continue;
                 }
 
-                generated.AddRange(GenerateDay(calendar, worker, day, workerRules, slotLength.Value, buffer, now));
+                generated.AddRange(GenerateDay(calendar, worker, schedule, day, workerRules, now));
             }
 
             slotsInserted += await events.InsertAvailableSlotsAsync(generated, cancellationToken);
+
+            // Past what this run cut, always - whether or not it generated anything: a Weekly
+            // schedule with no hours entered yet still had its window considered, and the cursor
+            // moving on is what keeps a daily job's window a single new day rather than a re-scan of
+            // an ever-growing one.
+            schedule.AdvanceCursor(lastDay.AddDays(1), now);
+            await schedules.SaveAsync(schedule, cancellationToken);
         }
 
         return new AvailabilityMaterialized(daysConsidered, daysSkipped, slotsInserted);
@@ -130,24 +157,17 @@ public sealed class MaterializeAvailabilityHandler(
     private IEnumerable<Event> GenerateDay(
         BookingCalendar calendar,
         Worker worker,
+        WorkerSchedule schedule,
         DateOnly day,
         IReadOnlyList<WorkingHoursRule> workerRules,
-        TimeSpan slotLength,
-        TimeSpan buffer,
         DateTimeOffset now)
     {
-        foreach (var rule in workerRules.Where(rule => rule.DayOfWeek == day.DayOfWeek))
-        {
-            // Conversion #2 of 2, and the only one that turns a WorkingHoursRule into real time.
-            // Resolved per day, never once per week: that is precisely what makes 09:00 mean 09:00
-            // on both sides of a DST transition instead of drifting by an hour for half the year.
-            var window = wallClock.ToInstantWindow(calendar.TimeZone, day, rule.StartsAt, rule.EndsAt);
-            if (window is null)
-            {
-                continue;
-            }
+        var slotLength = TimeSpan.FromMinutes(schedule.SlotMinutes);
+        var buffer = TimeSpan.FromMinutes(schedule.BufferMinutes);
 
-            foreach (var slot in SlotGrid.Fill(window.Value, slotLength, buffer))
+        foreach (var window in WindowsFor(calendar, schedule, day, workerRules))
+        {
+            foreach (var slot in SlotGrid.Fill(window, slotLength, buffer))
             {
                 // A first run at three in the afternoon must not publish this morning's slots.
                 // Event.Claim would refuse them anyway, so they would be inert rows a customer can
@@ -169,37 +189,48 @@ public sealed class MaterializeAvailabilityHandler(
         }
     }
 
-    private async Task<Dictionary<ServiceId, TimeSpan>> LoadServiceDurationsAsync(
-        TenantId tenantId, CancellationToken cancellationToken)
-    {
-        var tenantServices = await services.ListForTenantAsync(tenantId, cancellationToken);
-        return tenantServices.ToDictionary(service => service.Id, service => service.Duration);
-    }
-
     /// <summary>
-    /// How long one slot is: the <b>longest</b> service this worker offers.
+    /// The one or zero working windows <paramref name="day"/> resolves to, wall clock converted to
+    /// absolute time exactly once - the single bridge <c>adr/0049</c> names, unchanged in shape by
+    /// this item even though what feeds it now branches on <see cref="WorkerSchedule.Kind"/>.
     ///
-    /// <para>A materialised slot exists before anybody has chosen a service for it -
-    /// <see cref="Event.ServiceId"/> is null until <see cref="Event.Claim"/> - so its length has to
-    /// be one that every service the worker performs fits inside. The shortest would have been the
-    /// other candidate and is simply wrong: it would publish 15-minute slots that a 45-minute
-    /// haircut can never be booked into, so the worker's main service would be unbookable. The cost
-    /// of the longest is honest and stated rather than hidden: a worker offering a 15-minute and a
-    /// 90-minute service publishes 90-minute slots, so a short booking consumes a long one. The real
-    /// fix is a per-service grid, which is a different data model (a slot would stop being one row
-    /// with one status), and it is not what this item is for.</para>
+    /// <para><b>Weekly</b> can yield more than one window a day (two rules on one day is how this
+    /// product expresses a lunch break); <b>Cycle</b> yields at most one, since a cycle schedule
+    /// carries exactly one pair of hours. Both go through the same
+    /// <see cref="IWallClockResolver.ToInstantWindow"/> call, so a DST gap that leaves no real time
+    /// between the day's edges is handled identically for either kind - the resolver returns
+    /// <see langword="null"/> and this method yields nothing for that day.</para>
     /// </summary>
-    private static TimeSpan? SlotLengthFor(Worker worker, Dictionary<ServiceId, TimeSpan> durations)
+    private IEnumerable<TimeSlot> WindowsFor(
+        BookingCalendar calendar, WorkerSchedule schedule, DateOnly day, IReadOnlyList<WorkingHoursRule> workerRules)
     {
-        TimeSpan? longest = null;
-        foreach (var offering in worker.Services)
+        if (schedule.Kind == ScheduleKind.Weekly)
         {
-            if (durations.TryGetValue(offering.ServiceId, out var duration) && (longest is null || duration > longest))
+            foreach (var rule in workerRules.Where(rule => rule.DayOfWeek == day.DayOfWeek))
             {
-                longest = duration;
+                var window = wallClock.ToInstantWindow(calendar.TimeZone, day, rule.StartsAt, rule.EndsAt);
+                if (window is not null)
+                {
+                    yield return window.Value;
+                }
             }
+
+            yield break;
         }
 
-        return longest;
+        // Cycle: the day itself is either working or resting - CycleGrid's pure arithmetic, no
+        // database and no clock involved in that answer. Only a working day resolves an hours window
+        // at all.
+        if (!schedule.IsCycleWorkingDay(day))
+        {
+            yield break;
+        }
+
+        var cycleWindow = wallClock.ToInstantWindow(
+            calendar.TimeZone, day, schedule.CycleStartsAt!.Value, schedule.CycleEndsAt!.Value);
+        if (cycleWindow is not null)
+        {
+            yield return cycleWindow.Value;
+        }
     }
 }

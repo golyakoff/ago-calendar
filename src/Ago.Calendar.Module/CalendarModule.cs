@@ -130,6 +130,10 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<UpdateWorkerHandler>();
         services.AddScoped<DeleteWorkerHandler>();
 
+        // `20-14`: a worker's own schedule template - GET/PUT /workers/{id}/schedule.
+        services.AddScoped<GetWorkerScheduleHandler>();
+        services.AddScoped<SaveWorkerScheduleHandler>();
+
         services.AddScoped<AddWorkingHoursRuleHandler>();
         services.AddScoped<SetAllowedOriginsHandler>();
         services.AddScoped<RegisterTenantHandler>();

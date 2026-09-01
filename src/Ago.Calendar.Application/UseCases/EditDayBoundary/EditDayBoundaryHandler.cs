@@ -44,7 +44,7 @@ public sealed class EditDayBoundaryHandler(
     IBookingCalendarRepository calendars,
     IPermissionChecker permissions,
     IWorkerRepository workers,
-    IServiceRepository services,
+    IWorkerScheduleRepository schedules,
     IEventRepository events,
     IWallClockResolver wallClock,
     IIdGenerator idGenerator,
@@ -95,10 +95,10 @@ public sealed class EditDayBoundaryHandler(
             return AvailabilityErrors.DayHasBookings(command.LocalDate);
         }
 
-        var slotLength = LongestServiceOf(worker, await services.ListForTenantAsync(calendar.TenantId, cancellationToken));
-        if (slotLength is null)
+        var schedule = await schedules.GetByWorkerIdAsync(command.WorkerId, cancellationToken);
+        if (schedule is null)
         {
-            return AvailabilityErrors.WorkerNotOnCalendar(command.WorkerId, command.CalendarId);
+            return AvailabilityErrors.WorkerHasNoSchedule(command.WorkerId);
         }
 
         var now = clock.UtcNow;
@@ -113,7 +113,8 @@ public sealed class EditDayBoundaryHandler(
 
         var replacements = window is null
             ? []
-            : SlotGrid.Fill(window.Value, slotLength.Value, TimeSpan.FromMinutes(calendar.BufferMinutes))
+            : SlotGrid.Fill(
+                    window.Value, TimeSpan.FromMinutes(schedule.SlotMinutes), TimeSpan.FromMinutes(schedule.BufferMinutes))
                 .Where(slot => slot.EndsAt > now)
                 .Select(slot => Event.Materialize(
                     new EventId(idGenerator.NewId(now)),
@@ -140,22 +141,4 @@ public sealed class EditDayBoundaryHandler(
 
     private static bool HoldsACustomer(Event @event) =>
         @event.Status is EventStatus.PendingConfirmation or EventStatus.Booked or EventStatus.NoShow;
-
-    /// <summary>The same rule the materialiser uses, for the same reason: a regenerated day whose
-    /// slots were a different length to the generated ones would make a hand-edited Tuesday
-    /// unbookable for the worker's longest service. See
-    /// <c>MaterializeAvailabilityHandler.SlotLengthFor</c> for why longest and not shortest.</summary>
-    private static TimeSpan? LongestServiceOf(Worker worker, IReadOnlyList<Service> tenantServices)
-    {
-        TimeSpan? longest = null;
-        foreach (var service in tenantServices.Where(service => worker.Offers(service.Id)))
-        {
-            if (longest is null || service.Duration > longest)
-            {
-                longest = service.Duration;
-            }
-        }
-
-        return longest;
-    }
 }

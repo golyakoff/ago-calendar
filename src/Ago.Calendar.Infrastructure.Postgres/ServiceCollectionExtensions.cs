@@ -34,6 +34,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IServiceRepository, ServiceRepository>();
         services.AddScoped<ICustomerRepository, CustomerRepository>();
         services.AddScoped<IWorkingHoursRuleRepository, WorkingHoursRuleRepository>();
+        // `20-14`: a worker's own schedule template - the materialiser's other input alongside
+        // IWorkingHoursRuleRepository.
+        services.AddScoped<IWorkerScheduleRepository, WorkerScheduleRepository>();
         services.AddScoped<IEventRepository, EventRepository>();
         // `20-03`: the booking write - the compare-and-set claim and the lead-card upsert, in one
         // transaction. Scoped like every other adapter here, because it holds the DbContext whose

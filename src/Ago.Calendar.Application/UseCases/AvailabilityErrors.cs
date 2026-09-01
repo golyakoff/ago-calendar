@@ -37,4 +37,11 @@ public static class AvailabilityErrors
     public static Error WorkerNotOnCalendar(WorkerId workerId, CalendarId calendarId) => new(
         "availability.worker_not_on_calendar",
         $"Worker {workerId.Value} does not work in calendar {calendarId.Value}.");
+
+    /// <summary>`20-14`: a manual day edit needs the worker's own slot length and buffer, which now
+    /// live on <see cref="WorkerSchedule"/> rather than being derivable from the longest offered
+    /// service. A worker with no schedule has nothing to regenerate the day's shape from.</summary>
+    public static Error WorkerHasNoSchedule(WorkerId workerId) => new(
+        "availability.worker_has_no_schedule",
+        $"Worker {workerId.Value} has no schedule yet, so there is no slot length or buffer to edit this day with.");
 }

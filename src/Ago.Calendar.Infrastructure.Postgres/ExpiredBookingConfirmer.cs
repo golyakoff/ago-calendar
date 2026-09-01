@@ -28,7 +28,13 @@ public sealed class ExpiredBookingConfirmer(
     IIdGenerator idGenerator) : IExpiredBookingConfirmer
 {
     /// <summary>
-    /// <c>WaitingConversationClaimQuery</c>'s query shape, with this product's own predicate.
+    /// <c>WaitingConversationClaimQuery</c>'s query shape, with this product's own predicate - and
+    /// `20-18`'s own addition: this claims only <b>anchor</b> rows, one per booking
+    /// (<c>id = booking_id</c> is true for exactly one row of a run, the run's own anchor - see
+    /// <see cref="Event.BookingId"/>). A batch now bounds how many <i>bookings</i> one tick confirms,
+    /// not how many event rows - the correct unit, since a booking's own rows must be confirmed
+    /// together and a row-counted <c>LIMIT</c> could otherwise cut a run in half between two ticks or,
+    /// worse, between two racing replicas.
     ///
     /// <para><c>status = 'PendingConfirmation' AND confirmation_deadline &lt;= @now</c> is the whole
     /// decision, and it is made inside the statement that takes the lock - not read first and acted
@@ -40,18 +46,64 @@ public sealed class ExpiredBookingConfirmer(
     /// order it accumulated and no booking can be starved by newer ones arriving. <c>ix_events_pending_confirmation</c>
     /// (`20-01`) is a partial index on exactly <c>(tenant_id, confirmation_deadline)
     /// WHERE status = 'PendingConfirmation'</c> - written for this query before this query
-    /// existed.</para>
+    /// existed, and it still serves this one: <c>id = booking_id</c> is an extra filter evaluated
+    /// against the rows the index already narrowed down, not a second index this item needed to add.</para>
+    ///
+    /// <para><c>SKIP LOCKED</c> is still here, and still for the reason it always was: two
+    /// <c>Ago.Calendar.Worker</c> replicas sweeping the same tenant must split the backlog, not queue
+    /// behind each other. Locking only the anchor here - one row per booking - is what makes
+    /// <c>SKIP LOCKED</c> safe for a multi-row booking where it would not otherwise be: a plain
+    /// <c>SKIP LOCKED</c> over every row of every due booking could let two replicas each lock a
+    /// *different* row of the *same* run (row 1 already locked by replica A, row 2 not yet, so replica
+    /// B's own scan locks row 2 for itself) - a split claim across two transactions that would confirm
+    /// half a booking twice, from two different processes. Locking one representative row per booking
+    /// first closes that window: of two replicas racing for the same booking, exactly one locks its
+    /// anchor, and <see cref="ClaimGroupMembersSql"/> - the second statement, run only by whichever
+    /// replica won this one - is the only place either replica ever reaches for that booking's other
+    /// rows.</para>
     /// </summary>
-    private const string ClaimSql =
+    private const string ClaimAnchorsSql =
         """
-        SELECT id
+        SELECT booking_id
         FROM events
         WHERE tenant_id = @tenantId
           AND status = 'PendingConfirmation'
           AND confirmation_deadline <= @now
+          AND id = booking_id
         ORDER BY confirmation_deadline
         LIMIT @batchSize
         FOR UPDATE SKIP LOCKED
+        """;
+
+    /// <summary>
+    /// Locks and returns every row of the bookings <see cref="ClaimAnchorsSql"/> just won. A plain
+    /// <c>FOR UPDATE</c>, deliberately without <c>SKIP LOCKED</c>: by the time this runs, this
+    /// transaction already holds the exclusive lock on each booking's own anchor, and no other
+    /// <c>Ago.Calendar.Worker</c> replica can have reached this statement for the same booking without
+    /// having first won that same anchor lock - which, since locks are exclusive, only one transaction
+    /// ever can. The only thing this statement can still block on is an operator's own
+    /// cancel/reject/no-show transaction touching one of these rows directly
+    /// (<c>CancelBookingHandler</c> and siblings) - the pre-existing, deliberate "this handler races
+    /// the sweep" contention <c>RejectBookingHandler</c>'s own remarks describe, now waited out rather
+    /// than raced, which is an acceptable cost for a background tick and not for the customer-facing
+    /// claim path <c>BookingStore</c> never blocks on.
+    ///
+    /// <para>The predicate is re-checked here rather than trusted from the first statement's own
+    /// result, for the same reason a claim always re-checks under its own lock: holding the anchor's
+    /// lock pins the *booking's* status only once every writer of that booking (the sweep included)
+    /// updates every row of it inside one transaction, which is exactly what
+    /// <c>CancelBookingHandler</c>/<c>RejectBookingHandler</c>/<c>MarkNoShowHandler</c> do after
+    /// `20-18` - but re-checking costs nothing extra here (the same index, the same rows) and turns
+    /// "we believe this is still true" into "the database just confirmed it is".</para>
+    /// </summary>
+    private const string ClaimGroupMembersSql =
+        """
+        SELECT id
+        FROM events
+        WHERE booking_id = ANY(@bookingIds)
+          AND status = 'PendingConfirmation'
+          AND confirmation_deadline <= @now
+        FOR UPDATE
         """;
 
     public async Task<int> ConfirmExpiredAsync(
@@ -63,8 +115,9 @@ public sealed class ExpiredBookingConfirmer(
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         var pgTransaction = (NpgsqlTransaction)transaction.GetDbTransaction();
 
-        var claimed = await ClaimAsync(tenantId, now, batchSize, connection, pgTransaction, cancellationToken);
-        if (claimed.Count == 0)
+        var bookingIds = await ClaimAnchorsAsync(
+            tenantId, now, batchSize, connection, pgTransaction, cancellationToken);
+        if (bookingIds.Count == 0)
         {
             // Nothing to do. Committing an empty transaction rather than rolling back for the sake of
             // it - both release the (zero) locks, and one exit path is easier to reason about than
@@ -73,30 +126,54 @@ public sealed class ExpiredBookingConfirmer(
             return 0;
         }
 
-        // Loaded through the same context, so these are the rows the claim just locked. No xmin
-        // conflict is possible here and that is not luck: nothing else can take the lock until this
-        // transaction ends.
+        var claimedEventIds = await ClaimGroupMembersAsync(
+            bookingIds, now, connection, pgTransaction, cancellationToken);
+
+        // Loaded through the same context, so these are the rows the two claims above just locked. No
+        // xmin conflict is possible here and that is not luck: nothing else can take the lock on any
+        // of them until this transaction ends.
         var events = await db.Events
-            .Where(e => claimed.Contains(e.Id))
+            .Where(e => claimedEventIds.Contains(e.Id))
             .ToListAsync(cancellationToken);
 
-        foreach (var booking in events)
-        {
-            // The state machine still runs. The claim's predicate already guarantees the status, so
-            // this cannot throw - which is the point of keeping it: the day somebody widens the
-            // predicate, the aggregate refuses rather than silently confirming something that was
-            // never pending.
-            booking.Confirm(now);
+        var byBooking = events
+            .GroupBy(e => e.BookingId!.Value)
+            .Select(group => group.OrderBy(e => e.StartsAt).ToList());
 
-            var confirmed = booking.DomainEvents.OfType<EventConfirmed>().Single();
-            outbox.Enqueue(BookingConfirmedMapper.ToEnvelope(confirmed, idGenerator));
-            booking.ClearDomainEvents();
+        foreach (var group in byBooking)
+        {
+            // The run's own overall end - the last slot's, buffers between them included - so the one
+            // BookingConfirmed message this group produces describes the whole booking a customer
+            // made, not only its first slot. See BookingConfirmedMapper's own remarks on groupEndsAt.
+            var groupEndsAt = group[^1].EndsAt;
+            EventConfirmed? anchorConfirmed = null;
+
+            foreach (var booking in group)
+            {
+                // The state machine still runs, for every row of the run. The claim's own predicate
+                // already guarantees the status, so this cannot throw - which is the point of keeping
+                // it: the day somebody widens the predicate, the aggregate refuses rather than
+                // silently confirming something that was never pending.
+                booking.Confirm(now);
+
+                if (booking.Id == booking.BookingId)
+                {
+                    anchorConfirmed = booking.DomainEvents.OfType<EventConfirmed>().Single();
+                }
+
+                booking.ClearDomainEvents();
+            }
+
+            // Exactly one outbox row per booking, not per slot - a three-slot run confirming would
+            // otherwise stage three BookingConfirmed messages for one appointment, which `20-05`'s SMS
+            // consumer would turn into three identical texts to one customer.
+            outbox.Enqueue(BookingConfirmedMapper.ToEnvelope(anchorConfirmed!, idGenerator, groupEndsAt));
         }
 
-        // One SaveChangesAsync for the transitions and the outbox rows together - which is what makes
-        // "the state change and its integration event are committed in one transaction" true
-        // (CLAUDE.md rule 4). IOutboxWriter stages onto this same context and performs no I/O of its
-        // own (adr/0017), so there is no second thing to keep in step.
+        // One SaveChangesAsync for every row's transition and every group's outbox row together -
+        // which is what makes "the state change and its integration event are committed in one
+        // transaction" true (CLAUDE.md rule 4). IOutboxWriter stages onto this same context and
+        // performs no I/O of its own (adr/0017), so there is no second thing to keep in step.
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
@@ -120,7 +197,7 @@ public sealed class ExpiredBookingConfirmer(
                 && e.ConfirmationDeadline <= now,
             cancellationToken);
 
-    private static async Task<List<EventId>> ClaimAsync(
+    private static async Task<List<Guid>> ClaimAnchorsAsync(
         TenantId tenantId,
         DateTimeOffset now,
         int batchSize,
@@ -128,10 +205,31 @@ public sealed class ExpiredBookingConfirmer(
         NpgsqlTransaction transaction,
         CancellationToken cancellationToken)
     {
-        await using var command = new NpgsqlCommand(ClaimSql, connection, transaction);
+        await using var command = new NpgsqlCommand(ClaimAnchorsSql, connection, transaction);
         command.Parameters.AddWithValue("tenantId", tenantId.Value);
         command.Parameters.AddWithValue("now", now);
         command.Parameters.AddWithValue("batchSize", batchSize);
+
+        var bookingIds = new List<Guid>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            bookingIds.Add(reader.GetGuid(0));
+        }
+
+        return bookingIds;
+    }
+
+    private static async Task<List<EventId>> ClaimGroupMembersAsync(
+        List<Guid> bookingIds,
+        DateTimeOffset now,
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(ClaimGroupMembersSql, connection, transaction);
+        command.Parameters.AddWithValue("bookingIds", bookingIds.ToArray());
+        command.Parameters.AddWithValue("now", now);
 
         var claimed = new List<EventId>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

@@ -49,18 +49,29 @@ public interface IBookingStore
     /// <summary>
     /// Upserts the lead card and attempts the claim.
     ///
-    /// <para>Returns <c>null</c> when the slot was not claimable - taken by somebody else moments
-    /// ago, already started, blocked, or not on the calendar the caller named. <b>That is an ordinary
-    /// outcome, not a fault</b>: it is what happens to the second of two people reaching for the last
-    /// table, it must never be logged at <c>Error</c>, never surface as a 500, and never be
-    /// distinguished from success by an exception. `4-01` set that precedent explicitly and
-    /// concurrency.md repeats it. Nothing is written when it happens - the transaction rolls
-    /// back.</para>
+    /// <para>Returns <c>null</c> when the run was not claimable in full - any one of its slots was
+    /// taken by somebody else moments ago, already started, blocked, or not on the calendar the caller
+    /// named. <b>That is an ordinary outcome, not a fault</b>: it is what happens to the second of two
+    /// people reaching for the last table, it must never be logged at <c>Error</c>, never surface as a
+    /// 500, and never be distinguished from success by an exception. `4-01` set that precedent
+    /// explicitly and concurrency.md repeats it. Nothing is written when it happens - the whole
+    /// transaction rolls back, including any slot of the run that *was* claimable; a run is claimed
+    /// whole or not at all, by ADR-0086's own amendment of adr/0059 (below).</para>
     ///
     /// <para>The deadline is an absolute instant supplied by the caller, not a window this port adds
     /// to its own reading of the clock: time is a parameter everywhere outside Infrastructure
     /// (adr/0011), and an adapter that computed <c>now + window</c> internally would be an adapter no
     /// test could pin to a fixed instant.</para>
+    ///
+    /// <para><b>`20-18`, ADR-0086 amending adr/0059: the claim generalises from one row to N, still
+    /// one statement.</b>
+    /// <c>UPDATE events SET ... WHERE id = ANY(@ids) AND status = 'Available' AND starts_at > @now</c>,
+    /// with the rows-affected count required to equal <c>@ids.Length</c> - Postgres still the sole
+    /// arbiter, still no lock invented over an interval, it now arbitrates a set instead of a
+    /// singleton. Two customers racing for overlapping runs cannot both win, because at least one
+    /// shared row can only be updated once; whichever caller's statement updates zero or a partial set
+    /// of its own ids rolls back and returns null, so no torn claim - some slots taken, some not - can
+    /// ever be observed.</para>
     /// </summary>
     Task<BookingConfirmation?> TryBookAsync(BookingAttempt attempt, CancellationToken cancellationToken);
 }
@@ -75,7 +86,14 @@ public interface IBookingStore
 /// <param name="CalendarId">Part of the claim's own <c>WHERE</c> clause, not a pre-check: an event
 /// id that belongs to another calendar is then unclaimable by construction rather than by a
 /// validation somebody could forget.</param>
-/// <param name="EventId">The slot being claimed.</param>
+/// <param name="EventIds">
+/// `20-18`: the run being claimed, in start order - one id for an ordinary booking, several for a
+/// service that needs more than one slot. <see cref="EventIds"/>[0] is the anchor: the row every
+/// other row of this run's own <see cref="Event.BookingId"/> will point at, and computed server-side
+/// by <see cref="ConsecutiveRunFinder.FindRun"/> from the slot the customer actually picked - never
+/// trusted from the request, because a caller that could name arbitrary ids here could claim
+/// unrelated times as one booking.
+/// </param>
 /// <param name="ServiceId">What the customer is booking. Written by the claim, since a materialised
 /// slot has no service until somebody chooses one.</param>
 /// <param name="Phone">The lead card's key within the tenant. Personal data - see
@@ -87,7 +105,8 @@ public interface IBookingStore
 /// adapter that called <c>Guid.NewGuid()</c> would be unreproducible in a test.</param>
 /// <param name="Now">The instant the booking is being made, from <c>IClock</c>. Also the claim's
 /// "this slot has not started yet" predicate.</param>
-/// <param name="ConfirmationDeadline">When the operator's veto window closes.</param>
+/// <param name="ConfirmationDeadline">When the operator's veto window closes. The same instant for
+/// every row of the run - a booking has one deadline, not one per slot.</param>
 /// <param name="PhoneVerifiedAt">
 /// `20-09`: nullable, because this item's own scope is chat-only for now (<c>BookEvent.RequiresVerifiedPhone</c>'s
 /// own remarks) - <c>BookEventHandler</c> only refuses to build a <see cref="BookingAttempt"/> when the
@@ -101,7 +120,7 @@ public interface IBookingStore
 public readonly record struct BookingAttempt(
     TenantId TenantId,
     CalendarId CalendarId,
-    EventId EventId,
+    IReadOnlyList<EventId> EventIds,
     ServiceId ServiceId,
     PhoneNumber Phone,
     string? DisplayName,
@@ -117,8 +136,20 @@ public readonly record struct BookingAttempt(
 /// values below are the ones the claim itself wrote, which is the only reading that is certainly
 /// about this booking.
 /// </summary>
+/// <param name="BookingId">
+/// `20-18`: the anchor row's id - <see cref="EventIds"/>[0], and the value every row of the run now
+/// carries as its own <see cref="Event.BookingId"/>. This is what a customer is quoted and what an
+/// operator's cancel/reject/no-show route names; resolving the rest of the run from it is one lookup
+/// (<c>WHERE booking_id = @bookingId</c>), never a second id type.
+/// </param>
+/// <param name="EventIds">Every slot the run claimed, in the same start order <see cref="BookingAttempt.EventIds"/>
+/// named them.</param>
+/// <param name="Slot">The run's own whole span - the first slot's start to the last slot's end,
+/// buffers between them included, matching the item's own "the buffers inside a run belong to the
+/// booking".</param>
 public readonly record struct BookingConfirmation(
-    EventId EventId,
+    EventId BookingId,
+    IReadOnlyList<EventId> EventIds,
     CustomerId CustomerId,
     WorkerId WorkerId,
     TimeSlot Slot,

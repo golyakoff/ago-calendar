@@ -85,6 +85,24 @@ public sealed class WorkerSchedule
     /// this is not a lunch break (a hole in the middle of a day is two weekly rules, not a buffer).</summary>
     public int BufferMinutes { get; private set; }
 
+    /// <summary>
+    /// `20-18`: whether the buffers *inside* a multi-slot booking count toward satisfying the
+    /// service's own duration, or only toward the run's physical span. Defaults to
+    /// <see langword="true"/> - the author's own framing, *перерывы включаются в групповой слот* - and
+    /// is the tenant's own call because neither reading is right for every trade: counting them is the
+    /// physically accurate one for a single continuous service (the worker is not idle during a gap
+    /// that exists only because the grid has one) and never over-allocates the worker's day; not
+    /// counting them never under-allocates, at the cost of extra slot time nobody asked the worker to
+    /// hold. See <see cref="ConsecutiveRunFinder.ComputeSlotsNeeded"/> for the arithmetic this decides
+    /// between, worked through the item's own 70/30/10 example.
+    ///
+    /// <para>Whichever way this is set, the buffers between a run's own slots are always physically
+    /// consumed by that booking - nothing needs to be stored to make that true, because a buffer is a
+    /// gap with no row in it, so there is nothing there for another customer to claim regardless of
+    /// this flag. What the flag changes is only how many slots a service is deemed to need.</para>
+    /// </summary>
+    public bool BuffersCountTowardServiceDuration { get; private set; } = true;
+
     /// <summary>How many business-local days past today this worker's slots are kept generated.</summary>
     public int HorizonDays { get; private set; }
 
@@ -99,7 +117,8 @@ public sealed class WorkerSchedule
 
     private WorkerSchedule(
         WorkerScheduleId id, WorkerId workerId, ScheduleKind kind,
-        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now)
+        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now,
+        bool buffersCountTowardServiceDuration)
     {
         Id = id;
         WorkerId = workerId;
@@ -110,6 +129,7 @@ public sealed class WorkerSchedule
         MaterializeFrom = materializeFrom;
         CreatedAt = now;
         UpdatedAt = now;
+        BuffersCountTowardServiceDuration = buffersCountTowardServiceDuration;
     }
 
     // EF Core materialization only - never called by domain code.
@@ -119,23 +139,27 @@ public sealed class WorkerSchedule
 
     public static WorkerSchedule CreateWeekly(
         WorkerScheduleId id, WorkerId workerId,
-        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now)
+        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now,
+        bool buffersCountTowardServiceDuration = true)
     {
         ValidateCommon(slotMinutes, bufferMinutes, horizonDays);
         return new WorkerSchedule(
-            id, workerId, ScheduleKind.Weekly, slotMinutes, bufferMinutes, horizonDays, materializeFrom, now);
+            id, workerId, ScheduleKind.Weekly, slotMinutes, bufferMinutes, horizonDays, materializeFrom, now,
+            buffersCountTowardServiceDuration);
     }
 
     public static WorkerSchedule CreateCycle(
         WorkerScheduleId id, WorkerId workerId,
         DateOnly anchor, int workingDays, int restDays, TimeOnly startsAt, TimeOnly endsAt,
-        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now)
+        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now,
+        bool buffersCountTowardServiceDuration = true)
     {
         ValidateCommon(slotMinutes, bufferMinutes, horizonDays);
         ValidateCycle(workingDays, restDays, startsAt, endsAt);
 
         var schedule = new WorkerSchedule(
-            id, workerId, ScheduleKind.Cycle, slotMinutes, bufferMinutes, horizonDays, materializeFrom, now);
+            id, workerId, ScheduleKind.Cycle, slotMinutes, bufferMinutes, horizonDays, materializeFrom, now,
+            buffersCountTowardServiceDuration);
         schedule.CycleAnchor = anchor;
         schedule.CycleWorkingDays = workingDays;
         schedule.CycleRestDays = restDays;
@@ -148,7 +172,8 @@ public sealed class WorkerSchedule
     /// field - so a schedule that has been Weekly since or switched back to Weekly never carries a
     /// previous cycle's numbers behind the flag.</summary>
     public void ReconfigureWeekly(
-        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now)
+        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now,
+        bool buffersCountTowardServiceDuration = true)
     {
         ValidateCommon(slotMinutes, bufferMinutes, horizonDays);
         ValidateMaterializeFromNotRegressing(materializeFrom);
@@ -164,12 +189,14 @@ public sealed class WorkerSchedule
         BufferMinutes = bufferMinutes;
         HorizonDays = horizonDays;
         MaterializeFrom = materializeFrom;
+        BuffersCountTowardServiceDuration = buffersCountTowardServiceDuration;
         UpdatedAt = now;
     }
 
     public void ReconfigureCycle(
         DateOnly anchor, int workingDays, int restDays, TimeOnly startsAt, TimeOnly endsAt,
-        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now)
+        int slotMinutes, int bufferMinutes, int horizonDays, DateOnly materializeFrom, DateTimeOffset now,
+        bool buffersCountTowardServiceDuration = true)
     {
         ValidateCommon(slotMinutes, bufferMinutes, horizonDays);
         ValidateCycle(workingDays, restDays, startsAt, endsAt);
@@ -186,6 +213,7 @@ public sealed class WorkerSchedule
         BufferMinutes = bufferMinutes;
         HorizonDays = horizonDays;
         MaterializeFrom = materializeFrom;
+        BuffersCountTowardServiceDuration = buffersCountTowardServiceDuration;
         UpdatedAt = now;
     }
 

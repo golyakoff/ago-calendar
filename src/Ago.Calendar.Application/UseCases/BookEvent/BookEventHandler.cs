@@ -45,6 +45,7 @@ public sealed class BookEventHandler(
     IEventRepository events,
     IWorkerRepository workers,
     IServiceRepository services,
+    IWorkerScheduleRepository schedules,
     IBookingStore bookings,
     IRateLimiter rateLimiter,
     BookingRateLimitOptions rateLimitOptions,
@@ -135,14 +136,46 @@ public sealed class BookEventHandler(
             return BookingOutcome.Rejected(BookingErrors.ServiceNotOffered());
         }
 
-        // `20-02` sized every materialised slot to the worker's *longest* offered service, so any
-        // service they offer fits the slot they are booked into. Asserted rather than assumed,
-        // because that sizing rule lives in another item and a future change to it would otherwise
-        // silently start overbooking.
         var service = await services.GetByIdAsync(command.ServiceId, cancellationToken);
-        if (service is null || service.TenantId != calendar.TenantId || service.Duration > slot.Slot.Duration)
+        if (service is null || service.TenantId != calendar.TenantId)
         {
             return BookingOutcome.Rejected(BookingErrors.ServiceNotOffered());
+        }
+
+        // `20-18`: a service longer than one slot is several consecutive slots claimed as one
+        // booking, not a service that is simply "not offered" (`20-14`'s own interim rule, removed by
+        // this item). The worker's own schedule carries the numbers the run needs - slot length,
+        // buffer, and whether the buffer counts toward the service's duration
+        // (WorkerSchedule.BuffersCountTowardServiceDuration) - and without a schedule there is no grid
+        // to walk, so no run can exist.
+        var schedule = await schedules.GetByWorkerIdAsync(worker.Id, cancellationToken);
+        if (schedule is null)
+        {
+            return BookingOutcome.Rejected(BookingErrors.ServiceNotOffered());
+        }
+
+        // Every row of the worker's own day, whatever its status - the courtesy read
+        // ConsecutiveRunFinder needs to walk in order and see exactly where a run would break. The
+        // status this handler ultimately trusts is still only the claim's own WHERE clause; this read
+        // only decides *which ids to ask the claim for*, and a stale answer here costs nothing more
+        // than the ordinary "slot taken" rejection any lost race already produces.
+        var dayEvents = await events.ListForDayAsync(calendar.Id, worker.Id, slot.LocalDate, cancellationToken);
+
+        var run = ConsecutiveRunFinder.FindRun(
+            dayEvents,
+            command.EventId,
+            (int)service.Duration.TotalMinutes,
+            schedule.SlotMinutes,
+            schedule.BufferMinutes,
+            schedule.BuffersCountTowardServiceDuration);
+
+        if (run is null)
+        {
+            // No consecutive run of the length this service needs exists starting at the slot the
+            // customer picked - too close to the end of the day, a middle slot already taken, or the
+            // chosen slot itself is not Available by this read. Reported exactly like any other lost
+            // race: the customer picked a time that turned out not to work, never a fault.
+            return BookingOutcome.Rejected(BookingErrors.SlotUnavailable());
         }
 
         // `20-09`: the last precondition, checked immediately before the claim itself - deliberately
@@ -181,7 +214,7 @@ public sealed class BookEventHandler(
             new BookingAttempt(
                 calendar.TenantId,
                 calendar.Id,
-                command.EventId,
+                run,
                 command.ServiceId,
                 phone,
                 command.DisplayName,

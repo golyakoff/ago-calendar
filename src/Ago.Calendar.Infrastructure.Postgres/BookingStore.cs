@@ -71,11 +71,23 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
 
     /// <summary>
     /// The claim. Everything a booking must be true about is in the <c>WHERE</c> clause, evaluated
-    /// under the row's own lock in the same statement that changes it.
+    /// under each row's own lock in the same statement that changes it.
     ///
     /// <list type="bullet">
-    ///   <item><c>status = 'Available'</c> - the compare-and-set. Of two simultaneous callers,
-    ///   Postgres gives one 1 row and the other 0. Neither needs to know the other existed.</item>
+    ///   <item><c>status = 'Available'</c> - the compare-and-set. Of two simultaneous callers racing
+    ///   for overlapping runs, at least one shared row can only be updated once, so Postgres cannot
+    ///   give a full match to both. Neither caller needs to know the other existed.</item>
+    ///   <item><c>id = ANY(@eventIds)</c> - `20-18`, ADR-0086's amendment of the single-row form
+    ///   adr/0059 stated first: the claim generalises from one row to N, still one statement, still
+    ///   Postgres as the sole arbiter. <c>ANY</c> over an array parameter rather than a generated
+    ///   <c>IN (...)</c> list, for the identical reason <c>InsertAvailableSlotsAsync</c>'s own
+    ///   <c>unnest()</c> is - the statement's text does not grow with the run's length, so Postgres can
+    ///   reuse its plan regardless of whether a booking is one slot or five.</item>
+    ///   <item><c>booking_id = @bookingId</c> - written identically onto every row this statement
+    ///   touches, where <c>@bookingId</c> is the run's own anchor id
+    ///   (<see cref="BookingConfirmation.BookingId"/>). A single-slot booking's own anchor is simply
+    ///   its one row's own id, so this column is never null on a claimed row - "group by booking_id"
+    ///   is one rule with no special case.</item>
     ///   <item><c>calendar_id = @calendarId</c> - an event id belonging to another calendar is
     ///   unclaimable by construction, not by a validation a future caller could forget. The endpoint
     ///   is unauthenticated, so the route's own calendar id is the only thing tying the request to a
@@ -84,6 +96,13 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
     ///   where it cannot go stale. Checked in application code it would be checked against a reading
     ///   of the row from milliseconds ago.</item>
     /// </list>
+    ///
+    /// <para><b>The rows-affected count is still the whole verdict, generalised to "equals the run's
+    /// own length".</b> Fewer rows than <c>@eventIds</c> named means at least one slot of the run was
+    /// unavailable - taken, blocked, started, or on another calendar - and <see cref="ClaimAsync"/>
+    /// rolls the whole attempt back rather than accepting a partial claim: a booking is claimed whole
+    /// or not at all, which is what stops a torn state (some of a customer's slots taken, some not)
+    /// from ever being observable.</para>
     ///
     /// <para><b>`20-09`: deliberately does <em>not</em> add a <c>phone_verified_at IS NOT NULL</c>
     /// condition here, and that is a considered choice, not an oversight.</b> The reason every other
@@ -98,9 +117,10 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
     /// stronger guarantee besides: it holds for every future caller of this port by construction, not
     /// only for the one caller that happens to remember a runtime check.</para>
     ///
-    /// <para><c>RETURNING</c> hands back what the confirmation needs, from the write itself. A
-    /// follow-up <c>SELECT</c> would be a second round trip reading a row that `20-04`'s sweep could
-    /// already have moved on - the values below are the ones this statement wrote.</para>
+    /// <para><c>RETURNING</c> hands back what the confirmation needs, from the write itself, one row
+    /// per slot claimed. A follow-up <c>SELECT</c> would be a second round trip reading rows that
+    /// `20-04`'s sweep could already have moved on - the values below are the ones this statement
+    /// wrote.</para>
     ///
     /// <para>The statement never touches <c>no_show_count</c> or any other lead-card field: a
     /// booking is a fact about a slot, and conflating the two writes is how one contended statement
@@ -112,12 +132,13 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
         SET status = 'PendingConfirmation',
             customer_id = @customerId,
             service_id = @serviceId,
-            confirmation_deadline = @deadline
-        WHERE id = @eventId
+            confirmation_deadline = @deadline,
+            booking_id = @bookingId
+        WHERE id = ANY(@eventIds)
           AND calendar_id = @calendarId
           AND status = 'Available'
           AND starts_at > @now
-        RETURNING worker_id, starts_at, ends_at, local_date
+        RETURNING id, worker_id, starts_at, ends_at, local_date
         """;
 
     public async Task<BookingConfirmation?> TryBookAsync(
@@ -172,29 +193,59 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
         NpgsqlTransaction transaction,
         CancellationToken cancellationToken)
     {
+        // The run's own anchor - EventIds[0] by BookingAttempt's own contract (BookEventHandler builds
+        // it from ConsecutiveRunFinder.FindRun, which always returns the chosen starting slot first).
+        var bookingId = attempt.EventIds[0];
+
         await using var command = new NpgsqlCommand(ClaimSlotSql, connection, transaction);
-        command.Parameters.AddWithValue("eventId", attempt.EventId.Value);
+        command.Parameters.AddWithValue("eventIds", attempt.EventIds.Select(id => id.Value).ToArray());
+        command.Parameters.AddWithValue("bookingId", bookingId.Value);
         command.Parameters.AddWithValue("calendarId", attempt.CalendarId.Value);
         command.Parameters.AddWithValue("customerId", customerId.Value);
         command.Parameters.AddWithValue("serviceId", attempt.ServiceId.Value);
         command.Parameters.AddWithValue("deadline", attempt.ConfirmationDeadline);
         command.Parameters.AddWithValue("now", attempt.Now);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var rowsClaimed = 0;
+        WorkerId? workerId = null;
+        DateTimeOffset? earliestStart = null;
+        DateTimeOffset? latestEnd = null;
+        DateOnly? localDate = null;
 
-        // No row is the verdict. Not an exception, not a special value to interpret - the absence of
-        // an updated row *is* "somebody else has it".
-        if (!await reader.ReadAsync(cancellationToken))
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                rowsClaimed++;
+                workerId ??= new WorkerId(reader.GetGuid(1));
+                var startsAt = reader.GetFieldValue<DateTimeOffset>(2);
+                var endsAt = reader.GetFieldValue<DateTimeOffset>(3);
+                earliestStart = earliestStart is null || startsAt < earliestStart ? startsAt : earliestStart;
+                latestEnd = latestEnd is null || endsAt > latestEnd ? endsAt : latestEnd;
+                localDate ??= reader.GetFieldValue<DateOnly>(4);
+            }
+        }
+
+        // Fewer rows than the run named is the verdict, generalising the single-row "no row is the
+        // verdict" rule to a set: not an exception, not a special value to interpret - a partial match
+        // *is* "somebody else has (at least) one slot of this run", and the caller rolls the whole
+        // transaction back rather than accept a torn claim.
+        if (rowsClaimed != attempt.EventIds.Count)
         {
             return null;
         }
 
+        // Every id named was claimed (the count check above is exact, not "at least"), so the ordered
+        // ids the caller asked for - already in start order, ConsecutiveRunFinder's own contract - are
+        // the confirmation's own EventIds. The reader's own row order is not relied on for this: an
+        // UPDATE...RETURNING with no ORDER BY makes no ordering promise, only a set-membership one.
         return new BookingConfirmation(
-            attempt.EventId,
+            bookingId,
+            attempt.EventIds,
             customerId,
-            new WorkerId(reader.GetGuid(0)),
-            new TimeSlot(reader.GetFieldValue<DateTimeOffset>(1), reader.GetFieldValue<DateTimeOffset>(2)),
-            reader.GetFieldValue<DateOnly>(3));
+            workerId!.Value,
+            new TimeSlot(earliestStart!.Value, latestEnd!.Value),
+            localDate!.Value);
     }
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

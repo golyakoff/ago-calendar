@@ -364,7 +364,8 @@ public static class ConsoleEndpoints
                 principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId), kind,
                 request.CycleAnchor, request.CycleWorkingDays, request.CycleRestDays,
                 request.CycleStartsAt, request.CycleEndsAt,
-                request.SlotMinutes, request.BufferMinutes, request.HorizonDays, request.MaterializeFrom),
+                request.SlotMinutes, request.BufferMinutes, request.HorizonDays, request.MaterializeFrom,
+                request.BuffersCountTowardServiceDuration),
             cancellationToken);
 
         return result.IsSuccess
@@ -386,7 +387,8 @@ public static class ConsoleEndpoints
         schedule.HorizonDays,
         schedule.MaterializeFrom,
         schedule.CreatedAt,
-        schedule.UpdatedAt);
+        schedule.UpdatedAt,
+        schedule.BuffersCountTowardServiceDuration);
 
     private static WorkerResponse ToWorkerResponse(WorkerDetail worker) => new(
         worker.WorkerId.Value,
@@ -448,7 +450,7 @@ public static class ConsoleEndpoints
 
         return Results.Ok(result.Value
             .Select(row => new PendingBookingResponse(
-                row.EventId.Value,
+                row.BookingId.Value,
                 row.CalendarId.Value,
                 row.WorkerId.Value,
                 row.ServiceId.Value,
@@ -698,7 +700,8 @@ public static class ConsoleEndpoints
                 row.ServiceName,
                 row.CustomerId?.Value,
                 row.CustomerDisplayName,
-                row.Phone?.Value))
+                row.Phone?.Value,
+                row.BookingId?.Value))
             .ToArray());
     }
 

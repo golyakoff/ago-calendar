@@ -125,6 +125,70 @@ public class ConcurrentConfirmationSweepTests(ConcurrencyFixture fixture)
         await holdingTransaction.RollbackAsync();
     }
 
+    /// <summary>
+    /// `20-18`: the sweep's own grouping guarantee, under the identical two-replica race the
+    /// single-row tests above already prove. A three-slot booking's <c>confirmation_deadline</c> is
+    /// the same instant on every row (the claim writes it once, onto the whole run), so a batch bound
+    /// in *bookings* rather than *rows* is what stops two replicas splitting one run between them -
+    /// see <c>ExpiredBookingConfirmer.ClaimAnchorsSql</c>'s own remarks for the exact mechanism
+    /// (<c>SKIP LOCKED</c> on the anchor row only, then a plain <c>FOR UPDATE</c> on the rest of the
+    /// same transaction's own won bookings).
+    /// </summary>
+    [Fact]
+    public async Task TwoSweepersRacingOneExpiredThreeSlotBooking_ConfirmEveryRowExactlyOnce_WithOneOutboxRow()
+    {
+        var seed = await SeedAsync();
+        var group = await APendingBookingGroupAsync(seed, count: 3);
+
+        var results = await RaceAsync(seed.TenantId, sweepers: 2, batchSize: 10);
+
+        // One sweeper won the whole booking; the other found its anchor already locked and moved on
+        // to nothing, rather than splitting the run between them.
+        Assert.Equal(3, results.Sum());
+
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events
+            .Where(e => group.Select(g => g.Id).Contains(e.Id))
+            .ToListAsync();
+
+        Assert.All(stored, e => Assert.Equal(EventStatus.Booked, e.Status));
+        Assert.All(stored, e => Assert.Equal(group[0].Id, e.BookingId));
+
+        // Exactly one outbox row for the whole booking - not one per slot, which would become three
+        // identical texts to one customer in `20-05`.
+        Assert.Equal(1, await OutboxCountAsync(group[0].Id));
+    }
+
+    private async Task<IReadOnlyList<Event>> APendingBookingGroupAsync(SeededCalendar seed, int count)
+    {
+        var slots = new List<Event>(count);
+        var start = Now.AddDays(3);
+        for (var i = 0; i < count; i++)
+        {
+            slots.Add(Event.Materialize(
+                new EventId(NewId()), seed.TenantId, seed.CalendarId, seed.WorkerId,
+                new TimeSlot(start, start.AddMinutes(30)), DateOnly.FromDateTime(start.UtcDateTime), Now));
+            start = start.AddMinutes(40);
+        }
+
+        var customer = Customer.Register(new CustomerId(NewId()), seed.TenantId, new PhoneNumber("+79997100001"), Now);
+
+        await using var db = fixture.CreateDbContext();
+        db.Customers.Add(customer);
+        db.Events.AddRange(slots);
+        await db.SaveChangesAsync();
+
+        var anchorId = slots[0].Id;
+        foreach (var slot in slots)
+        {
+            slot.Claim(customer.Id, seed.ServiceId, Now, Deadline, anchorId);
+            slot.ClearDomainEvents();
+        }
+
+        await db.SaveChangesAsync();
+        return slots;
+    }
+
     private async Task<IReadOnlyList<int>> RaceAsync(TenantId tenantId, int sweepers, int batchSize)
     {
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

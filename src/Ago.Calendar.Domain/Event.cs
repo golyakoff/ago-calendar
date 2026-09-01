@@ -118,6 +118,29 @@ public sealed class Event
     public DateTimeOffset CreatedAt { get; }
 
     /// <summary>
+    /// `20-18`: which booking this row belongs to. Null on <see cref="EventStatus.Available"/> and
+    /// <see cref="EventStatus.Blocked"/> rows - nobody has claimed anything yet. Set by
+    /// <see cref="Claim"/> and never cleared afterwards, matching <see cref="CustomerId"/>'s own
+    /// "history, not current state" treatment.
+    ///
+    /// <para><b>The value is another event's own <see cref="EventId"/>, not a freshly minted id -
+    /// specifically the <i>anchor</i> row's id, the first slot of the run in start order.</b> A
+    /// single-slot booking is its own anchor: <see cref="Claim"/> defaults <c>bookingId</c> to
+    /// <see cref="Id"/> when the caller does not name one, so every claimed row - whether it took one
+    /// slot or several - carries a non-null <see cref="BookingId"/> and "group by booking id" is one
+    /// rule with no special case for the common, single-slot booking. This is the data-model choice
+    /// `20-18`'s own backlog item asked to be confirmed or overturned when implementing: a
+    /// <c>booking_id</c> column on <c>events</c> rather than a second <c>bookings</c> table, because a
+    /// booking has no state of its own that its member rows do not already carry identically (status,
+    /// customer, service, deadline) - see the item's own "Decided shape to weigh in implementation".
+    /// Reusing the anchor's own id rather than minting a new one (a <see cref="Guid"/> via
+    /// <c>IIdGenerator</c>) means no new id type was needed and "resolve the group from any member's
+    /// id" is one self-join (<c>WHERE booking_id = (SELECT booking_id FROM events WHERE id =
+    /// @anyMemberId)</c>) rather than a second lookup table.</para>
+    /// </summary>
+    public EventId? BookingId { get; private set; }
+
+    /// <summary>
     /// The slot as a value object. Computed from the two mapped columns rather than mapped itself:
     /// EF would need to materialise a validating struct through a constructor, and the row is
     /// trivially two <c>timestamptz</c>s. The invariant still holds where it matters - every factory
@@ -185,8 +208,18 @@ public sealed class Event
     /// the caller computed from the tenant's configured window. Must be after
     /// <paramref name="now"/>: a window that has already closed would be auto-confirmed by the very
     /// next sweep tick, which is not a veto window at all.</param>
+    /// <param name="bookingId">
+    /// `20-18`: the anchor row's id for the booking this claim belongs to. Left <see langword="null"/>
+    /// for the ordinary case - a single-slot booking, which is its own anchor - and defaulted below to
+    /// <see cref="Id"/> so every caller of this overload from before `20-18` keeps compiling and
+    /// keeps behaving exactly as before, while still ending up with a non-null
+    /// <see cref="BookingId"/>. A multi-slot claim names every non-anchor row's own <see cref="Id"/>
+    /// here explicitly - see <see cref="ConsecutiveRunFinder"/>, which computes the run this method is
+    /// called once for, in order, per row.
+    /// </param>
     public void Claim(
-        CustomerId customerId, ServiceId serviceId, DateTimeOffset now, DateTimeOffset confirmationDeadline)
+        CustomerId customerId, ServiceId serviceId, DateTimeOffset now, DateTimeOffset confirmationDeadline,
+        EventId? bookingId = null)
     {
         if (Status != EventStatus.Available)
         {
@@ -211,6 +244,7 @@ public sealed class Event
         ServiceId = serviceId;
         ConfirmationDeadline = confirmationDeadline;
         Status = EventStatus.PendingConfirmation;
+        BookingId = bookingId ?? Id;
         _domainEvents.Add(new EventClaimed(
             Id, TenantId, CalendarId, WorkerId, serviceId, customerId, Slot, confirmationDeadline, now));
     }

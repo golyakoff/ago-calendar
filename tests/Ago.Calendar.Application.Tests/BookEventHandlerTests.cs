@@ -28,7 +28,7 @@ public class BookEventHandlerTests
         // fact.
         Assert.Equal(BookingFixtures.TenantId, attempt.TenantId);
         Assert.Equal(BookingFixtures.CalendarId, attempt.CalendarId);
-        Assert.Equal(BookingFixtures.EventId, attempt.EventId);
+        Assert.Equal([BookingFixtures.EventId], attempt.EventIds);
 
         // Normalised on the way in, so "+7 (999) 000-00-01" and "+79990000001" reach one lead card.
         Assert.Equal(BookingFixtures.Phone, attempt.Phone.Value);
@@ -241,15 +241,77 @@ public class BookEventHandlerTests
         Assert.Empty(world.Bookings.Attempts);
     }
 
+    /// <summary>
+    /// `20-18`'s own headline scenario: `20-14`'s "not offered" stopgap is gone, and a service that
+    /// needs more than one slot claims the consecutive run that satisfies it. Three 30-minute slots
+    /// with a 10-minute buffer between them; a 70-minute service with the tenant's default
+    /// (buffers count) needs exactly two - the item's own 70/30/10 worked example.
+    /// </summary>
     [Fact]
-    public async Task AServiceLongerThanTheSlotItWouldOccupy_IsRejected()
+    public async Task AServiceLongerThanOneSlot_ClaimsTheConsecutiveRunItNeeds()
     {
-        // `20-02` sizes every materialised slot to the worker's longest offered service, so this is
-        // unreachable today. It is asserted anyway because that sizing rule lives in a different item
-        // and nothing else would notice if a future change to it started overbooking - the check
-        // exists precisely so the two items cannot drift apart silently.
-        var oversized = Service.Create(BookingFixtures.ServiceId, BookingFixtures.TenantId, "Colour", TimeSpan.FromHours(3));
-        var world = new World(service: oversized, worker: BookingFixtures.WorkerOffering(oversized));
+        var service = Service.Create(BookingFixtures.ServiceId, BookingFixtures.TenantId, "Colour", TimeSpan.FromMinutes(70));
+        var schedule = BookingFixtures.Schedule(slotMinutes: 30, bufferMinutes: 10);
+        var day = BookingFixtures.ConsecutiveSlots(count: 3, slotMinutes: 30, bufferMinutes: 10);
+        var worker = BookingFixtures.WorkerOffering(service);
+        var world = new World(service: service, worker: worker, schedule: schedule, day: day);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(serviceId: service.Id));
+
+        Assert.True(outcome.IsSuccess);
+        var attempt = Assert.Single(world.Bookings.Attempts);
+
+        // Two slots, not three: 70 minutes needs 30+10+30=70 when the buffer counts, which is this
+        // fixture's default - the run stops at the second slot, the third is left untouched.
+        Assert.Equal([day[0].Id, day[1].Id], attempt.EventIds);
+    }
+
+    /// <summary>The same 70/30/10 numbers, buffers *not* counting - the item's own other worked
+    /// example, needing a third slot instead.</summary>
+    [Fact]
+    public async Task AServiceLongerThanOneSlot_WithBuffersNotCounting_NeedsOneMoreSlot()
+    {
+        var service = Service.Create(BookingFixtures.ServiceId, BookingFixtures.TenantId, "Colour", TimeSpan.FromMinutes(70));
+        var schedule = BookingFixtures.Schedule(slotMinutes: 30, bufferMinutes: 10, buffersCountTowardServiceDuration: false);
+        var day = BookingFixtures.ConsecutiveSlots(count: 3, slotMinutes: 30, bufferMinutes: 10);
+        var worker = BookingFixtures.WorkerOffering(service);
+        var world = new World(service: service, worker: worker, schedule: schedule, day: day);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(serviceId: service.Id));
+
+        Assert.True(outcome.IsSuccess);
+        Assert.Equal(
+            [day[0].Id, day[1].Id, day[2].Id],
+            Assert.Single(world.Bookings.Attempts).EventIds);
+    }
+
+    /// <summary>The middle slot of what would otherwise be a valid run is already gone (taken,
+    /// blocked, or claimed by somebody else) - the run cannot be completed, so the booking is refused
+    /// exactly as any other lost race is, never as a fault.</summary>
+    [Fact]
+    public async Task ARunWhoseMiddleSlotIsAlreadyTaken_IsRejected()
+    {
+        var service = Service.Create(BookingFixtures.ServiceId, BookingFixtures.TenantId, "Colour", TimeSpan.FromMinutes(70));
+        var schedule = BookingFixtures.Schedule(slotMinutes: 30, bufferMinutes: 10);
+        var day = BookingFixtures.ConsecutiveSlots(count: 3, slotMinutes: 30, bufferMinutes: 10).ToList();
+        day[1].Claim(BookingFixtures.CustomerId, service.Id, BookingFixtures.Now, BookingFixtures.Now.AddMinutes(15));
+        var worker = BookingFixtures.WorkerOffering(service);
+        var world = new World(service: service, worker: worker, schedule: schedule, day: day);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(serviceId: service.Id));
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.slot_unavailable", outcome.Error!.Value.Code);
+        Assert.Empty(world.Bookings.Attempts);
+    }
+
+    /// <summary>A worker with no schedule at all has no grid to walk - `20-18`'s own precondition for
+    /// run-finding, and the same rejection a schedule-less worker's services already produce
+    /// elsewhere.</summary>
+    [Fact]
+    public async Task AWorkerWithNoSchedule_IsNotBookable()
+    {
+        var world = new World(noSchedule: true);
 
         var outcome = await world.HandleAsync(BookingFixtures.Command());
 
@@ -371,10 +433,20 @@ public class BookEventHandlerTests
             bool slotExists = true,
             Worker? worker = null,
             Service? service = null,
-            Tenant? tenant = null)
+            Tenant? tenant = null,
+            // `20-18`: BookEventHandler now needs the worker's own schedule to run-find, and the day's
+            // own rows to walk. Defaulting to one slot's worth of each keeps every pre-`20-18` test
+            // that never mentions either unchanged - the fixture that used to be implicit is now
+            // explicit but produces the identical one-slot world. `noSchedule: true` is the one
+            // exception, for the test proving a schedule-less worker is not bookable at all.
+            WorkerSchedule? schedule = null,
+            bool noSchedule = false,
+            IReadOnlyList<Event>? day = null)
         {
             var resolvedService = service ?? BookingFixtures.HaircutService();
             var resolvedCalendar = calendar ?? BookingFixtures.Calendar();
+            var resolvedSchedule = noSchedule ? null : schedule ?? BookingFixtures.Schedule();
+            var resolvedDay = day ?? (slotExists ? [BookingFixtures.AvailableSlot()] : []);
 
             _handler = new BookEventHandler(
                 new FakeCalendarRepository(calendarExists ? resolvedCalendar : null),
@@ -384,9 +456,10 @@ public class BookEventHandlerTests
                 // booking fail for a reason no production caller can produce.
                 new FakeTenantRepository(
                     tenant ?? BookingFixtures.Tenant(tenantId: resolvedCalendar.TenantId)),
-                new FakeEventRepository(slotExists ? BookingFixtures.AvailableSlot() : null),
+                new FakeEventRepository(resolvedDay),
                 new FakeWorkerRepository(worker ?? BookingFixtures.WorkerOffering(resolvedService)),
                 new FakeServiceRepository(resolvedService),
+                new FakeWorkerScheduleRepository(resolvedSchedule),
                 Bookings,
                 Limiter,
                 new BookingRateLimitOptions(),

@@ -30,6 +30,16 @@ internal sealed class WorkerScheduleConfiguration : IEntityTypeConfiguration<Wor
 
         builder.Property(s => s.SlotMinutes).HasColumnName("slot_minutes");
         builder.Property(s => s.BufferMinutes).HasColumnName("buffer_minutes");
+
+        // `20-18`: the tenant's own call on whether a multi-slot run's internal buffers count toward
+        // satisfying a service's duration. Defaults true at the column too (not only in the aggregate's
+        // own field initializer), so a backfilled row from this item's migration - and any future
+        // insert that forgets to set it explicitly - lands on the same default WorkerSchedule itself
+        // states.
+        builder.Property(s => s.BuffersCountTowardServiceDuration)
+            .HasColumnName("buffers_count_toward_service_duration")
+            .HasDefaultValue(true);
+
         builder.Property(s => s.HorizonDays).HasColumnName("horizon_days");
         builder.Property(s => s.MaterializeFrom).HasColumnName("materialize_from");
         builder.Property(s => s.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");

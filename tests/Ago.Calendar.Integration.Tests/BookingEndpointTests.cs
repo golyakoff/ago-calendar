@@ -169,6 +169,12 @@ public class BookingEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
 
+        // `20-18`: BookEventHandler now run-finds through the worker's own schedule -
+        // AddWeeklyScheduleAsync's own default (45 minutes, matching CalendarSeed.Slot's own default
+        // duration) keeps every booking here the single-slot case this file's own concern (the HTTP
+        // wiring, not run-finding) needs.
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, seed, horizonDays: 30);
+
         // Far enough in the future that the claim's own `starts_at > now` predicate is satisfied
         // against the host's real clock - this test cannot inject a fake one, which is precisely
         // what makes it a check on the wiring rather than on the logic.

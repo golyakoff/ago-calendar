@@ -15,7 +15,22 @@ namespace Ago.Calendar.Application.Mapping;
 /// </summary>
 public static class BookingConfirmedMapper
 {
-    public static EventEnvelope ToEnvelope(EventConfirmed domainEvent, IIdGenerator idGenerator)
+    /// <param name="domainEvent">The anchor row's own <see cref="EventConfirmed"/> - its
+    /// <see cref="EventConfirmed.EventId"/> is what <see cref="BookingConfirmed.EventId"/> carries,
+    /// which `20-18` keeps meaning "the booking's identity" now that it is the run's anchor id rather
+    /// than necessarily its only row.</param>
+    /// <param name="idGenerator">Mints <see cref="BookingConfirmed.CorrelationId"/> - see the field's
+    /// own remarks for why a fresh id rather than a threaded one.</param>
+    /// <param name="groupEndsAt">
+    /// `20-18`: the run's own last slot's end, when this confirmation is for a multi-slot booking.
+    /// Defaults to <paramref name="domainEvent"/>'s own <see cref="EventConfirmed.Slot"/> end - correct
+    /// for the anchor's own single slot and for every booking that is only one slot long, which is why
+    /// existing callers of this method compile and behave unchanged. A caller emitting one message per
+    /// *group* rather than per row (<c>ExpiredBookingConfirmer</c>) supplies the whole run's end here,
+    /// so a customer told "12:00-13:10" is told about the booking they made, not about its first slot.
+    /// </param>
+    public static EventEnvelope ToEnvelope(
+        EventConfirmed domainEvent, IIdGenerator idGenerator, DateTimeOffset? groupEndsAt = null)
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
         ArgumentNullException.ThrowIfNull(idGenerator);
@@ -26,7 +41,7 @@ public static class BookingConfirmedMapper
             CalendarId: domainEvent.CalendarId.Value,
             CustomerId: domainEvent.CustomerId.Value,
             StartsAt: domainEvent.Slot.StartsAt,
-            EndsAt: domainEvent.Slot.EndsAt,
+            EndsAt: groupEndsAt ?? domainEvent.Slot.EndsAt,
             LocalDate: domainEvent.LocalDate,
             OccurredAt: domainEvent.OccurredAt,
             // No request-scoped correlation reaches a background sweep - the tick that confirms a

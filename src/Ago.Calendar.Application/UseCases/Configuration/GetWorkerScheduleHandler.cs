@@ -22,7 +22,8 @@ public readonly record struct WorkerScheduleDetail(
     int HorizonDays,
     DateOnly MaterializeFrom,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    bool BuffersCountTowardServiceDuration);
 
 /// <summary>`20-14`: <c>GET /workers/{id}/schedule</c>. Gated on the same
 /// <see cref="Permission.CalendarConfigure"/> every other configuration screen is.</summary>
@@ -68,5 +69,6 @@ public sealed class GetWorkerScheduleHandler(
         schedule.HorizonDays,
         schedule.MaterializeFrom,
         schedule.CreatedAt,
-        schedule.UpdatedAt);
+        schedule.UpdatedAt,
+        schedule.BuffersCountTowardServiceDuration);
 }

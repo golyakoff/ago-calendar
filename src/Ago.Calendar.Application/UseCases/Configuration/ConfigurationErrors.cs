@@ -44,4 +44,11 @@ public static class ConfigurationErrors
         "configuration.worker_has_booking_history",
         $"Worker {workerId.Value} has a booking that is pending, confirmed, or a recorded no-show, " +
         "and cannot be deleted. Deactivate him instead.");
+
+    /// <summary>`20-14`: <c>GET /workers/{id}/schedule</c> when no schedule has been written yet - a
+    /// real, common state distinct from the worker not existing at all (<see cref="NotFound"/> covers
+    /// that one).</summary>
+    public static Error NoSchedule(WorkerId workerId) => new(
+        "configuration.no_schedule",
+        $"Worker {workerId.Value} has no schedule yet.");
 }

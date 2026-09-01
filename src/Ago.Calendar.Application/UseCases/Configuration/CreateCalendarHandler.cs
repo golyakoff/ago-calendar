@@ -45,7 +45,6 @@ public sealed class CreateCalendarHandler(
                 tenant.Id,
                 command.Name,
                 new CalendarTimeZone(command.TimeZone),
-                command.BufferMinutes,
                 now);
         }
         catch (Exception exception) when (exception is ArgumentException or ArgumentOutOfRangeException)

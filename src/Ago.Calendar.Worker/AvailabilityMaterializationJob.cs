@@ -6,9 +6,10 @@ using Microsoft.Extensions.Options;
 namespace Ago.Calendar.Worker;
 
 /// <summary>
-/// Keeps every published calendar's availability generated out to
-/// <see cref="AvailabilityMaterializationJobOptions.HorizonDays"/>, so that `20-03`'s booking claim
-/// always has a real row to compare-and-set against.
+/// Keeps every published calendar's availability generated - out to each worker's own
+/// <c>WorkerSchedule.HorizonDays</c> since `20-14` moved the horizon from this job's own
+/// configuration to a per-worker schedule - so that `20-03`'s booking claim always has a real row to
+/// compare-and-set against.
 ///
 /// <para><b>Shape copied from <c>PartitionMaintenanceJob</c> deliberately</b> (data-model.md,
 /// `2-06`): a <see cref="PeriodicTimer"/> loop that runs once immediately and then on an interval,
@@ -107,8 +108,7 @@ public sealed class AvailabilityMaterializationJob(
 
             try
             {
-                var result = await handler.HandleAsync(
-                    new MaterializeAvailability(calendarId, options.Value.HorizonDays), cancellationToken);
+                var result = await handler.HandleAsync(new MaterializeAvailability(calendarId), cancellationToken);
 
                 if (result.SlotsInserted > 0)
                 {

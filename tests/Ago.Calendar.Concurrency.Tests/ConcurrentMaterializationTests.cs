@@ -151,20 +151,20 @@ public class ConcurrentMaterializationTests(ConcurrencyFixture fixture)
             new BookingCalendarRepository(db),
             new WorkerRepository(db),
             new WorkingHoursRuleRepository(db),
-            new ServiceRepository(db),
+            new WorkerScheduleRepository(db),
             new EventRepository(db),
             WallClock,
             new UuidV7Generator(),
             new FixedClock(Monday));
 
-        return await handler.HandleAsync(new MaterializeAvailability(calendarId, 6), CancellationToken.None);
+        return await handler.HandleAsync(new MaterializeAvailability(calendarId), CancellationToken.None);
     }
 
     private async Task<SeededCalendar> SeedAsync()
     {
         var tenant = Tenant.Register(new TenantId(NewId()), "Barbershop", new TenantPublicKey("shop-" + NewId().ToString("N")), Monday);
         var calendar = BookingCalendar.Create(
-            new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone("Europe/Moscow"), 10, Monday);
+            new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone("Europe/Moscow"), Monday);
         var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Monday);
         var service = Service.Create(new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45));
 
@@ -172,11 +172,20 @@ public class ConcurrentMaterializationTests(ConcurrencyFixture fixture)
         worker.JoinCalendar(calendar);
         worker.Offer(service);
 
+        // `20-14`: slot length and buffer now come from the worker's own schedule, not from the
+        // longest offered service and the calendar's buffer - 45/10 here matches what those used to
+        // derive to, so this seed still produces the same grid GenerateOneDay expects.
+        var schedule = WorkerSchedule.CreateWeekly(
+            new WorkerScheduleId(NewId()), worker.Id,
+            slotMinutes: 45, bufferMinutes: 10, horizonDays: 6,
+            materializeFrom: DateOnly.FromDateTime(Monday.UtcDateTime), Monday);
+
         await using var db = fixture.CreateDbContext();
         db.Tenants.Add(tenant);
         db.Calendars.Add(calendar);
         db.Services.Add(service);
         db.Workers.Add(worker);
+        db.WorkerSchedules.Add(schedule);
 
         foreach (var day in Enum.GetValues<DayOfWeek>())
         {

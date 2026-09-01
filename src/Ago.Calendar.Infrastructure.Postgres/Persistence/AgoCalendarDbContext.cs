@@ -18,6 +18,12 @@ public sealed class AgoCalendarDbContext(DbContextOptions<AgoCalendarDbContext> 
     public DbSet<BookingCalendar> Calendars => Set<BookingCalendar>();
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<WorkingHoursRule> WorkingHoursRules => Set<WorkingHoursRule>();
+
+    /// <summary>`20-14`: one worker's own schedule template - slot length, buffer, horizon, and
+    /// either a weekly or a cycle shape. See <see cref="Domain.WorkerSchedule"/>'s own remarks for why
+    /// it is a separate aggregate from <see cref="Worker"/>.</summary>
+    public DbSet<WorkerSchedule> WorkerSchedules => Set<WorkerSchedule>();
+
     public DbSet<Event> Events => Set<Event>();
 
     /// <summary>`20-07`: one visitor's walk through the chat-driven booking flow. See

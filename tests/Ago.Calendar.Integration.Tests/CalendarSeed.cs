@@ -41,7 +41,7 @@ internal static class CalendarSeed
             Now,
             allowedOrigins);
         var calendar = BookingCalendar.Create(
-            new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), 10, Now);
+            new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), Now);
         var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);
         var service = Service.Create(new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45));
         var customer = Customer.Register(
@@ -90,6 +90,60 @@ internal static class CalendarSeed
         }
 
         await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// `20-14`: the seeded worker's own schedule - slot length, buffer, horizon and cursor, all of
+    /// which the materialiser now reads from here instead of from the calendar's old buffer and the
+    /// worker's longest offered service.
+    /// </summary>
+    /// <param name="materializeFrom"><see cref="DateOnly.MinValue"/> by default, which puts the
+    /// cursor safely in the past for every calendar's zone so <c>firstDay</c> always resolves to
+    /// "today" - matching `20-02`'s own pre-`20-14` behaviour, where there was no cursor at all and a
+    /// run always started from today.</param>
+    public static async Task<WorkerSchedule> AddWeeklyScheduleAsync(
+        PostgresFixture fixture,
+        SeededTenant seed,
+        int horizonDays,
+        int slotMinutes = 45,
+        int bufferMinutes = 10,
+        DateOnly? materializeFrom = null)
+    {
+        var schedule = WorkerSchedule.CreateWeekly(
+            new WorkerScheduleId(NewId()), seed.Worker.Id,
+            slotMinutes, bufferMinutes, horizonDays, materializeFrom ?? DateOnly.MinValue, Now);
+
+        await using var db = fixture.CreateDbContext();
+        db.WorkerSchedules.Add(schedule);
+        await db.SaveChangesAsync();
+        return schedule;
+    }
+
+    /// <summary>`20-14`: a cycle schedule for the seeded worker - N working days, M resting, from
+    /// <paramref name="anchor"/>. See <see cref="AddWeeklyScheduleAsync"/> for the same
+    /// <paramref name="materializeFrom"/> default and why it is safe.</summary>
+    public static async Task<WorkerSchedule> AddCycleScheduleAsync(
+        PostgresFixture fixture,
+        SeededTenant seed,
+        DateOnly anchor,
+        int workingDays,
+        int restDays,
+        TimeOnly startsAt,
+        TimeOnly endsAt,
+        int horizonDays,
+        int slotMinutes = 45,
+        int bufferMinutes = 10,
+        DateOnly? materializeFrom = null)
+    {
+        var schedule = WorkerSchedule.CreateCycle(
+            new WorkerScheduleId(NewId()), seed.Worker.Id,
+            anchor, workingDays, restDays, startsAt, endsAt,
+            slotMinutes, bufferMinutes, horizonDays, materializeFrom ?? DateOnly.MinValue, Now);
+
+        await using var db = fixture.CreateDbContext();
+        db.WorkerSchedules.Add(schedule);
+        await db.SaveChangesAsync();
+        return schedule;
     }
 
     public static DayOfWeek[] EveryDay =>

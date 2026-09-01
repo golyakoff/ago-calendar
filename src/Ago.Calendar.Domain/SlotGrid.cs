@@ -2,7 +2,7 @@
 
 /// <summary>
 /// Divides one already-resolved working window into the back-to-back slots a worker's day is made
-/// of, separated by the calendar's buffer.
+/// of, separated by the worker's own schedule's buffer.
 ///
 /// <para><b>This type takes instants, not wall clock, and that is the whole reason it can live in
 /// Domain.</b> Turning "Tuesday, 09:00-18:00" into a pair of instants needs the tz database, which
@@ -37,7 +37,7 @@ public static class SlotGrid
     /// calendar's zone.</param>
     /// <param name="slotLength">How long one bookable slot is.</param>
     /// <param name="buffer">Dead time between consecutive slots -
-    /// <see cref="BookingCalendar.BufferMinutes"/>. Zero is legal and means back-to-back.</param>
+    /// <see cref="WorkerSchedule.BufferMinutes"/>. Zero is legal and means back-to-back.</param>
     public static IReadOnlyList<TimeSlot> Fill(TimeSlot window, TimeSpan slotLength, TimeSpan buffer)
     {
         if (slotLength <= TimeSpan.Zero)

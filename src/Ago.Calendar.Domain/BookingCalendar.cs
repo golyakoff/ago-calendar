@@ -33,14 +33,6 @@ public sealed class BookingCalendar
     /// bridge between wall clock and instants. See <see cref="CalendarTimeZone"/>.</summary>
     public CalendarTimeZone TimeZone { get; }
 
-    /// <summary>
-    /// Spacing between a worker's consecutive slots - cleanup time between visits. Per calendar, not
-    /// per service and not per worker: the author's own product decision, and the one that makes
-    /// materialisation simple, because a single number applies to every slot boundary the calendar
-    /// produces. Consumed by `20-02`; nothing reads it yet.
-    /// </summary>
-    public int BufferMinutes { get; private set; }
-
     /// <summary>Whether the public booking surface shows this calendar - the same publish switch
     /// AGO Chat's per-site allowed origins express for its widget (`5-01`), reused as a concept, not
     /// as code.</summary>
@@ -49,13 +41,12 @@ public sealed class BookingCalendar
     public DateTimeOffset CreatedAt { get; }
 
     private BookingCalendar(
-        CalendarId id, TenantId tenantId, string name, CalendarTimeZone timeZone, int bufferMinutes, DateTimeOffset now)
+        CalendarId id, TenantId tenantId, string name, CalendarTimeZone timeZone, DateTimeOffset now)
     {
         Id = id;
         TenantId = tenantId;
         Name = name;
         TimeZone = timeZone;
-        BufferMinutes = bufferMinutes;
         CreatedAt = now;
     }
 
@@ -65,27 +56,18 @@ public sealed class BookingCalendar
     }
 
     public static BookingCalendar Create(
-        CalendarId id, TenantId tenantId, string name, CalendarTimeZone timeZone, int bufferMinutes, DateTimeOffset now)
+        CalendarId id, TenantId tenantId, string name, CalendarTimeZone timeZone, DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ArgumentOutOfRangeException.ThrowIfNegative(bufferMinutes);
 
-        // A buffer of a day or more would consume every slot it is supposed to separate. The bound
-        // is arbitrary in the same way a maximum message length is: its job is to reject a fat-finger
-        // configuration at the door rather than to encode a business rule.
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(bufferMinutes, 8 * 60);
-
-        return new BookingCalendar(id, tenantId, name.Trim(), timeZone, bufferMinutes, now);
+        return new BookingCalendar(id, tenantId, name.Trim(), timeZone, now);
     }
 
-    public void Reconfigure(string name, int bufferMinutes)
+    public void Reconfigure(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        ArgumentOutOfRangeException.ThrowIfNegative(bufferMinutes);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(bufferMinutes, 8 * 60);
 
         Name = name.Trim();
-        BufferMinutes = bufferMinutes;
     }
 
     public void Publish() => IsPublished = true;

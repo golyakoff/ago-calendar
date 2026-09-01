@@ -17,6 +17,7 @@ internal static class IdConverters
     public static readonly ValueConverter<CalendarId, Guid> Calendar = new(id => id.Value, value => new CalendarId(value));
     public static readonly ValueConverter<CustomerId, Guid> Customer = new(id => id.Value, value => new CustomerId(value));
     public static readonly ValueConverter<WorkingHoursRuleId, Guid> WorkingHoursRule = new(id => id.Value, value => new WorkingHoursRuleId(value));
+    public static readonly ValueConverter<WorkerScheduleId, Guid> WorkerSchedule = new(id => id.Value, value => new WorkerScheduleId(value));
     public static readonly ValueConverter<EventId, Guid> Event = new(id => id.Value, value => new EventId(value));
     public static readonly ValueConverter<ChatBookingTaskId, Guid> ChatBookingTask = new(
         id => id.Value, value => new ChatBookingTaskId(value));

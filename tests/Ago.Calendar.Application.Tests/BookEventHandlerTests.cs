@@ -354,7 +354,7 @@ public class BookEventHandlerTests
         var calendar = BookingCalendar.Create(
             BookingFixtures.CalendarId,
             new TenantId(new Guid("77777777-7777-7777-7777-777777777777")),
-            "Other", new CalendarTimeZone("Europe/Moscow"), 10, BookingFixtures.Now);
+            "Other", new CalendarTimeZone("Europe/Moscow"), BookingFixtures.Now);
         calendar.Publish();
         return calendar;
     }

@@ -26,7 +26,6 @@ internal sealed class BookingCalendarConfiguration : IEntityTypeConfiguration<Bo
             .HasConversion(IdConverters.TimeZone)
             .IsRequired();
 
-        builder.Property(c => c.BufferMinutes).HasColumnName("buffer_minutes");
         builder.Property(c => c.IsPublished).HasColumnName("is_published");
         builder.Property(c => c.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
 

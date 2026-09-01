@@ -133,6 +133,39 @@ public sealed record DayBoundaryRequest(
     Guid CalendarId, Guid WorkerId, DateOnly LocalDate, TimeOnly OpensAt, TimeOnly ClosesAt);
 
 /// <summary>
+/// `20-15`: one worker's materialised schedule, whatever it currently is. The item's own plainest-
+/// possible-screen scope: a list of rows, not a calendar grid and not an aggregate.
+/// </summary>
+/// <param name="Weekday">0 = Sunday, matching <see cref="System.DayOfWeek"/> - derived server-side
+/// from <see cref="LocalDate"/>, which is already the business-local day (adr/0049), so the derivation
+/// needs no zone and cannot disagree with it.</param>
+/// <param name="Status">The domain enum's wire name verbatim - <c>"Available"</c>,
+/// <c>"PendingConfirmation"</c>, <c>"Booked"</c>, <c>"Cancelled"</c>, <c>"NoShow"</c> or
+/// <c>"Blocked"</c>.</param>
+/// <param name="ServiceName">Null on a <c>Blocked</c> row - a closure is not a service.</param>
+/// <param name="CustomerId">Not personal data - a foreign key - so never gated. What tells
+/// <see cref="CustomerDisplayName"/>/<see cref="Phone"/>'s two null-reasons apart: null here means
+/// nobody holds the slot; non-null with those two null means somebody does and this operator may not
+/// see who.</param>
+/// <param name="CustomerDisplayName">`20-12`'s own gate. Null either because
+/// <see cref="CustomerId"/> is null too (nobody holds the slot), or because this operator does not
+/// hold <c>customer:read</c> for this tenant - see <see cref="CustomerId"/> for the discriminator.
+/// </param>
+/// <param name="Phone">Same two-reasons-for-null story as <see cref="CustomerDisplayName"/>.</param>
+public sealed record WorkerSlotResponse(
+    Guid EventId,
+    DateOnly LocalDate,
+    int Weekday,
+    DateTimeOffset StartsAt,
+    DateTimeOffset EndsAt,
+    string Status,
+    Guid? ServiceId,
+    string? ServiceName,
+    Guid? CustomerId,
+    string? CustomerDisplayName,
+    string? Phone);
+
+/// <summary>
 /// `20-01` said the provisioning transaction that seeds a tenant, its operator role and its first
 /// operator "belongs to `20-06`". This is its request - and see <c>DevProvisioningEndpoints</c> for
 /// why the route that accepts it exists only outside Production.

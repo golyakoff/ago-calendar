@@ -10,6 +10,7 @@ using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.UseCases.MaterializeAvailability;
 using Ago.Calendar.Application.UseCases.Provisioning;
 using Ago.Calendar.Application.UseCases.PublicBooking;
+using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Redis;
 using Ago.Calendar.Infrastructure.Time;
@@ -140,5 +141,8 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<GrantOperatorRoleHandler>();
         services.AddScoped<RevokeOperatorRoleHandler>();
         services.AddScoped<GetTenantContactsHandler>();
+
+        // `20-15`: the materialised slot view.
+        services.AddScoped<GetWorkerSlotsHandler>();
     }
 }

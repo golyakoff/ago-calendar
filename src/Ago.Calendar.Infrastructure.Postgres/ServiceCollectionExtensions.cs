@@ -58,6 +58,10 @@ public static class ServiceCollectionExtensions
         // connection pool for a second read store.
         services.AddScoped<IContactsReadStore, ContactsReadStore>();
 
+        // `20-15`: the materialised slot view's own read side - the same shared NpgsqlDataSource
+        // singleton, for the identical reason ContactsReadStore's own remark gives.
+        services.AddScoped<IWorkerSlotReadStore, WorkerSlotReadStore>();
+
         // `20-06`: the public booking surface's own read side, and the multi-aggregate provisioning
         // write ITenantRepository's remarks predicted would be the first use case to need one.
         services.AddScoped<IBookingSurfaceReadStore, BookingSurfaceReadStore>();

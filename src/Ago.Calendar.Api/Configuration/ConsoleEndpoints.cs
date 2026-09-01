@@ -7,6 +7,7 @@ using Ago.Calendar.Application.UseCases.Configuration;
 using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
+using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Platform.Kernel;
@@ -74,6 +75,11 @@ public static class ConsoleEndpoints
         group.MapDelete("/operators/{operatorId:guid}/roles/{roleId:guid}", HandleRevokeRoleAsync)
             .WithName("RevokeOperatorRole");
         group.MapGet("/contacts", HandleContactsAsync).WithName("GetContacts");
+
+        // `20-15`: the materialised slot view - what the tenant's own schedule actually produced for
+        // one worker, over a date range. Read-only; see the item's own scope for why it offers no
+        // edit of its own.
+        group.MapGet("/workers/{workerId:guid}/slots", HandleWorkerSlotsAsync).WithName("GetWorkerSlots");
 
         return app;
     }
@@ -575,6 +581,40 @@ public static class ConsoleEndpoints
                 row.NoShowCount,
                 row.FirstSeenAt,
                 row.LastSeenAt))
+            .ToArray());
+    }
+
+    private static async Task<IResult> HandleWorkerSlotsAsync(
+        Guid workerId,
+        DateOnly from,
+        DateOnly to,
+        ClaimsPrincipal principal,
+        GetWorkerSlotsHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetWorkerSlots(principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId), from, to),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok(result.Value
+            .Select(row => new WorkerSlotResponse(
+                row.EventId.Value,
+                row.LocalDate,
+                (int)row.LocalDate.DayOfWeek,
+                row.StartsAt,
+                row.EndsAt,
+                row.Status.ToString(),
+                row.ServiceId?.Value,
+                row.ServiceName,
+                row.CustomerId?.Value,
+                row.CustomerDisplayName,
+                row.Phone?.Value))
             .ToArray());
     }
 

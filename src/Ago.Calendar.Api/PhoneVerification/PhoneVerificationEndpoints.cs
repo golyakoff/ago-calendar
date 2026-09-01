@@ -1,5 +1,6 @@
 ﻿using Ago.Calendar.Api.Booking;
 using Ago.Calendar.Api.Http;
+using Ago.Calendar.Api.PublicBookingApi;
 using Ago.Calendar.Application.UseCases.PhoneVerification;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
@@ -30,7 +31,12 @@ public static class PhoneVerificationEndpoints
     {
         ArgumentNullException.ThrowIfNull(app);
 
-        var group = app.MapGroup("/api/v1/calendars/{calendarId:guid}/phone-verifications").AllowAnonymous();
+        var group = app.MapGroup("/api/v1/calendars/{calendarId:guid}/phone-verifications")
+            .AllowAnonymous()
+            // 2026-09-01: this round trip exists only to serve BookingEndpoints's own POST .../book,
+            // so it is closed by the identical gate and for the identical reason - see
+            // PublicBookingApiGate's own remarks.
+            .AddEndpointFilter<PublicBookingApiGate>();
 
         group.MapPost("", HandleInitiateAsync).WithName("InitiatePhoneVerification");
         group.MapPost("/{pendingPhoneVerificationId:guid}/confirm", HandleConfirmAsync)

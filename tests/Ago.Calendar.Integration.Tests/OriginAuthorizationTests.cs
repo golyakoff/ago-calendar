@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
+using Microsoft.AspNetCore.Hosting;
 
 namespace Ago.Calendar.Integration.Tests;
 
@@ -25,12 +26,12 @@ public class OriginAuthorizationTests(PostgresFixture fixture) : IAsyncLifetime
     private const string OriginA = "https://tenant-a.example";
     private const string OriginB = "https://tenant-b.example";
 
-    private CalendarApiFactory _factory = null!;
+    private OriginAuthorizationApiFactory _factory = null!;
     private HttpClient _client = null!;
 
     public Task InitializeAsync()
     {
-        _factory = new CalendarApiFactory(fixture);
+        _factory = new OriginAuthorizationApiFactory(fixture);
         _client = _factory.CreateClient();
         return Task.CompletedTask;
     }
@@ -198,5 +199,21 @@ public class OriginAuthorizationTests(PostgresFixture fixture) : IAsyncLifetime
         }
 
         return await _client.SendAsync(request);
+    }
+}
+
+/// <summary>
+/// <see cref="CalendarApiFactory"/> with the public booking API turned on - this file's own concern is
+/// the origin boundary, not the lockdown, and its booking tests need the real endpoint to answer. See
+/// <c>PublicBookingApiLockdownTests</c> for the "closed by default" guarantee itself, proved against a
+/// host that leaves this setting untouched.
+/// </summary>
+internal sealed class OriginAuthorizationApiFactory(PostgresFixture fixture) : CalendarApiFactory(fixture)
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+
+        builder.UseSetting("PublicBookingApi:Enabled", "true");
     }
 }

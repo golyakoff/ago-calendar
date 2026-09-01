@@ -248,5 +248,10 @@ internal sealed class PhoneVerificationApiFactory(PostgresFixture fixture) : Cal
         builder.UseSetting("PhoneVerificationRateLimit:PerIpRefillPerSecond", "100000");
         builder.UseSetting("PhoneVerificationRateLimit:PerCalendarCapacity", "100000");
         builder.UseSetting("PhoneVerificationRateLimit:PerCalendarRefillPerSecond", "100000");
+
+        // This file's own concern is `20-10`'s real verification round trip, not the lockdown - see
+        // PublicBookingApiLockdownTests for the "closed by default" guarantee itself, proved against a
+        // host that leaves this setting untouched.
+        builder.UseSetting("PublicBookingApi:Enabled", "true");
     }
 }

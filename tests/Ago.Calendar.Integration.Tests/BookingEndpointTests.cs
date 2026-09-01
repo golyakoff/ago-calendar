@@ -255,5 +255,10 @@ internal sealed class BookingApiFactory(PostgresFixture fixture) : CalendarApiFa
 
         builder.UseSetting("BookingRateLimit:PerPhoneCapacity", "2");
         builder.UseSetting("BookingRateLimit:PerPhoneRefillPerSecond", "0.001");
+
+        // This file's own concern is the booking endpoint's real behaviour, not the lockdown - see
+        // PublicBookingApiLockdownTests for the "closed by default" guarantee itself, proved against a
+        // host that leaves this setting untouched.
+        builder.UseSetting("PublicBookingApi:Enabled", "true");
     }
 }

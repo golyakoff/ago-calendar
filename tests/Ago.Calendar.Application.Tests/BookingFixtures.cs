@@ -125,8 +125,9 @@ internal static class BookingFixtures
     public static BookEvent Command(
         string? phone = null, ServiceId? serviceId = null, string? origin = null,
         bool phoneVerified = true, DateTimeOffset? phoneVerifiedAt = null) =>
-        new(CalendarId, EventId, serviceId ?? ServiceId, phone ?? Phone, "Anna", origin,
-            RequiresVerifiedPhone: true, phoneVerified ? phoneVerifiedAt ?? Now : null);
+        new(CalendarId, EventId, serviceId ?? ServiceId, phone ?? Phone, "Anna",
+            RequiresVerifiedPhone: true, Origin: origin,
+            PhoneVerifiedAt: phoneVerified ? phoneVerifiedAt ?? Now : null);
 
     /// <summary>`20-04`: a second tenant, so "another tenant's booking" is a real id rather than a
     /// missing one - the two must produce the same answer, and only a real one proves it.</summary>

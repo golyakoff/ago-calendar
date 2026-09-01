@@ -181,6 +181,9 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<RevokeOperatorRoleHandler>();
         services.AddScoped<GetTenantContactsHandler>();
 
+        // `20-08`, adr/0088: inviting a second operator by name and email.
+        services.AddScoped<InviteOperatorHandler>();
+
         // `20-15`: the materialised slot view.
         services.AddScoped<GetWorkerSlotsHandler>();
 

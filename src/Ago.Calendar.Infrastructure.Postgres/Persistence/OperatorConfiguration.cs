@@ -24,6 +24,16 @@ internal sealed class OperatorConfiguration : IEntityTypeConfiguration<Operator>
             .HasDatabaseName("ux_operators_external_subject_id")
             .HasFilter("external_subject_id IS NOT NULL");
 
+        // `adr/0088`: the address an invite was sent to - what OperatorIdentityClaimsTransformation's
+        // email fallback matches a first sign-in against. Not unique - see InvitedEmail's own remarks
+        // on why two invited rows sharing an address is an accepted, tested case rather than one this
+        // schema forbids. The index exists for the fallback's own WHERE clause, not for correctness.
+        builder.Property(o => o.InvitedEmail)
+            .HasColumnName("invited_email")
+            .HasMaxLength(320)
+            .HasConversion(IdConverters.NullableInvitedEmail);
+        builder.HasIndex(o => o.InvitedEmail).HasDatabaseName("ix_operators_invited_email");
+
         // `20-12`: get-only, set once at Operator.Create - see Operator.IsAccountOwner's own remarks
         // for why there is no mutator. EF materialises a get-only auto-property through its own
         // backing field with no extra configuration needed here, the same way `Id`/`TenantId` above

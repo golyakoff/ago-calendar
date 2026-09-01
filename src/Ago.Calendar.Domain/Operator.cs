@@ -37,6 +37,16 @@ public sealed class Operator
     /// </summary>
     public string? ExternalSubjectId { get; private set; }
 
+    /// <summary>
+    /// `adr/0088`: the address a tenant typed on the Access screen's "invite a colleague" form, set
+    /// only for an operator provisioned that way - <see cref="ExternalSubjectId"/> is null at the same
+    /// moment, and the console's own Invited/Active status column is exactly that pairing read back.
+    /// Never cleared by <see cref="LinkExternalIdentity"/>: once the person signs in the field becomes
+    /// a historical "who was this invite for" rather than a live lookup key, and there is no reason to
+    /// destroy that record the moment it stops being needed for matching.
+    /// </summary>
+    public InvitedEmail? InvitedEmail { get; private set; }
+
     public IReadOnlyList<RoleAssignment> Roles => _roles;
 
     /// <summary>
@@ -56,13 +66,15 @@ public sealed class Operator
     public bool IsAccountOwner { get; }
 
     private Operator(
-        OperatorId id, TenantId tenantId, string displayName, string? externalSubjectId, bool isAccountOwner)
+        OperatorId id, TenantId tenantId, string displayName, string? externalSubjectId, bool isAccountOwner,
+        InvitedEmail? invitedEmail)
     {
         Id = id;
         TenantId = tenantId;
         DisplayName = displayName;
         ExternalSubjectId = externalSubjectId;
         IsAccountOwner = isAccountOwner;
+        InvitedEmail = invitedEmail;
     }
 
     // EF Core materialization only - never called by domain code.
@@ -74,12 +86,20 @@ public sealed class Operator
     /// <see langword="false"/> because every path that creates an operator is "some other way" except
     /// one - <c>RegisterTenantHandler</c>'s own provisioning transaction is the only caller expected to
     /// pass <see langword="true"/>.</param>
+    /// <param name="invitedEmail">See <see cref="InvitedEmail"/>. Null for every caller except
+    /// <c>InviteOperatorHandler</c> (`adr/0088`) - the account owner is created with its subject already
+    /// known, never through an invite, so the two fields are never both set by any caller in this
+    /// codebase today. Nothing here forbids it, on purpose: the invariant that actually matters is
+    /// "invited XOR resolvable", which <see cref="ExternalSubjectId"/> alone already expresses, and
+    /// adding a second rule that says the same thing about this field would be redundant rather than
+    /// protective.</param>
     public static Operator Create(
         OperatorId id,
         TenantId tenantId,
         string displayName,
         string? externalSubjectId = null,
-        bool isAccountOwner = false)
+        bool isAccountOwner = false,
+        InvitedEmail? invitedEmail = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
 
@@ -89,7 +109,7 @@ public sealed class Operator
                 "An external subject id is either absent or a real value, never blank.", nameof(externalSubjectId));
         }
 
-        return new Operator(id, tenantId, displayName.Trim(), externalSubjectId, isAccountOwner);
+        return new Operator(id, tenantId, displayName.Trim(), externalSubjectId, isAccountOwner, invitedEmail);
     }
 
     /// <summary>

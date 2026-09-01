@@ -183,6 +183,62 @@ public class AccessControlHandlerTests
         Assert.Equal(mine.Id, Assert.Single(result.Value).Id);
     }
 
+    [Fact]
+    public async Task InviteOperator_CreatesAnUnlinkedNonOwnerOperator_WithTheInvitedEmail()
+    {
+        var world = new World();
+
+        var result = await world.InviteAsync("Robin", "robin@example.com");
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        var added = Assert.Single(world.Operators.Added);
+        Assert.Equal(result.Value, added.Id);
+        Assert.Equal("Robin", added.DisplayName);
+        Assert.Null(added.ExternalSubjectId);
+        Assert.False(added.IsAccountOwner);
+        Assert.Equal("robin@example.com", added.InvitedEmail!.Value.Value);
+        Assert.Empty(added.Roles);
+    }
+
+    [Fact]
+    public async Task InviteOperator_WithoutCalendarConfigure_IsRefusedAndWritesNothing()
+    {
+        var world = new World();
+        world.Permissions.Deny(Permission.CalendarConfigure);
+
+        var result = await world.InviteAsync("Robin", "robin@example.com");
+
+        Assert.Equal("access.forbidden", result.Error!.Value.Code);
+        Assert.Empty(world.Operators.Added);
+    }
+
+    [Fact]
+    public async Task InviteOperator_WithAMalformedEmail_IsRejectedBeforeTouchingTheStore()
+    {
+        var world = new World();
+
+        var result = await world.InviteAsync("Robin", "not-an-email");
+
+        Assert.Equal("access.invalid", result.Error!.Value.Code);
+        Assert.Empty(world.Operators.Added);
+    }
+
+    [Fact]
+    public async Task InviteOperator_TwiceWithTheSameEmail_IsAllowed_TheCollisionIsTheFallbacksToHandle()
+    {
+        // adr/0088's own Done-when: two invited rows may share an address. This handler enforces no
+        // uniqueness of its own - the email fallback in OperatorIdentityClaimsTransformation is where
+        // that collision is refused rather than guessed through (proved at the integration level,
+        // where the fallback actually runs).
+        var world = new World();
+        await world.InviteAsync("Robin", "shared@example.com");
+
+        var result = await world.InviteAsync("Alex", "shared@example.com");
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        Assert.Equal(2, world.Operators.Added.Count);
+    }
+
     private static Guid NewId() => Guid.CreateVersion7(Now);
 
     private sealed class World
@@ -192,6 +248,7 @@ public class AccessControlHandlerTests
         private readonly ListOperatorsForTenantHandler _listOperators;
         private readonly GrantOperatorRoleHandler _grant;
         private readonly RevokeOperatorRoleHandler _revoke;
+        private readonly InviteOperatorHandler _invite;
 
         public World(params Role[] roles) : this(roles, [])
         {
@@ -207,6 +264,7 @@ public class AccessControlHandlerTests
             _listOperators = new ListOperatorsForTenantHandler(Operators, Permissions);
             _grant = new GrantOperatorRoleHandler(Operators, Roles, Permissions);
             _revoke = new RevokeOperatorRoleHandler(Operators, Roles, Permissions);
+            _invite = new InviteOperatorHandler(Operators, Permissions, new SequentialIdGenerator(), new FakeClock(Now));
         }
 
         public FakeRoleRepository Roles { get; }
@@ -232,5 +290,8 @@ public class AccessControlHandlerTests
         public Task<Ago.Platform.Kernel.Result> RevokeAsync(OperatorId targetOperatorId, RoleId roleId) =>
             _revoke.HandleAsync(
                 new RevokeOperatorRole(Caller, TenantId, targetOperatorId, roleId), CancellationToken.None);
+
+        public Task<Ago.Platform.Kernel.Result<OperatorId>> InviteAsync(string displayName, string email) =>
+            _invite.HandleAsync(new InviteOperator(Caller, TenantId, displayName, email), CancellationToken.None);
     }
 }

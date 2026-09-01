@@ -55,6 +55,14 @@ internal static class IdConverters
     public static readonly ValueConverter<PhoneNumber, string> Phone = new(
         phone => phone.Value, value => new PhoneNumber(value));
 
+    /// <summary>`adr/0088`: null for every operator except an invited one whose person has not signed
+    /// in yet, or has and the field was simply never cleared - see <see cref="InvitedEmail"/>'s own
+    /// remarks on why it stays. Same read-back-through-the-constructor asymmetry as <see cref="Phone"/>
+    /// above, for the same reason.</summary>
+    public static readonly ValueConverter<InvitedEmail?, string?> NullableInvitedEmail = new(
+        email => email.HasValue ? email.Value.Value : null,
+        value => value != null ? new InvitedEmail(value) : (InvitedEmail?)null);
+
     public static readonly ValueConverter<CalendarTimeZone, string> TimeZone = new(
         zone => zone.Value, value => new CalendarTimeZone(value));
 

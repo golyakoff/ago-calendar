@@ -12,11 +12,25 @@ internal sealed class FakeOperatorRepositoryWithSaves(params Operator[] seeded) 
 
     public List<Operator> Saved { get; } = [];
 
+    /// <summary>`20-08`: the assertion surface for "the invite was actually persisted" -
+    /// <see cref="FakeRoleRepository.Added"/>'s own shape, for the same kind of write.</summary>
+    public List<Operator> Added { get; } = [];
+
     public Task<Operator?> GetByIdAsync(OperatorId id, CancellationToken cancellationToken) =>
         Task.FromResult(_operators.Find(o => o.Id == id));
 
     public Task<Operator?> FindByExternalSubjectIdAsync(string externalSubjectId, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by the access-control handlers.");
+
+    /// <summary>Same "refuse rather than guess" shape as the real repository - see
+    /// <c>IOperatorRepository</c>'s own remarks - kept here so a handler-level test could exercise it
+    /// without a database, even though today's callers only reach this through the claims
+    /// transformation, which is Api-layer and tested at the integration level instead.</summary>
+    public Task<Operator?> FindInvitedByEmailAsync(InvitedEmail email, CancellationToken cancellationToken)
+    {
+        var candidates = _operators.Where(o => o.ExternalSubjectId is null && o.InvitedEmail == email).ToList();
+        return Task.FromResult(candidates.Count == 1 ? candidates[0] : null);
+    }
 
     public Task<IReadOnlyList<Operator>> ListForTenantAsync(TenantId tenantId, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<Operator>>([.. _operators.Where(o => o.TenantId == tenantId)]);
@@ -24,6 +38,7 @@ internal sealed class FakeOperatorRepositoryWithSaves(params Operator[] seeded) 
     public Task AddAsync(Operator @operator, CancellationToken cancellationToken)
     {
         _operators.Add(@operator);
+        Added.Add(@operator);
         return Task.CompletedTask;
     }
 

@@ -83,7 +83,7 @@ public class ChatModuleTaskHandlerTests
         // The booking write actually happened - the fake records it exactly like
         // BookEventHandlerTests asserts against it.
         var attempt = Assert.Single(world.Bookings.Attempts);
-        Assert.Equal(BookingFixtures.EventId, attempt.EventId);
+        Assert.Equal([BookingFixtures.EventId], attempt.EventIds);
         Assert.Equal("+79990000001", attempt.Phone.Value);
     }
 
@@ -257,6 +257,7 @@ public class ChatModuleTaskHandlerTests
             var eventRepo = new FakeEventRepository(slot);
             var workerRepo = new FakeWorkerRepository(worker);
             var serviceRepo = new FakeServiceRepository(service);
+            var scheduleRepo = new FakeWorkerScheduleRepository(BookingFixtures.Schedule());
             var clock = new FakeClock(BookingFixtures.Now);
             var idGenerator = new SequentialIdGenerator();
 
@@ -271,7 +272,7 @@ public class ChatModuleTaskHandlerTests
             var workersHandler = new GetBookableWorkersHandler(resolver, ReadStore);
             var slotsHandler = new GetOpenSlotsHandler(resolver, ReadStore, clock);
             var bookHandler = new BookEventHandler(
-                calendarRepo, tenantRepo, eventRepo, workerRepo, serviceRepo,
+                calendarRepo, tenantRepo, eventRepo, workerRepo, serviceRepo, scheduleRepo,
                 Bookings, Limiter, new BookingRateLimitOptions(), new BookingOptions(), idGenerator, clock);
 
             var options = new ChatModuleTaskOptions

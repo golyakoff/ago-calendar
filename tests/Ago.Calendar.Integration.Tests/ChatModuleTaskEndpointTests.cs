@@ -37,6 +37,9 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     {
         _seed = await CalendarSeed.WriteAsync(fixture, publicKey: $"chatmod-{CalendarSeed.NewId():N}"[..24]);
 
+        // `20-18`: BookEventHandler now run-finds through the worker's own schedule.
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, _seed, horizonDays: 30);
+
         // Slots are inserted directly rather than through the materialiser (`20-02`) - the same
         // shortcut BookingEndpointTests' own BookableSlotsAsync takes, since this suite is about the
         // chat-module wire contract, not availability generation.

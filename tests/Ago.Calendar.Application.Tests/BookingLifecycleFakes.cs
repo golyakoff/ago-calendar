@@ -32,11 +32,25 @@ internal sealed class FakePermissionChecker : IPermissionChecker
 /// have looked the booking up - so a caller with no right cannot use the error to learn whether an id
 /// exists.
 /// </summary>
-internal sealed class FakeEventRepositoryWithSaves(Event? booking) : IEventRepository
+internal sealed class FakeEventRepositoryWithSaves : IEventRepository
 {
+    private readonly IReadOnlyList<Event> _group;
+
+    /// <summary>The ordinary, single-slot shape almost every test here still uses - one row that is
+    /// its own anchor, exactly as <see cref="Event.Claim"/> now defaults it.</summary>
+    public FakeEventRepositoryWithSaves(Event? booking) : this(booking is null ? [] : (IReadOnlyList<Event>)[booking])
+    {
+    }
+
+    /// <summary>`20-18`: the whole run, for a test proving cancel/reject/no-show act on every row of a
+    /// multi-slot booking rather than only the one the route named.</summary>
+    public FakeEventRepositoryWithSaves(IReadOnlyList<Event> group) => _group = group;
+
     public List<Event> Saved { get; } = [];
 
     public List<EventId> Loaded { get; } = [];
+
+    public List<EventId> GroupLookups { get; } = [];
 
     /// <summary>Models another writer committing between the load and the save - `20-01` mapped that
     /// to <see cref="EventConcurrencyConflictException"/> precisely so no handler sees an ORM
@@ -46,18 +60,30 @@ internal sealed class FakeEventRepositoryWithSaves(Event? booking) : IEventRepos
     public Task<Event?> GetByIdAsync(EventId id, CancellationToken cancellationToken)
     {
         Loaded.Add(id);
-        return Task.FromResult(booking is not null && booking.Id == id ? booking : null);
+        return Task.FromResult(_group.FirstOrDefault(e => e.Id == id));
     }
 
-    public Task SaveAsync(Event @event, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<Event>> ListByBookingIdAsync(EventId bookingId, CancellationToken cancellationToken)
+    {
+        GroupLookups.Add(bookingId);
+        return Task.FromResult<IReadOnlyList<Event>>([.. _group.Where(e => e.BookingId == bookingId)]);
+    }
+
+    public Task SaveAsync(Event @event, CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "The booking-lifecycle handlers save through SaveRangeAsync now, even for a single-row " +
+            "booking - see IEventRepository.SaveRangeAsync's own remarks. Reaching this single-row " +
+            "SaveAsync would mean a handler regressed to the pre-`20-18` shape.");
+
+    public Task SaveRangeAsync(IReadOnlyCollection<Event> events, CancellationToken cancellationToken)
     {
         if (FailNextSaveWithConflict)
         {
             FailNextSaveWithConflict = false;
-            throw new EventConcurrencyConflictException(@event.Id);
+            throw new EventConcurrencyConflictException(events.First().Id);
         }
 
-        Saved.Add(@event);
+        Saved.AddRange(events);
         return Task.CompletedTask;
     }
 

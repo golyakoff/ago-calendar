@@ -123,6 +123,14 @@ public readonly record struct GetWorkerSchedule(OperatorId OperatorId, TenantId 
 /// <param name="MaterializeFrom">Refused if it would move the schedule's own cursor backwards - see
 /// <see cref="WorkerSchedule"/>'s own remarks for why that check lives on the aggregate rather than
 /// here.</param>
+/// <param name="BuffersCountTowardServiceDuration">
+/// `20-18`: whether this worker's buffers count toward satisfying a multi-slot service's own
+/// duration, or only toward the run's physical span - see
+/// <see cref="WorkerSchedule.BuffersCountTowardServiceDuration"/> for the arithmetic this decides
+/// between. Defaults to <see langword="true"/>, the same default the aggregate itself carries, so an
+/// older console build that has not learned this field yet still saves a schedule with the author's
+/// own stated default rather than an unset one.
+/// </param>
 public readonly record struct SaveWorkerSchedule(
     OperatorId OperatorId,
     TenantId TenantId,
@@ -136,4 +144,5 @@ public readonly record struct SaveWorkerSchedule(
     int SlotMinutes,
     int BufferMinutes,
     int HorizonDays,
-    DateOnly MaterializeFrom);
+    DateOnly MaterializeFrom,
+    bool BuffersCountTowardServiceDuration = true);

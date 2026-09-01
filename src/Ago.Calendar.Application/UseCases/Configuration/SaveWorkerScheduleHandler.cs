@@ -60,12 +60,14 @@ public sealed class SaveWorkerScheduleHandler(
                 schedule = command.Kind == ScheduleKind.Weekly
                     ? WorkerSchedule.CreateWeekly(
                         new WorkerScheduleId(idGenerator.NewId(now)), command.WorkerId,
-                        command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now)
+                        command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now,
+                        command.BuffersCountTowardServiceDuration)
                     : WorkerSchedule.CreateCycle(
                         new WorkerScheduleId(idGenerator.NewId(now)), command.WorkerId,
                         command.CycleAnchor!.Value, command.CycleWorkingDays!.Value, command.CycleRestDays!.Value,
                         command.CycleStartsAt!.Value, command.CycleEndsAt!.Value,
-                        command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now);
+                        command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now,
+                        command.BuffersCountTowardServiceDuration);
 
                 await schedules.AddAsync(schedule, cancellationToken);
             }
@@ -75,14 +77,16 @@ public sealed class SaveWorkerScheduleHandler(
                 if (command.Kind == ScheduleKind.Weekly)
                 {
                     schedule.ReconfigureWeekly(
-                        command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now);
+                        command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now,
+                        command.BuffersCountTowardServiceDuration);
                 }
                 else
                 {
                     schedule.ReconfigureCycle(
                         command.CycleAnchor!.Value, command.CycleWorkingDays!.Value, command.CycleRestDays!.Value,
                         command.CycleStartsAt!.Value, command.CycleEndsAt!.Value,
-                        command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now);
+                        command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now,
+                        command.BuffersCountTowardServiceDuration);
                 }
 
                 await schedules.SaveAsync(schedule, cancellationToken);

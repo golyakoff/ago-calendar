@@ -90,6 +90,11 @@ public sealed record WorkingHoursRuleResponse(
 /// that is the only thing a null here can mean. The console renders this as "hidden - you don't have
 /// contact-visibility permission", never as an empty cell indistinguishable from "no phone
 /// recorded".</param>
+/// <param name="BookingId">
+/// `20-18`: the run's own anchor id, now that a booking may be several consecutive slots claimed as
+/// one - this response is already one row per booking, not per slot, so the field name did not need
+/// to change even though what it points at can now be a multi-slot run.
+/// </param>
 public sealed record PendingBookingResponse(
     Guid BookingId,
     Guid CalendarId,
@@ -143,6 +148,12 @@ public sealed record DayBoundaryRequest(
 /// see <c>AddWorkingHoursRuleRequest.StartsAt</c> for the same convention.</param>
 /// <param name="MaterializeFrom">Refused if it would move the schedule's cursor backwards - see
 /// <c>SaveWorkerSchedule</c>'s own remarks.</param>
+/// <param name="BuffersCountTowardServiceDuration">
+/// `20-18`: labelled on the console's own schedule form exactly
+/// «Перерывы внутри длинной записи считаются рабочим временем» - the author's own wording, kept
+/// verbatim. See <c>WorkerSchedule.BuffersCountTowardServiceDuration</c> for the arithmetic this
+/// decides between.
+/// </param>
 public sealed record SaveWorkerScheduleRequest(
     string Kind,
     DateOnly? CycleAnchor,
@@ -153,7 +164,8 @@ public sealed record SaveWorkerScheduleRequest(
     int SlotMinutes,
     int BufferMinutes,
     int HorizonDays,
-    DateOnly MaterializeFrom);
+    DateOnly MaterializeFrom,
+    bool BuffersCountTowardServiceDuration = true);
 
 /// <summary>`20-14`: one worker's schedule, in full - the schedule section of `20-13`'s worker card
 /// prefills straight from this, the same one-shape-for-read-and-edit pattern <see cref="WorkerResponse"/>
@@ -172,7 +184,8 @@ public sealed record WorkerScheduleResponse(
     int HorizonDays,
     DateOnly MaterializeFrom,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    bool BuffersCountTowardServiceDuration);
 
 /// <summary>
 /// `20-15`: one worker's materialised schedule, whatever it currently is. The item's own plainest-
@@ -194,6 +207,12 @@ public sealed record WorkerScheduleResponse(
 /// hold <c>customer:read</c> for this tenant - see <see cref="CustomerId"/> for the discriminator.
 /// </param>
 /// <param name="Phone">Same two-reasons-for-null story as <see cref="CustomerDisplayName"/>.</param>
+/// <param name="BookingId">
+/// `20-18`: which booking this slot belongs to, null exactly when <see cref="Status"/> is
+/// <c>"Available"</c> or <c>"Blocked"</c>. Two rows sharing this value are two slots of one run - the
+/// console uses it to show them as the same booking without merging the rows themselves (this item's
+/// own scope keeps a slot as one row with one status).
+/// </param>
 public sealed record WorkerSlotResponse(
     Guid EventId,
     DateOnly LocalDate,
@@ -205,7 +224,8 @@ public sealed record WorkerSlotResponse(
     string? ServiceName,
     Guid? CustomerId,
     string? CustomerDisplayName,
-    string? Phone);
+    string? Phone,
+    Guid? BookingId);
 
 /// <summary>
 /// `20-01` said the provisioning transaction that seeds a tenant, its operator role and its first

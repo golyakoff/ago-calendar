@@ -25,6 +25,50 @@ public class EventStateMachineTests
         Assert.Equal(world.Slot.Id, claimed.EventId);
     }
 
+    /// <summary>`20-18`: a claim that does not name a booking id is its own anchor - the default that
+    /// keeps every pre-`20-18` caller of this method (including every other test in this file)
+    /// behaving unchanged while still ending up with a non-null <see cref="Event.BookingId"/>.</summary>
+    [Fact]
+    public void Claim_WithNoBookingIdNamed_BecomesItsOwnAnchor()
+    {
+        var world = new World();
+
+        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+
+        Assert.Equal(world.Slot.Id, world.Slot.BookingId);
+    }
+
+    /// <summary>The multi-slot shape: a non-anchor row of a run is claimed with the anchor's own id
+    /// named explicitly.</summary>
+    [Fact]
+    public void Claim_WithABookingIdNamed_CarriesTheAnchorsId()
+    {
+        var world = new World();
+        var anchorId = new EventId(Guid.CreateVersion7(Now));
+
+        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15), anchorId);
+
+        Assert.Equal(anchorId, world.Slot.BookingId);
+        Assert.NotEqual(world.Slot.Id, world.Slot.BookingId);
+    }
+
+    /// <summary>Set by <see cref="Event.Claim"/>, never cleared - the same "history, not current
+    /// state" treatment <see cref="Event.CustomerId"/> already gets, held here through every
+    /// transition that follows a claim.</summary>
+    [Fact]
+    public void BookingId_SurvivesConfirmAndCancel()
+    {
+        var world = new World();
+        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        var bookingId = world.Slot.BookingId;
+
+        world.Slot.Confirm(Now.AddMinutes(15));
+        Assert.Equal(bookingId, world.Slot.BookingId);
+
+        world.Slot.Cancel(Now.AddMinutes(16));
+        Assert.Equal(bookingId, world.Slot.BookingId);
+    }
+
     [Fact]
     public void Claim_WhenAlreadyPendingConfirmation_Throws()
     {

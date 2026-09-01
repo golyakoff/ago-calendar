@@ -206,6 +206,44 @@ public sealed class EventRepository(AgoCalendarDbContext db) : IEventRepository
         }
     }
 
+    public async Task<IReadOnlyList<Event>> ListByBookingIdAsync(
+        EventId bookingId, CancellationToken cancellationToken) =>
+        await db.Events
+            .Where(e => e.BookingId == bookingId)
+            .OrderBy(e => e.StartsAt)
+            .ToListAsync(cancellationToken);
+
+    public async Task SaveRangeAsync(IReadOnlyCollection<Event> events, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+
+        if (events.Count == 0)
+        {
+            return;
+        }
+
+        // EF's own SaveChangesAsync wraps every pending change in one implicit transaction when none
+        // is already open - which is the whole atomicity guarantee here for free: a run's cancel,
+        // reject or no-show either lands on every row or none of them, with no explicit
+        // BeginTransactionAsync needed. Every row already came from this same context
+        // (ListByBookingIdAsync), so none of them are Detached and nothing needs re-attaching.
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            db.ChangeTracker.Clear();
+            throw new EventConcurrencyConflictException(events.First().Id);
+        }
+        catch (DbUpdateException exception) when (IsOverlapViolation(exception))
+        {
+            db.ChangeTracker.Clear();
+            var first = events.MinBy(e => e.StartsAt)!;
+            throw new SlotOverlapException(first.WorkerId, first.Slot, exception);
+        }
+    }
+
     /// <summary><c>23P01 exclusion_violation</c> - the GiST constraint refused the write. Matched on
     /// the SQLSTATE rather than on the constraint's name: the code is the contract Postgres
     /// documents, a name is a string a future migration could rename.</summary>

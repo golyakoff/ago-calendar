@@ -83,8 +83,11 @@ public static class BookingEndpoints
         }
 
         // Nothing here says "pending", and BookingConfirmedResponse has no field that could.
+        // `20-18`: BookingId is the run's own anchor id - the same value every row of a multi-slot
+        // booking now carries as its own Event.BookingId, and the id the operator's own
+        // cancel/reject/no-show routes resolve the whole run from.
         return Results.Ok(new BookingConfirmedResponse(
-            booking.EventId.Value,
+            booking.BookingId.Value,
             booking.WorkerId.Value,
             booking.Slot.StartsAt,
             booking.Slot.EndsAt,

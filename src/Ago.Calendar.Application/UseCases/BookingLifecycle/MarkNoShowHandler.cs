@@ -52,9 +52,20 @@ public sealed class MarkNoShowHandler(
             return BookingLifecycleErrors.WrongTenant(command.EventId);
         }
 
+        // `20-18`: the route names one slot, which may be any member of the run - resolve the whole
+        // group before recording anything. Event.MarkNoShow's own "not before EndsAt" check, applied
+        // per row, is what makes this correct without any extra group-level logic: a run's last slot
+        // ends after every earlier one, so "now >= last slot's EndsAt" implies "now >= every other
+        // row's own EndsAt" - an operator who tries to no-show a run before its final slot has ended
+        // has that row's own check refuse, which aborts the whole group exactly as it should.
+        var group = await events.ListByBookingIdAsync(booking.BookingId ?? booking.Id, cancellationToken);
+
         try
         {
-            booking.MarkNoShow(clock.UtcNow);
+            foreach (var slot in group)
+            {
+                slot.MarkNoShow(clock.UtcNow);
+            }
         }
         catch (InvalidEventStateException exception)
         {
@@ -63,11 +74,14 @@ public sealed class MarkNoShowHandler(
             return BookingLifecycleErrors.InvalidState(exception.Message);
         }
 
-        booking.ClearDomainEvents();
+        foreach (var slot in group)
+        {
+            slot.ClearDomainEvents();
+        }
 
         try
         {
-            await events.SaveAsync(booking, cancellationToken);
+            await events.SaveRangeAsync(group, cancellationToken);
         }
         catch (EventConcurrencyConflictException)
         {

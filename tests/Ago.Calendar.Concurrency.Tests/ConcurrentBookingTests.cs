@@ -132,6 +132,70 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
         Assert.All(results, result => Assert.Equal(cards[0].Id, result!.Value.CustomerId));
     }
 
+    /// <summary>
+    /// `20-18`'s own highest-stakes guarantee, and the item's own required proof: two customers racing
+    /// for overlapping <b>runs</b> - not the same single slot, but two multi-slot bookings that share
+    /// exactly one slot - can never both win, because that shared row can only be updated once. Three
+    /// consecutive slots; one customer wants the first two, the other wants the last two, so slot 1 is
+    /// the one row both attempts genuinely contend for.
+    /// </summary>
+    [Fact]
+    public async Task TwoCustomersRacingForOverlappingRuns_ExactlyOneWins_AndNoPartialClaimSurvives()
+    {
+        var seed = await SeedAsync();
+        var slots = await ConsecutiveSlotsAsync(seed, count: 3, slotMinutes: 30, bufferMinutes: 10);
+        var runOne = new List<EventId> { slots[0].Id, slots[1].Id };
+        var runTwo = new List<EventId> { slots[1].Id, slots[2].Id };
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var attemptOne = Task.Run(() => AttemptAsync(seed, runOne, "+79993100001", gate));
+        var attemptTwo = Task.Run(() => AttemptAsync(seed, runTwo, "+79993100002", gate));
+
+        await Task.Delay(50);
+        gate.SetResult();
+        var results = await Task.WhenAll(attemptOne, attemptTwo);
+
+        // Exactly one run wins, whole - never both, and never a torn claim where one attempt got
+        // some of its slots and not others (BookingStore rolls the whole transaction back the moment
+        // its own rows-affected count falls short of the run's own length).
+        var winners = results.Where(result => result is not null).ToList();
+        Assert.Single(winners);
+        var winner = winners[0]!.Value;
+
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events
+            .Where(e => e.Id == slots[0].Id || e.Id == slots[1].Id || e.Id == slots[2].Id)
+            .ToDictionaryAsync(e => e.Id);
+
+        // Every slot the winner's own run named is claimed, sharing that run's own booking id.
+        foreach (var claimedId in winner.EventIds)
+        {
+            Assert.Equal(EventStatus.PendingConfirmation, stored[claimedId].Status);
+            Assert.Equal(winner.BookingId, stored[claimedId].BookingId);
+        }
+
+        // Slot 1 - the shared row both runs actually contended for - went to whichever run won, and
+        // is claimed either way.
+        Assert.Equal(EventStatus.PendingConfirmation, stored[slots[1].Id].Status);
+
+        // The loser's own slot - the one not shared with the winner's run - is untouched: still
+        // Available, no booking id, no customer, no deadline. That is the whole assertion this test
+        // exists for: the loser did not get a partial claim, it got nothing at all.
+        var loserOnlySlotId = winner.EventIds.Contains(slots[0].Id) ? slots[2].Id : slots[0].Id;
+        var loserSlot = stored[loserOnlySlotId];
+        Assert.Equal(EventStatus.Available, loserSlot.Status);
+        Assert.Null(loserSlot.BookingId);
+        Assert.Null(loserSlot.CustomerId);
+        Assert.Null(loserSlot.ConfirmationDeadline);
+
+        // And the loser's own lead card was never written - the same data-minimisation property the
+        // single-slot race already proves, restated for a run: a failed multi-slot attempt leaves
+        // exactly as little trace as a failed single-slot one.
+        var cards = await db.Customers.Where(c => c.TenantId == seed.TenantId).ToListAsync();
+        Assert.Single(cards);
+        Assert.Equal(winner.CustomerId, cards[0].Id);
+    }
+
     private async Task<IReadOnlyList<BookingConfirmation?>> RaceAsync(
         int callers, int phoneOffset, SeededCalendar seed, EventId eventId)
     {
@@ -149,8 +213,12 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
         return await Task.WhenAll(attempts);
     }
 
+    private Task<BookingConfirmation?> AttemptAsync(
+        SeededCalendar seed, EventId eventId, string phone, TaskCompletionSource gate) =>
+        AttemptAsync(seed, [eventId], phone, gate);
+
     private async Task<BookingConfirmation?> AttemptAsync(
-        SeededCalendar seed, EventId eventId, string phone, TaskCompletionSource gate)
+        SeededCalendar seed, IReadOnlyList<EventId> eventIds, string phone, TaskCompletionSource gate)
     {
         await using var db = fixture.CreateDbContext();
 
@@ -166,7 +234,7 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
             new BookingAttempt(
                 seed.TenantId,
                 seed.CalendarId,
-                eventId,
+                eventIds,
                 seed.ServiceId,
                 new PhoneNumber(phone),
                 "Anna",
@@ -187,6 +255,28 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
         await using var db = fixture.CreateDbContext();
         await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
         return slot;
+    }
+
+    /// <summary>`20-18`: <see cref="AnAvailableSlotAsync"/>'s own multi-slot generalisation - a real
+    /// run of consecutive <see cref="EventStatus.Available"/> rows, inserted the same way (through
+    /// <see cref="EventRepository.AddRangeAsync"/>, so the exclusion constraint is exercised exactly
+    /// as it is in production).</summary>
+    private async Task<IReadOnlyList<Event>> ConsecutiveSlotsAsync(
+        SeededCalendar seed, int count, int slotMinutes, int bufferMinutes)
+    {
+        var slots = new List<Event>(count);
+        var start = Now.AddHours(2);
+        for (var i = 0; i < count; i++)
+        {
+            slots.Add(Event.Materialize(
+                new EventId(NewId()), seed.TenantId, seed.CalendarId, seed.WorkerId,
+                new TimeSlot(start, start.AddMinutes(slotMinutes)), DateOnly.FromDateTime(start.UtcDateTime), Now));
+            start = start.AddMinutes(slotMinutes + bufferMinutes);
+        }
+
+        await using var db = fixture.CreateDbContext();
+        await new EventRepository(db).AddRangeAsync(slots, CancellationToken.None);
+        return slots;
     }
 
     private async Task<SeededCalendar> SeedAsync()

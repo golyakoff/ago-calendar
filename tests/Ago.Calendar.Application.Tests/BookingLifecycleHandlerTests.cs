@@ -157,6 +157,60 @@ public class BookingLifecycleHandlerTests
         Assert.Equal("booking.concurrency_conflict", result.Error!.Value.Code);
     }
 
+    /// <summary>`20-18`'s own Done-when, proven on a three-slot booking: cancel releases every slot of
+    /// the run, not only the one the route named - and the route may name *any* member, not just the
+    /// anchor.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Cancel_OnAThreeSlotBooking_CancelsEveryRow(int routeSlotIndex)
+    {
+        var group = BookingFixtures.ConfirmedBookingGroup(3);
+        var world = new World(group, routeEventId: group[routeSlotIndex].Id);
+
+        var result = await world.CancelAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, world.Events.Saved.Count);
+        Assert.All(world.Events.Saved, e => Assert.Equal(EventStatus.Cancelled, e.Status));
+        Assert.Equal(group.Select(e => e.Id).ToHashSet(), world.Events.Saved.Select(e => e.Id).ToHashSet());
+    }
+
+    [Fact]
+    public async Task Reject_OnAThreeSlotBooking_RejectsEveryRow()
+    {
+        var group = BookingFixtures.PendingBookingGroup(3);
+        var world = new World(group, routeEventId: group[0].Id);
+
+        var result = await world.RejectAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, world.Events.Saved.Count);
+        Assert.All(world.Events.Saved, e => Assert.Equal(EventStatus.Cancelled, e.Status));
+    }
+
+    [Fact]
+    public async Task MarkNoShow_OnAThreeSlotBooking_FlagsEveryRow_OnlyAfterTheWholeRunHasEnded()
+    {
+        var group = BookingFixtures.ConfirmedBookingGroup(3);
+        var lastSlotEndsAt = group[^1].EndsAt;
+
+        // Before the run's own last slot ends: refused, and nothing saved - even though the run's
+        // first slot ended a while ago. MarkNoShow's per-row check on the last row is what makes this
+        // correct without any extra group-level arithmetic - see MarkNoShowHandler's own remarks.
+        var tooEarly = new World(BookingFixtures.ConfirmedBookingGroup(3), at: lastSlotEndsAt.AddMinutes(-1));
+        Assert.Equal("booking.invalid_state", (await tooEarly.MarkNoShowAsync()).Error!.Value.Code);
+        Assert.Empty(tooEarly.Events.Saved);
+
+        var world = new World(group, at: lastSlotEndsAt, routeEventId: group[1].Id);
+        var result = await world.MarkNoShowAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, world.Events.Saved.Count);
+        Assert.All(world.Events.Saved, e => Assert.Equal(EventStatus.NoShow, e.Status));
+    }
+
     /// <summary>The three handlers plus their fakes. One world, one booking, one thing different per
     /// test.</summary>
     private sealed class World
@@ -165,9 +219,20 @@ public class BookingLifecycleHandlerTests
         private readonly CancelBookingHandler _cancel;
         private readonly MarkNoShowHandler _noShow;
 
+        private readonly EventId _routeEventId;
+
         public World(Event? booking, DateTimeOffset? at = null)
+            : this(booking is null ? [] : (IReadOnlyList<Event>)[booking], at, BookingFixtures.EventId)
         {
-            Events = new FakeEventRepositoryWithSaves(booking);
+        }
+
+        /// <summary>`20-18`: the group overload, for a test proving the three handlers act on a
+        /// whole multi-slot run. <paramref name="routeEventId"/> is whichever member of the run the
+        /// route named - any one of them, not necessarily the anchor.</summary>
+        public World(IReadOnlyList<Event> group, DateTimeOffset? at = null, EventId? routeEventId = null)
+        {
+            Events = new FakeEventRepositoryWithSaves(group);
+            _routeEventId = routeEventId ?? BookingFixtures.EventId;
             var clock = new FakeClock(at ?? BookingFixtures.Now);
 
             _reject = new RejectBookingHandler(Events, Permissions, clock);
@@ -181,14 +246,14 @@ public class BookingLifecycleHandlerTests
 
         public Task<Ago.Platform.Kernel.Result> RejectAsync() =>
             _reject.HandleAsync(
-                new RejectBooking(Operator, BookingFixtures.TenantId, BookingFixtures.EventId), CancellationToken.None);
+                new RejectBooking(Operator, BookingFixtures.TenantId, _routeEventId), CancellationToken.None);
 
         public Task<Ago.Platform.Kernel.Result> CancelAsync() =>
             _cancel.HandleAsync(
-                new CancelBooking(Operator, BookingFixtures.TenantId, BookingFixtures.EventId), CancellationToken.None);
+                new CancelBooking(Operator, BookingFixtures.TenantId, _routeEventId), CancellationToken.None);
 
         public Task<Ago.Platform.Kernel.Result> MarkNoShowAsync() =>
             _noShow.HandleAsync(
-                new MarkNoShow(Operator, BookingFixtures.TenantId, BookingFixtures.EventId), CancellationToken.None);
+                new MarkNoShow(Operator, BookingFixtures.TenantId, _routeEventId), CancellationToken.None);
     }
 }

@@ -210,6 +210,42 @@ public sealed class WorkerScheduleTests
         Assert.Equal(60, schedule.SlotMinutes);
     }
 
+    /// <summary>`20-18`'s own default, restated as a test: a schedule created without naming the flag
+    /// gets the author's own stated default - buffers count.</summary>
+    [Fact]
+    public void CreateWeekly_DefaultsBuffersCountTowardServiceDurationToTrue()
+    {
+        var schedule = WorkerSchedule.CreateWeekly(
+            NewScheduleId(), NewWorkerId(), slotMinutes: 30, bufferMinutes: 10, horizonDays: 30,
+            materializeFrom: new DateOnly(2026, 3, 2), Now);
+
+        Assert.True(schedule.BuffersCountTowardServiceDuration);
+    }
+
+    [Fact]
+    public void CreateWeekly_CanSetBuffersCountTowardServiceDurationToFalse()
+    {
+        var schedule = WorkerSchedule.CreateWeekly(
+            NewScheduleId(), NewWorkerId(), slotMinutes: 30, bufferMinutes: 10, horizonDays: 30,
+            materializeFrom: new DateOnly(2026, 3, 2), Now, buffersCountTowardServiceDuration: false);
+
+        Assert.False(schedule.BuffersCountTowardServiceDuration);
+    }
+
+    [Fact]
+    public void ReconfigureWeekly_CanFlipBuffersCountTowardServiceDuration()
+    {
+        var schedule = WorkerSchedule.CreateWeekly(
+            NewScheduleId(), NewWorkerId(), slotMinutes: 30, bufferMinutes: 10, horizonDays: 30,
+            materializeFrom: new DateOnly(2026, 3, 2), Now);
+
+        schedule.ReconfigureWeekly(
+            slotMinutes: 30, bufferMinutes: 10, horizonDays: 30, materializeFrom: new DateOnly(2026, 3, 2), Later,
+            buffersCountTowardServiceDuration: false);
+
+        Assert.False(schedule.BuffersCountTowardServiceDuration);
+    }
+
     [Fact]
     public void RecutFrom_MovesMaterializeFromBackwards()
     {

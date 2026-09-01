@@ -28,7 +28,8 @@ public class BookingStoreTests(PostgresFixture fixture)
         var confirmation = await BookAsync(seed, slot.Id, "+79990000010", "Anna");
 
         Assert.NotNull(confirmation);
-        Assert.Equal(slot.Id, confirmation.Value.EventId);
+        Assert.Equal(slot.Id, confirmation.Value.BookingId);
+        Assert.Equal([slot.Id], confirmation.Value.EventIds);
         Assert.Equal(seed.Worker.Id, confirmation.Value.WorkerId);
 
         // RETURNING gave the caller the slot the statement itself wrote, not a re-read.
@@ -42,6 +43,10 @@ public class BookingStoreTests(PostgresFixture fixture)
         Assert.Equal(confirmation.Value.CustomerId, stored.CustomerId);
         Assert.Equal(seed.Service.Id, stored.ServiceId);
         Assert.Equal(Now.AddMinutes(15), stored.ConfirmationDeadline);
+
+        // `20-18`: a single-slot booking is its own anchor - the claim wrote its own id into its own
+        // booking_id, not null.
+        Assert.Equal(slot.Id, stored.BookingId);
 
         var card = await db.Customers.SingleAsync(c => c.Id == confirmation.Value.CustomerId);
         Assert.Equal("+79990000010", card.Phone.Value);
@@ -250,6 +255,85 @@ public class BookingStoreTests(PostgresFixture fixture)
         Assert.Null(await BookAsync(seed, blocked.Id, "+79990000019"));
     }
 
+    /// <summary>`20-18`: the multi-row claim's own ordinary case - three consecutive slots, all
+    /// Available, claimed together in one statement.</summary>
+    [Fact]
+    public async Task AMultiSlotRun_IsClaimedWhole_WithOneSharedBookingIdOnEveryRow()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var run = await ConsecutiveSlotsAsync(seed, count: 3, slotMinutes: 30, bufferMinutes: 10);
+
+        var confirmation = await BookAsync(seed, [run[0].Id, run[1].Id, run[2].Id], "+79990000030");
+
+        Assert.NotNull(confirmation);
+        Assert.Equal(run[0].Id, confirmation.Value.BookingId);
+        Assert.Equal([run[0].Id, run[1].Id, run[2].Id], confirmation.Value.EventIds);
+
+        // The run's own whole span - first slot's start to last slot's end, buffers included - not
+        // just the first slot's own 30 minutes.
+        Assert.Equal(run[0].StartsAt, confirmation.Value.Slot.StartsAt);
+        Assert.Equal(run[2].EndsAt, confirmation.Value.Slot.EndsAt);
+
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events
+            .Where(e => e.Id == run[0].Id || e.Id == run[1].Id || e.Id == run[2].Id)
+            .ToListAsync();
+
+        Assert.All(stored, e => Assert.Equal(EventStatus.PendingConfirmation, e.Status));
+        Assert.All(stored, e => Assert.Equal(run[0].Id, e.BookingId));
+        Assert.All(stored, e => Assert.Equal(confirmation.Value.CustomerId, e.CustomerId));
+        Assert.All(stored, e => Assert.Equal(Now.AddMinutes(15), e.ConfirmationDeadline));
+    }
+
+    /// <summary>The item's own fails-before, proven directly: a run whose middle slot is already
+    /// gone is not claimable as a whole, and the rows-affected count falling short of the run's own
+    /// length is what rolls the entire attempt back - not just the missing slot's own absence, but the
+    /// two slots that *were* still Available a moment before this statement ran.</summary>
+    [Fact]
+    public async Task ARunWithOneSlotAlreadyTaken_ClaimsNothingAtAll()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var run = await ConsecutiveSlotsAsync(seed, count: 3, slotMinutes: 30, bufferMinutes: 10);
+
+        // Somebody else already has the middle slot.
+        await BookAsync(seed, run[1].Id, "+79990000031");
+
+        var confirmation = await BookAsync(seed, [run[0].Id, run[1].Id, run[2].Id], "+79990000032");
+
+        Assert.Null(confirmation);
+
+        await using var db = fixture.CreateDbContext();
+        var first = await db.Events.SingleAsync(e => e.Id == run[0].Id);
+        var last = await db.Events.SingleAsync(e => e.Id == run[2].Id);
+
+        // The two slots this second attempt could have taken are untouched - no torn claim survives
+        // a rolled-back transaction.
+        Assert.Equal(EventStatus.Available, first.Status);
+        Assert.Null(first.BookingId);
+        Assert.Equal(EventStatus.Available, last.Status);
+        Assert.Null(last.BookingId);
+
+        // And no second lead card for the attempt that lost - the same data-minimisation property the
+        // single-slot case already proves.
+        Assert.False(await db.Customers.AnyAsync(c => c.Phone == new PhoneNumber("+79990000032")));
+    }
+
+    private async Task<IReadOnlyList<Event>> ConsecutiveSlotsAsync(
+        SeededTenant seed, int count, int slotMinutes, int bufferMinutes)
+    {
+        var slots = new List<Event>(count);
+        var start = Now.AddHours(2);
+        for (var i = 0; i < count; i++)
+        {
+            slots.Add(CalendarSeed.Slot(seed, start, slotMinutes));
+            start = start.AddMinutes(slotMinutes + bufferMinutes);
+        }
+
+        await using var db = fixture.CreateDbContext();
+        await new EventRepository(db).AddRangeAsync(slots, CancellationToken.None);
+        return slots;
+    }
+
     private async Task<Event> AnAvailableSlotAsync(SeededTenant seed, DateTimeOffset? startsAt = null)
     {
         var slot = CalendarSeed.Slot(seed, startsAt ?? Now.AddHours(2));
@@ -258,9 +342,18 @@ public class BookingStoreTests(PostgresFixture fixture)
         return slot;
     }
 
-    private async Task<BookingConfirmation?> BookAsync(
+    private Task<BookingConfirmation?> BookAsync(
         SeededTenant seed,
         EventId eventId,
+        string phone,
+        string? displayName = null,
+        DateTimeOffset? at = null,
+        DateTimeOffset? phoneVerifiedAt = null) =>
+        BookAsync(seed, [eventId], phone, displayName, at, phoneVerifiedAt);
+
+    private async Task<BookingConfirmation?> BookAsync(
+        SeededTenant seed,
+        IReadOnlyList<EventId> eventIds,
         string phone,
         string? displayName = null,
         DateTimeOffset? at = null,
@@ -272,7 +365,7 @@ public class BookingStoreTests(PostgresFixture fixture)
             new BookingAttempt(
                 seed.Tenant.Id,
                 seed.Calendar.Id,
-                eventId,
+                eventIds,
                 seed.Service.Id,
                 new PhoneNumber(phone),
                 displayName,

@@ -47,9 +47,15 @@ public interface IPendingBookingReadStore
 }
 
 /// <summary>
-/// One row of the queue. Ids plus the handful of values a list needs; no navigation, no aggregate.
+/// One row of the queue - now one row **per booking**, not per slot (`20-18`). Ids plus the handful
+/// of values a list needs; no navigation, no aggregate.
 /// </summary>
-/// <param name="EventId">What the three operator actions address.</param>
+/// <param name="BookingId">
+/// What the three operator actions address. `20-18`: the run's own anchor id
+/// (<see cref="Event.BookingId"/>) rather than a single slot's - a three-slot booking is one row here,
+/// and this is the id its cancel/reject/no-show route names, exactly as it always could for a
+/// single-slot booking (the anchor of a one-row run is that row's own id).
+/// </param>
 /// <param name="CalendarId">Which calendar it belongs to - shown, not filtered on, because the queue
 /// spans all of them and an operator still needs to know which shop floor they are looking at.</param>
 /// <param name="WorkerId">Who the visit is with.</param>
@@ -57,10 +63,11 @@ public interface IPendingBookingReadStore
 /// <param name="CustomerId">Resolves the lead card. The queue carries no name and no phone number -
 /// a list does not need them, and a read model that joined them would put personal data into every
 /// row of a screen an operator leaves open all day.</param>
-/// <param name="StartsAt">When the visit is.</param>
-/// <param name="EndsAt">Exclusive.</param>
+/// <param name="StartsAt">When the visit is - the run's first slot.</param>
+/// <param name="EndsAt">Exclusive - the run's last slot, buffers between them included.</param>
 /// <param name="LocalDate">The business-local day, as the shop names it (adr/0049).</param>
-/// <param name="ConfirmationDeadline">When it auto-confirms if nobody acts.</param>
+/// <param name="ConfirmationDeadline">When it auto-confirms if nobody acts - the same instant on
+/// every row of a run, so grouping them loses nothing here.</param>
 /// <param name="IsOverdue">
 /// <b>The sweep's health, visible on the one screen a human already looks at.</b> True when the
 /// deadline has passed and the row is still pending - which should never last more than a tick, so a
@@ -78,7 +85,7 @@ public interface IPendingBookingReadStore
 /// state nothing can produce.
 /// </param>
 public readonly record struct PendingBookingRow(
-    EventId EventId,
+    EventId BookingId,
     CalendarId CalendarId,
     WorkerId WorkerId,
     ServiceId ServiceId,

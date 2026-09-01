@@ -78,7 +78,8 @@ internal sealed class FakeBookingStore : IBookingStore
         }
 
         return Task.FromResult<BookingConfirmation?>(new BookingConfirmation(
-            attempt.EventId,
+            attempt.EventIds[0],
+            attempt.EventIds,
             attempt.NewCustomerId,
             BookingFixtures.WorkerId,
             BookingFixtures.Slot,
@@ -135,10 +136,21 @@ internal sealed class FakeTenantRepository(Tenant? tenant) : ITenantRepository
     public Task SaveAsync(Tenant tenant, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-internal sealed class FakeEventRepository(Event? @event) : IEventRepository
+/// <summary>
+/// `20-18` widened this from a single optional slot to the worker's whole day: <c>BookEventHandler</c>
+/// now calls <see cref="ListForDayAsync"/> to let <c>ConsecutiveRunFinder</c> walk the day the same way
+/// production does, so a test that wants a multi-slot run has to hand the fake every row of that run,
+/// not just the one the customer picked.
+/// </summary>
+internal sealed class FakeEventRepository(IReadOnlyList<Event> events) : IEventRepository
 {
+    public FakeEventRepository(Event? single)
+        : this(single is null ? [] : (IReadOnlyList<Event>)[single])
+    {
+    }
+
     public Task<Event?> GetByIdAsync(EventId id, CancellationToken cancellationToken) =>
-        Task.FromResult(@event is not null && @event.Id == id ? @event : null);
+        Task.FromResult(events.FirstOrDefault(e => e.Id == id));
 
     public Task AddRangeAsync(IReadOnlyCollection<Event> events, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");
@@ -152,7 +164,8 @@ internal sealed class FakeEventRepository(Event? @event) : IEventRepository
 
     public Task<IReadOnlyList<Event>> ListForDayAsync(
         CalendarId calendarId, WorkerId workerId, DateOnly localDate, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Not reached by BookEventHandler.");
+        Task.FromResult<IReadOnlyList<Event>>(
+            [.. events.Where(e => e.CalendarId == calendarId && e.WorkerId == workerId && e.LocalDate == localDate)]);
 
     public Task ReplaceDayAsync(
         CalendarId calendarId, WorkerId workerId, DateOnly localDate,
@@ -164,6 +177,30 @@ internal sealed class FakeEventRepository(Event? @event) : IEventRepository
             "BookEventHandler must never save an Event aggregate - the claim is a compare-and-set " +
             "through IBookingStore. Reaching this is the load-mutate-save regression the item exists " +
             "to prevent.");
+
+    public Task<IReadOnlyList<Event>> ListByBookingIdAsync(EventId bookingId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
+
+    public Task SaveRangeAsync(IReadOnlyCollection<Event> events, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
+}
+
+/// <summary>`20-18`: the port <c>BookEventHandler</c> reads to run-find a multi-slot booking. Holds at
+/// most one schedule, matching every other fake's "one row is all a handler test needs" shape.</summary>
+internal sealed class FakeWorkerScheduleRepository(WorkerSchedule? schedule) : IWorkerScheduleRepository
+{
+    public Task<WorkerSchedule?> GetByWorkerIdAsync(WorkerId workerId, CancellationToken cancellationToken) =>
+        Task.FromResult(schedule is not null && schedule.WorkerId == workerId ? schedule : null);
+
+    public Task<IReadOnlyList<WorkerSchedule>> ListForCalendarAsync(
+        CalendarId calendarId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
+
+    public Task AddAsync(WorkerSchedule schedule, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
+
+    public Task SaveAsync(WorkerSchedule schedule, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
 }
 
 internal sealed class FakeWorkerRepository(Worker? worker) : IWorkerRepository

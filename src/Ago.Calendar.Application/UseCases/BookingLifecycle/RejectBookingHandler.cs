@@ -53,9 +53,19 @@ public sealed class RejectBookingHandler(
             return BookingLifecycleErrors.WrongTenant(command.EventId);
         }
 
+        // `20-18`: the route names one slot, which may be any member of the run - resolve the whole
+        // group before vetoing anything. Every row of a run shares one ConfirmationDeadline, so this
+        // handler races the sweep at the level of the whole group, not one row of it: whichever side
+        // commits first wins every row it touches, exactly the single-row race `RejectBookingHandler`'s
+        // own remarks already describe, generalised to a set.
+        var group = await events.ListByBookingIdAsync(booking.BookingId ?? booking.Id, cancellationToken);
+
         try
         {
-            booking.Reject(clock.UtcNow);
+            foreach (var slot in group)
+            {
+                slot.Reject(clock.UtcNow);
+            }
         }
         catch (InvalidEventStateException exception)
         {
@@ -65,11 +75,14 @@ public sealed class RejectBookingHandler(
             return BookingLifecycleErrors.InvalidState(exception.Message);
         }
 
-        booking.ClearDomainEvents();
+        foreach (var slot in group)
+        {
+            slot.ClearDomainEvents();
+        }
 
         try
         {
-            await events.SaveAsync(booking, cancellationToken);
+            await events.SaveRangeAsync(group, cancellationToken);
         }
         catch (EventConcurrencyConflictException)
         {

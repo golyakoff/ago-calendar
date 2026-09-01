@@ -143,6 +143,9 @@ public class OriginAuthorizationTests(PostgresFixture fixture) : IAsyncLifetime
 
     private async Task<Event> ABookableSlotAsync(SeededTenant seed)
     {
+        // `20-18`: BookEventHandler now run-finds through the worker's own schedule.
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, seed, horizonDays: 30);
+
         // Far enough ahead that the claim's own `starts_at > now` predicate holds against the host's
         // real clock - this test cannot inject a fake one, which is what makes it a check on the
         // wiring rather than on the logic.

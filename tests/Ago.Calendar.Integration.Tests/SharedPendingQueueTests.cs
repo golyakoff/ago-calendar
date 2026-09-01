@@ -43,8 +43,8 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
             first.Select(row => row.CalendarId).OrderBy(c => c.Value));
 
         Assert.Equal(
-            first.Select(row => row.EventId).OrderBy(e => e.Value),
-            second.Select(row => row.EventId).OrderBy(e => e.Value));
+            first.Select(row => row.BookingId).OrderBy(e => e.Value),
+            second.Select(row => row.BookingId).OrderBy(e => e.Value));
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         var result = await new RejectBookingHandler(
                 new EventRepository(db), new PermissionChecker(db), new FixedClock(Now))
             .HandleAsync(
-                new RejectBooking(world.FirstOperator, world.TenantId, onTheOtherCalendar.EventId),
+                new RejectBooking(world.FirstOperator, world.TenantId, onTheOtherCalendar.BookingId),
                 CancellationToken.None);
 
         Assert.True(result.IsSuccess, result.Error?.Message);
@@ -106,7 +106,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         // Read at an instant between the two deadlines: the earlier one is overdue, the later is not.
         var rows = await QueueAsync(world.FirstOperator, world.TenantId, at: Now.AddMinutes(20));
 
-        Assert.Equal(rows.OrderBy(row => row.ConfirmationDeadline).Select(r => r.EventId), rows.Select(r => r.EventId));
+        Assert.Equal(rows.OrderBy(row => row.ConfirmationDeadline).Select(r => r.BookingId), rows.Select(r => r.BookingId));
 
         // The overdue flag is the sweep's health made visible on the one screen a human already looks
         // at - a row that shows it means the sweep has not run, while the customer has already been
@@ -131,7 +131,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         Assert.All(withoutAccess, row => Assert.Null(row.Phone));
 
         // Same rows, same order - the only difference is the one field.
-        Assert.Equal(withAccess.Select(r => r.EventId), withoutAccess.Select(r => r.EventId));
+        Assert.Equal(withAccess.Select(r => r.BookingId), withoutAccess.Select(r => r.BookingId));
     }
 
     private async Task<OperatorId> AnOperatorWithoutCustomerReadAsync(TenantId tenantId)
@@ -159,7 +159,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
 
         await using (var db = fixture.CreateDbContext())
         {
-            var booking = await db.Events.SingleAsync(e => e.Id == target.EventId);
+            var booking = await db.Events.SingleAsync(e => e.Id == target.BookingId);
             booking.Confirm(Now.AddMinutes(30));
             booking.ClearDomainEvents();
             await db.SaveChangesAsync();
@@ -167,8 +167,61 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
 
         var after = await QueueAsync(world.FirstOperator, world.TenantId);
 
-        Assert.DoesNotContain(after, row => row.EventId == target.EventId);
+        Assert.DoesNotContain(after, row => row.BookingId == target.BookingId);
         Assert.Single(after);
+    }
+
+    /// <summary>`20-18`'s own Done-when: "the pending queue shows one row for a three-slot booking" -
+    /// against a real Postgres, so <c>PendingBookingReadStore</c>'s own <c>group by booking_id</c> is
+    /// what is actually proven, not a description of intent.</summary>
+    [Fact]
+    public async Task AThreeSlotBooking_ShowsAsOneRowInTheQueue()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var run = await APendingBookingGroupAsync(
+            seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, seed.Service.Id,
+            "+79998000099", Now.AddMinutes(15), Now.AddDays(3));
+
+        var rows = await QueueAsync(seed.Operator.Id, seed.Tenant.Id);
+
+        var row = Assert.Single(rows);
+        Assert.Equal(run[0].Id, row.BookingId);
+
+        // The run's own whole span in one row, not the anchor's own first slot alone.
+        Assert.Equal(run[0].StartsAt, row.StartsAt);
+        Assert.Equal(run[^1].EndsAt, row.EndsAt);
+    }
+
+    private async Task<IReadOnlyList<Event>> APendingBookingGroupAsync(
+        TenantId tenantId, CalendarId calendarId, WorkerId workerId, ServiceId serviceId,
+        string phone, DateTimeOffset deadline, DateTimeOffset startsAt, int count = 3)
+    {
+        var slots = new List<Event>(count);
+        var start = startsAt;
+        for (var i = 0; i < count; i++)
+        {
+            slots.Add(Event.Materialize(
+                new EventId(CalendarSeed.NewId()), tenantId, calendarId, workerId,
+                new TimeSlot(start, start.AddMinutes(30)), DateOnly.FromDateTime(start.UtcDateTime), Now));
+            start = start.AddMinutes(40);
+        }
+
+        var customer = Customer.Register(new CustomerId(CalendarSeed.NewId()), tenantId, new PhoneNumber(phone), Now);
+
+        await using var db = fixture.CreateDbContext();
+        db.Customers.Add(customer);
+        db.Events.AddRange(slots);
+        await db.SaveChangesAsync();
+
+        var anchorId = slots[0].Id;
+        foreach (var slot in slots)
+        {
+            slot.Claim(customer.Id, serviceId, Now, deadline, anchorId);
+            slot.ClearDomainEvents();
+        }
+
+        await db.SaveChangesAsync();
+        return slots;
     }
 
     private async Task<IReadOnlyList<PendingBookingRow>> QueueAsync(

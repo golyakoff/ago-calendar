@@ -27,7 +27,8 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         select e.id as "EventId", e.local_date as "LocalDate", e.starts_at as "StartsAt",
                e.ends_at as "EndsAt", e.status as "Status",
                e.service_id as "ServiceId", s.name as "ServiceName",
-               e.customer_id as "CustomerId", null::text as "CustomerDisplayName", null::text as "Phone"
+               e.customer_id as "CustomerId", null::text as "CustomerDisplayName", null::text as "Phone",
+               e.booking_id as "BookingId"
         from events e
         left join services s on s.id = e.service_id
         where e.tenant_id = @TenantId
@@ -50,7 +51,8 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         select e.id as "EventId", e.local_date as "LocalDate", e.starts_at as "StartsAt",
                e.ends_at as "EndsAt", e.status as "Status",
                e.service_id as "ServiceId", s.name as "ServiceName",
-               e.customer_id as "CustomerId", c.display_name as "CustomerDisplayName", c.phone as "Phone"
+               e.customer_id as "CustomerId", c.display_name as "CustomerDisplayName", c.phone as "Phone",
+               e.booking_id as "BookingId"
         from events e
         left join services s on s.id = e.service_id
         left join customers c on c.id = e.customer_id
@@ -101,7 +103,10 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         // null when the query never selected the column at all (SqlWithoutContactData leaves the
         // Dapper-materialised Phone at its type default) - see WorkerSlotRow.Phone's own remarks on
         // the two things a null here can mean, told apart by CustomerId.
-        row.Phone is null ? null : new PhoneNumber(row.Phone));
+        row.Phone is null ? null : new PhoneNumber(row.Phone),
+        // `20-18`: null exactly on an Available or Blocked row - see WorkerSlotRow.BookingId's own
+        // remarks.
+        row.BookingId is null ? null : new EventId(row.BookingId.Value));
 
     /// <summary>The raw shape Dapper materialises, separate from <see cref="WorkerSlotRow"/> so the
     /// Application-facing row can hold strongly-typed ids and <see cref="DateTimeOffset"/>s while this
@@ -116,5 +121,6 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         string? ServiceName,
         Guid? CustomerId,
         string? CustomerDisplayName,
-        string? Phone);
+        string? Phone,
+        Guid? BookingId);
 }

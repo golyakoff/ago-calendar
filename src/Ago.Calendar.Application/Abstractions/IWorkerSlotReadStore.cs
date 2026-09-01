@@ -56,6 +56,14 @@ public interface IWorkerSlotReadStore
 /// <param name="Phone">The same two-reasons-for-null story as <paramref name="CustomerDisplayName"/>,
 /// and see <see cref="PendingBookingRow.Phone"/> for why "permitted but nothing on file" is not a
 /// third state anything here can produce.</param>
+/// <param name="BookingId">
+/// `20-18`: which booking this slot belongs to - <see cref="Event.BookingId"/>, exposed verbatim.
+/// Null exactly when <paramref name="Status"/> is <see cref="EventStatus.Available"/> or
+/// <see cref="EventStatus.Blocked"/>. This item's own scope keeps a slot as one row with one status -
+/// no per-service grid, no merged cell - so a three-slot booking is still three rows here; this is
+/// what lets the console tell they are the same booking without inventing a second read model to say
+/// so.
+/// </param>
 public readonly record struct WorkerSlotRow(
     EventId EventId,
     DateOnly LocalDate,
@@ -66,4 +74,5 @@ public readonly record struct WorkerSlotRow(
     string? ServiceName,
     CustomerId? CustomerId,
     string? CustomerDisplayName,
-    PhoneNumber? Phone);
+    PhoneNumber? Phone,
+    EventId? BookingId);

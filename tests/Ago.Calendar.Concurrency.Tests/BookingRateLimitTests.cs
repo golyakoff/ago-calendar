@@ -173,6 +173,7 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
             new EventRepository(db),
             new WorkerRepository(db),
             new ServiceRepository(db),
+            new WorkerScheduleRepository(db),
             new BookingStore(db),
             new RedisRateLimiter(
                 fixture.RedisMultiplexer,
@@ -220,11 +221,19 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
         worker.JoinCalendar(calendar);
         worker.Offer(service);
 
+        // `20-18`: BookEventHandler now run-finds through the worker's own schedule - 45 minutes, no
+        // buffer, matching AvailableSlotsAsync's own fixed-width slots exactly, so every booking here
+        // stays the single-slot case this file's own concern (rate limiting) needs.
+        var schedule = WorkerSchedule.CreateWeekly(
+            new WorkerScheduleId(NewId()), worker.Id, slotMinutes: 45, bufferMinutes: 0, horizonDays: 30,
+            materializeFrom: DateOnly.FromDateTime(Now.UtcDateTime), Now);
+
         await using var db = fixture.CreateDbContext();
         db.Tenants.Add(tenant);
         db.Calendars.Add(calendar);
         db.Services.Add(service);
         db.Workers.Add(worker);
+        db.WorkerSchedules.Add(schedule);
         await db.SaveChangesAsync();
 
         return new SeededCalendar(tenant.Id, calendar.Id, worker.Id) { ServiceId = service.Id };

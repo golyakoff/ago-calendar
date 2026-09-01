@@ -114,4 +114,23 @@ public interface IEventRepository
     /// product's central race (two customers, one slot) is the ordinary outcome for one of them.
     /// </summary>
     Task SaveAsync(Event @event, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// `20-18`: every row of one booking - the anchor plus every slot claimed alongside it - given
+    /// any one member's own <see cref="Event.BookingId"/>. What
+    /// <c>CancelBookingHandler</c>/<c>RejectBookingHandler</c>/<c>MarkNoShowHandler</c> load before
+    /// acting: an operator's route names one event id, which may be any slot of the run, and this is
+    /// the lookup that turns "one id" into "the whole booking" before a transition is attempted on any
+    /// of it.
+    /// </summary>
+    Task<IReadOnlyList<Event>> ListByBookingIdAsync(EventId bookingId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Saves every row of one booking's transition in a single round trip. Throws
+    /// <see cref="EventConcurrencyConflictException"/> under the identical rule <see cref="SaveAsync"/>
+    /// already states, generalised to a set: if any row of the run was changed first by another
+    /// writer, none of this call's changes commit - a run's cancel, reject or no-show is one atomic
+    /// act, never a partial one that leaves some slots transitioned and others not.
+    /// </summary>
+    Task SaveRangeAsync(IReadOnlyCollection<Event> events, CancellationToken cancellationToken);
 }

@@ -17,6 +17,10 @@ internal sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         builder.Property(e => e.ServiceId).HasColumnName("service_id").HasConversion(IdConverters.NullableService);
         builder.Property(e => e.CustomerId).HasColumnName("customer_id").HasConversion(IdConverters.NullableCustomer);
 
+        // `20-18`: which booking this row belongs to - another event's own id, the run's anchor. See
+        // Event.BookingId's own remarks for why this column rather than a second `bookings` table.
+        builder.Property(e => e.BookingId).HasColumnName("booking_id").HasConversion(IdConverters.NullableEvent);
+
         // timestamptz - absolute instants, the only kind of time this table stores. Contrast
         // working_hours_rules, whose `time` columns are wall clock; the two are converted into each
         // other exactly once, at materialisation, and never compared directly.
@@ -91,5 +95,25 @@ internal sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         // is non-sargable, so this index would be unusable and every day-scoped edit would scan.
         builder.HasIndex(e => new { e.CalendarId, e.WorkerId, e.LocalDate })
             .HasDatabaseName("ix_events_worker_day");
+
+        // `20-18`: every read model that groups a multi-slot run back into one booking
+        // (PendingBookingReadStore, IEventRepository.ListByBookingIdAsync) asks "every row with this
+        // booking_id", so the index is on the column alone. Partial - `WHERE booking_id IS NOT NULL` -
+        // because an Available or Blocked row never carries one, and indexing that majority of the
+        // table for a predicate no query ever asks would only cost writes for no reader.
+        builder.HasIndex(e => e.BookingId)
+            .HasDatabaseName("ix_events_booking_id")
+            .HasFilter("booking_id IS NOT NULL");
+
+        // A self-referencing foreign key - booking_id names another row of this same table, the run's
+        // anchor. Real referential integrity at negligible cost: every write that sets it does so
+        // inside the same transaction as the anchor row's own claim (BookingStore.TryBookAsync), so
+        // the constraint can never actually reject a legitimate write, but it does mean a future bug
+        // that pointed booking_id at a nonexistent id fails loudly at the database rather than
+        // silently producing a group lookup that finds nothing. No navigation property either
+        // direction: Event has no "the other rows of my own run" collection to keep in sync, the same
+        // reason the four HasOne calls above declare no inverse navigation on their principal types.
+        builder.HasOne<Event>().WithMany().HasForeignKey(e => e.BookingId).HasPrincipalKey(e => e.Id)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

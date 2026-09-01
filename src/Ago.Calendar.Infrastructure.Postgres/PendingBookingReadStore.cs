@@ -42,17 +42,30 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
     /// "a parameterless default constructor or one matching signature... is required" at
     /// materialisation, not at compile time.
     /// </summary>
+    /// <summary>
+    /// `20-18`: one row per <b>booking</b>, not per slot - <c>group by booking_id</c> and its own
+    /// functionally-dependent columns, rather than a plain <c>select</c>. Every column besides
+    /// <c>starts_at</c>/<c>ends_at</c> is identical across every row of one booking by construction
+    /// (the claim writes them once, onto every row of the run, in the same statement -
+    /// <c>BookingStore.ClaimSlotSql</c>), so grouping by all of them together with <c>booking_id</c> is
+    /// exact, not an aggregation choice: Postgres requires every selected, non-aggregated column to
+    /// appear in <c>group by</c>, and every one of them here is safe to because a booking cannot
+    /// disagree with itself on its own customer, service, calendar, worker, day or deadline.
+    /// <c>starts_at</c>/<c>ends_at</c> are the only two that genuinely differ row to row, so they are
+    /// the only two aggregated - <c>min</c>/<c>max</c> - to produce the run's own whole span.
+    /// </summary>
     private const string SqlWithoutContactData =
         """
-        select id as "EventId", calendar_id as "CalendarId", worker_id as "WorkerId",
+        select booking_id as "EventId", calendar_id as "CalendarId", worker_id as "WorkerId",
                service_id as "ServiceId", customer_id as "CustomerId",
-               starts_at as "StartsAt", ends_at as "EndsAt", local_date as "LocalDate",
+               min(starts_at) as "StartsAt", max(ends_at) as "EndsAt", local_date as "LocalDate",
                confirmation_deadline as "ConfirmationDeadline",
                (confirmation_deadline <= @Now) as "IsOverdue",
                null::text as "Phone"
         from events
         where tenant_id = @TenantId
           and status = 'PendingConfirmation'
+        group by booking_id, calendar_id, worker_id, service_id, customer_id, local_date, confirmation_deadline
         order by confirmation_deadline
         limit @Limit
         """;
@@ -68,9 +81,9 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
     /// </summary>
     private const string SqlWithContactData =
         """
-        select e.id as "EventId", e.calendar_id as "CalendarId", e.worker_id as "WorkerId",
+        select e.booking_id as "EventId", e.calendar_id as "CalendarId", e.worker_id as "WorkerId",
                e.service_id as "ServiceId", e.customer_id as "CustomerId",
-               e.starts_at as "StartsAt", e.ends_at as "EndsAt", e.local_date as "LocalDate",
+               min(e.starts_at) as "StartsAt", max(e.ends_at) as "EndsAt", e.local_date as "LocalDate",
                e.confirmation_deadline as "ConfirmationDeadline",
                (e.confirmation_deadline <= @Now) as "IsOverdue",
                c.phone as "Phone"
@@ -78,6 +91,8 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         left join customers c on c.id = e.customer_id
         where e.tenant_id = @TenantId
           and e.status = 'PendingConfirmation'
+        group by e.booking_id, e.calendar_id, e.worker_id, e.service_id, e.customer_id, e.local_date,
+                 e.confirmation_deadline, c.phone
         order by e.confirmation_deadline
         limit @Limit
         """;

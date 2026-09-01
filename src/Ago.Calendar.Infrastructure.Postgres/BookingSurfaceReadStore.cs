@@ -16,13 +16,27 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 /// </summary>
 public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBookingSurfaceReadStore
 {
-    // `20-14`: a service longer than a worker's own slot is not offered *for that worker* - a LEFT
-    // JOIN rather than an inner one, and deliberately so: a worker with a schedule whose slot is too
-    // short is excluded, but a worker with *no* schedule row at all is not silently excluded from
-    // ever appearing here. In real operation that second case cannot produce a bookable slot anyway
-    // (MaterializeAvailabilityHandler and EditDayBoundaryHandler both refuse a schedule-less worker),
-    // so the predicate is written to fail open on "no schedule" rather than to double as an implicit
-    // "has a schedule" gate this query was never asked to enforce.
+    /// <summary>
+    /// `20-18`: replaces `20-14`'s single-slot filter (<c>wsc.slot_minutes &gt;= s.duration_minutes</c>)
+    /// with a "can this ever work" filter, now that a service longer than one slot is several
+    /// consecutive slots rather than simply unofferable. Mirrors
+    /// <see cref="ConsecutiveRunFinder.ComputeSlotsNeeded"/>'s own arithmetic in SQL - a duplication
+    /// this file accepts rather than avoids, because the two run in different engines and this side's
+    /// job is only ever "could a run of this length conceivably exist", never the live decision (that
+    /// is <see cref="ConsecutiveRunFinder"/>'s own job, in Domain, tested there against the real,
+    /// single, authoritative implementation this SQL only approximates). <c>&lt;= 1440</c> - one
+    /// day's minutes - is the generous, deliberately
+    /// unmeasured bound the item's own scope calls for: a run cannot cross a business-local day
+    /// (out of scope), so nothing longer than a day could ever be booked regardless of a worker's own
+    /// hours, and checking against the worker's *actual* hours here would turn a "can this ever work"
+    /// filter into a live availability query this method was never asked to become.
+    ///
+    /// <para>Still a <c>LEFT JOIN</c>, for `20-14`'s own original reason: a worker with no schedule row
+    /// at all fails open rather than being silently excluded, because in real operation that worker has
+    /// no materialised slots to exclude anyway (<c>MaterializeAvailabilityHandler</c> refuses a
+    /// schedule-less worker) - this query's job is not to double as an implicit "has a schedule"
+    /// gate.</para>
+    /// </summary>
     private const string ServicesSql =
         """
         select distinct s.id as "ServiceId", s.name as "Name", s.duration_minutes as "DurationMinutes"
@@ -31,10 +45,20 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
         join workers w on w.id = ws.worker_id and w.is_active
         join calendar_workers cw on cw.worker_id = w.id and cw.calendar_id = @CalendarId
         left join worker_schedules wsc on wsc.worker_id = w.id
-        where wsc.worker_id is null or wsc.slot_minutes >= s.duration_minutes
+        cross join lateral (
+            select (case when wsc.buffers_count_toward_service_duration
+                         then ceil((s.duration_minutes + wsc.buffer_minutes)::numeric
+                                   / (wsc.slot_minutes + wsc.buffer_minutes))
+                         else ceil(s.duration_minutes::numeric / wsc.slot_minutes)
+                    end)::int as slots_needed
+        ) run
+        where wsc.worker_id is null
+           or (run.slots_needed * wsc.slot_minutes + (run.slots_needed - 1) * wsc.buffer_minutes) <= 1440
         order by s.name
         """;
 
+    /// <summary>Same "can this ever work" filter as <see cref="ServicesSql"/>, scoped to one already-
+    /// chosen service rather than every service on the calendar.</summary>
     private const string WorkersSql =
         """
         select w.id as "WorkerId", w.display_name as "DisplayName"
@@ -43,7 +67,16 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
         join worker_services ws on ws.worker_id = w.id and ws.service_id = @ServiceId
         join services s on s.id = ws.service_id
         left join worker_schedules wsc on wsc.worker_id = w.id
-        where w.is_active and (wsc.worker_id is null or wsc.slot_minutes >= s.duration_minutes)
+        cross join lateral (
+            select (case when wsc.buffers_count_toward_service_duration
+                         then ceil((s.duration_minutes + wsc.buffer_minutes)::numeric
+                                   / (wsc.slot_minutes + wsc.buffer_minutes))
+                         else ceil(s.duration_minutes::numeric / wsc.slot_minutes)
+                    end)::int as slots_needed
+        ) run
+        where w.is_active
+          and (wsc.worker_id is null
+               or (run.slots_needed * wsc.slot_minutes + (run.slots_needed - 1) * wsc.buffer_minutes) <= 1440)
         order by w.display_name
         """;
 
@@ -53,12 +86,23 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
     /// is written as a literal rather than a parameter: a partial index is only usable when the
     /// planner can prove the query's predicate implies the index's own.
     ///
-    /// <para>The duration filter is on the *slot*, not on the service: `20-14` sizes every
-    /// materialised slot to the worker's own <c>WorkerSchedule.SlotMinutes</c>, so a shorter service
-    /// fits a longer slot and a longer one does not fit a shorter. <c>BookEventHandler</c> asserts the
-    /// same rule at claim time; offering a slot here that it would then refuse would be a picker whose
-    /// choices are not choices. <see cref="ListWorkersAsync"/>'s own join keeps a service that does
-    /// not fit a worker's slot from being offered for him one step earlier than this.</para>
+    /// <para><b>`20-18`: a candidate is offered only when a real, unbroken run of the length the
+    /// service needs starts there.</b> <c>run.slots_needed</c> is the same arithmetic
+    /// <see cref="ConsecutiveRunFinder.ComputeSlotsNeeded"/> computes, evaluated here from the
+    /// worker's own <c>worker_schedules</c> row - an <c>INNER JOIN</c> this time, not the fail-open
+    /// <c>LEFT JOIN</c> <see cref="ServicesSql"/> uses: a materialised slot cannot exist without a
+    /// schedule that produced it, so a worker with none here has no rows to exclude in the first
+    /// place, and there is no arithmetic to fail open on. For <c>slots_needed = 1</c> (the ordinary
+    /// case) the check is skipped entirely - the single-row form this query has always been. For more,
+    /// a successor's expected start is exact arithmetic, not a second lookup of the grid: every slot on
+    /// one already-materialised day comes from one <c>WorkerSchedule</c> snapshot applied uniformly
+    /// (`20-02`'s materialiser), so the <c>i</c>-th successor of a candidate starting at
+    /// <c>e.starts_at</c> must begin at exactly <c>e.starts_at + i * (slot_minutes + buffer_minutes)</c>
+    /// if it exists at all - the identical exact-equality reasoning
+    /// <see cref="ConsecutiveRunFinder.FindRun"/>'s own remarks state for the same walk done in
+    /// memory. This is a courtesy filter, not the guarantee: a slot listed here and taken - whole or in
+    /// part - a second later is an ordinary lost race the claim's own <c>WHERE</c> clause (adr/0059,
+    /// ADR-0086) settles, not a stale read this query needs to defend against.</para>
     /// </summary>
     private const string OpenSlotsSql =
         """
@@ -68,11 +112,34 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
         join workers w on w.id = e.worker_id and w.is_active
         join worker_services ws on ws.worker_id = e.worker_id and ws.service_id = @ServiceId
         join services s on s.id = ws.service_id
+        join worker_schedules wsc on wsc.worker_id = e.worker_id
+        cross join lateral (
+            select (case when wsc.buffers_count_toward_service_duration
+                         then ceil((s.duration_minutes + wsc.buffer_minutes)::numeric
+                                   / (wsc.slot_minutes + wsc.buffer_minutes))
+                         else ceil(s.duration_minutes::numeric / wsc.slot_minutes)
+                    end)::int as slots_needed
+        ) run
         where e.calendar_id = @CalendarId
           and e.status = 'Available'
           and e.starts_at > @NotBefore
           and (@WorkerId is null or e.worker_id = @WorkerId)
-          and extract(epoch from (e.ends_at - e.starts_at)) >= s.duration_minutes * 60
+          and (
+                run.slots_needed = 1
+                or not exists (
+                    select 1
+                    from generate_series(1, run.slots_needed - 1) as successor(i)
+                    where not exists (
+                        select 1
+                        from events e2
+                        where e2.calendar_id = e.calendar_id
+                          and e2.worker_id = e.worker_id
+                          and e2.status = 'Available'
+                          and e2.starts_at = e.starts_at
+                              + (successor.i * (wsc.slot_minutes + wsc.buffer_minutes)) * interval '1 minute'
+                    )
+                )
+              )
         order by e.starts_at, w.display_name
         limit @Limit
         """;

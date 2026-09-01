@@ -45,13 +45,24 @@ public sealed class CancelBookingHandler(
             return BookingLifecycleErrors.WrongTenant(command.EventId);
         }
 
+        // `20-18`: the route names one slot, which may be any member of the run - resolve the whole
+        // group before transitioning anything. A never-claimed row (BookingId null) is its own group
+        // of one, which is also what Event.Cancel's own state check then correctly refuses.
+        var group = await events.ListByBookingIdAsync(booking.BookingId ?? booking.Id, cancellationToken);
+
         try
         {
-            // Event.Cancel accepts PendingConfirmation as well as Booked, which is deliberate on the
-            // aggregate's part: an operator looking at a queue does not always know which side of the
-            // deadline a row is on, and refusing on that basis would produce an error the operator
-            // cannot act on. The permission is what separates the two acts, not the state machine.
-            booking.Cancel(clock.UtcNow);
+            foreach (var slot in group)
+            {
+                // Event.Cancel accepts PendingConfirmation as well as Booked, which is deliberate on
+                // the aggregate's part: an operator looking at a queue does not always know which side
+                // of the deadline a row is on, and refusing on that basis would produce an error the
+                // operator cannot act on. The permission is what separates the two acts, not the state
+                // machine. Every row of the run is cancelled together, in memory, before anything is
+                // saved - so a row that refuses (already cancelled by a previous partial attempt, say)
+                // aborts the whole group rather than leaving some rows transitioned and others not.
+                slot.Cancel(clock.UtcNow);
+            }
         }
         catch (InvalidEventStateException exception)
         {
@@ -59,11 +70,14 @@ public sealed class CancelBookingHandler(
         }
 
         // See RejectBookingHandler for why EventCancelled is not staged to the outbox.
-        booking.ClearDomainEvents();
+        foreach (var slot in group)
+        {
+            slot.ClearDomainEvents();
+        }
 
         try
         {
-            await events.SaveAsync(booking, cancellationToken);
+            await events.SaveRangeAsync(group, cancellationToken);
         }
         catch (EventConcurrencyConflictException)
         {

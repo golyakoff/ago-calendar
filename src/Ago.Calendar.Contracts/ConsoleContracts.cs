@@ -115,8 +115,27 @@ public sealed record CreateRoleRequest(string Name, IReadOnlyList<string> Permis
 
 public sealed record RoleResponse(Guid RoleId, string Name, IReadOnlyList<string> Permissions);
 
+/// <summary>`adr/0088`: a tenant invites a colleague onto the Access screen. Nothing but a display name
+/// and the address the console's own copy calls "the account they already sign in with" - never
+/// "link", "subject" or "second account", the ADR's own wording for what the interface must never say.
+/// </summary>
+public sealed record InviteOperatorRequest(string DisplayName, string Email);
+
+/// <param name="IsInvited">`adr/0088`: true exactly when this operator has no Keycloak subject
+/// attached yet - the console's own Invited/Active column, read off the one fact the row can honestly
+/// report about itself without exposing anything about identity plumbing.</param>
+/// <param name="InvitedEmail">The address an invite was sent to, if this operator was created that
+/// way - null for the account owner, who is provisioned directly rather than invited. Kept even after
+/// <see cref="IsInvited"/> flips to <see langword="false"/> - see
+/// <c>Ago.Calendar.Domain.Operator.InvitedEmail</c>'s own remarks on why the field is never
+/// cleared.</param>
 public sealed record OperatorResponse(
-    Guid OperatorId, string DisplayName, bool IsAccountOwner, IReadOnlyList<Guid> RoleIds);
+    Guid OperatorId,
+    string DisplayName,
+    bool IsAccountOwner,
+    bool IsInvited,
+    string? InvitedEmail,
+    IReadOnlyList<Guid> RoleIds);
 
 /// <param name="NoShowCount">Read honestly - see <c>ContactRow.NoShowCount</c>'s own remarks on why
 /// this is zero for every customer in this product's v1, not a bug in the report.</param>

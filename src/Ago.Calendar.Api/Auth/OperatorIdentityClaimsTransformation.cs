@@ -1,5 +1,6 @@
 ﻿using System.Security.Claims;
 using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Domain;
 using Microsoft.AspNetCore.Authentication;
 
 namespace Ago.Calendar.Api.Auth;
@@ -30,7 +31,16 @@ namespace Ago.Calendar.Api.Auth;
 /// <para><b>Idempotent, because it is not.</b> ASP.NET Core runs an <see cref="IClaimsTransformation"/>
 /// on every authentication, and on some paths more than once per request - a documented sharp edge.
 /// The guard below is what stops a principal accumulating three copies of the same claim; the
-/// transformation is otherwise a pure function of <c>sub</c>.</para>
+/// transformation is otherwise a pure function of <c>sub</c> (and, on the one fallback path below, of
+/// <c>sub</c> and the token's own <c>email</c> claim together).</para>
+///
+/// <para><b>`adr/0088`'s email fallback lives here, not as a second call site.</b> When no operator
+/// resolves by <c>sub</c>, this method tries once more against invited rows by email before giving up -
+/// <see cref="TryLinkInvitedOperatorByEmailAsync"/>. This is deliberately the only place that
+/// mutates an operator as a side effect of an incoming request: `20-08`'s own Done-when draws the line
+/// at booking actions creating or mutating a row, not at this transformation completing a deliberate
+/// invite the tenant already made. See that method's own remarks for the collision cases it refuses to
+/// guess through.</para>
 /// </summary>
 public sealed class OperatorIdentityClaimsTransformation(IOperatorRepository operators) : IClaimsTransformation
 {
@@ -53,12 +63,16 @@ public sealed class OperatorIdentityClaimsTransformation(IOperatorRepository ope
             return principal;
         }
 
-        var @operator = await operators.FindByExternalSubjectIdAsync(subject, CancellationToken.None);
+        var @operator = await operators.FindByExternalSubjectIdAsync(subject, CancellationToken.None)
+            ?? await TryLinkInvitedOperatorByEmailAsync(subject, principal);
+
         if (@operator is null)
         {
-            // No match, no claim, and no exception: a real Keycloak user who is not an operator here
-            // is refused by the policy, which is a 403 rather than a 500. adr/0022 chose this
-            // explicitly over letting a downstream accessor throw on a missing claim.
+            // No match, no claim, and no exception: a real Keycloak user who is not an operator here -
+            // invited or otherwise - is refused by the policy, which is a 403 rather than a 500.
+            // adr/0022 chose this explicitly over letting a downstream accessor throw on a missing
+            // claim; `20-08`'s own Done-when is the same call made a second time, for a chat-originated
+            // action arriving from a subject with no operator row at all.
             return principal;
         }
 
@@ -72,5 +86,54 @@ public sealed class OperatorIdentityClaimsTransformation(IOperatorRepository ope
         var transformed = principal.Clone();
         transformed.AddIdentity(identity);
         return transformed;
+    }
+
+    /// <summary>
+    /// `adr/0088`'s invite-a-colleague flow, completed. Called only when <c>sub</c> resolved nothing -
+    /// a person who already has an operator row never reaches here, so a subject once bound can never
+    /// be re-bound to a different row by an email collision: the direct <c>sub</c> lookup always wins
+    /// first, every time, for every request.
+    ///
+    /// <para><b>The two collisions this deliberately refuses rather than resolves cleverly:</b> two
+    /// invited rows sharing an address - <c>FindInvitedByEmailAsync</c> itself returns null for more
+    /// than one candidate, so this method never even sees which one to pick; and an invited email that
+    /// happens to equal an already-active operator's own (stale) <c>InvitedEmail</c> - impossible to
+    /// match here by construction, because the repository query filters to
+    /// <c>ExternalSubjectId == null</c>, and an active operator's is never null. Both leave the request
+    /// unresolved rather than guessing, exactly as adr/0088's consequence section chose.</para>
+    /// </summary>
+    private async Task<Operator?> TryLinkInvitedOperatorByEmailAsync(string subject, ClaimsPrincipal principal)
+    {
+        var emailClaim = principal.FindFirstValue("email") ?? principal.FindFirstValue(ClaimTypes.Email);
+        if (string.IsNullOrWhiteSpace(emailClaim))
+        {
+            return null;
+        }
+
+        InvitedEmail email;
+        try
+        {
+            email = new InvitedEmail(emailClaim);
+        }
+        catch (ArgumentException)
+        {
+            // A token whose `email` claim is not shaped like an address at all - no fallback is
+            // possible, and rejecting the token outright is not this transformation's call to make.
+            return null;
+        }
+
+        var invited = await operators.FindInvitedByEmailAsync(email, CancellationToken.None);
+        if (invited is null)
+        {
+            return null;
+        }
+
+        // The one deliberate write in this class - see the type's own remarks on why this is not the
+        // "acting on a booking creates a row" failure mode `20-08`'s Done-when forbids: the row already
+        // existed, created by a deliberate invite, and this only ever attaches a subject to an
+        // already-invited row - never creates one.
+        invited.LinkExternalIdentity(subject);
+        await operators.SaveAsync(invited, CancellationToken.None);
+        return invited;
     }
 }

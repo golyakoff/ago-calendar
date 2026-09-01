@@ -76,6 +76,8 @@ public static class ConsoleEndpoints
         group.MapPost("/roles", HandleCreateRoleAsync).WithName("CreateRole");
         group.MapGet("/roles", HandleListRolesAsync).WithName("ListRoles");
         group.MapGet("/operators", HandleListOperatorsAsync).WithName("ListOperators");
+        // `20-08`, adr/0088: invite a colleague by name and email - the one real gap the ADR named.
+        group.MapPost("/operators", HandleInviteOperatorAsync).WithName("InviteOperator");
         group.MapPost("/operators/{operatorId:guid}/roles/{roleId:guid}", HandleGrantRoleAsync)
             .WithName("GrantOperatorRole");
         group.MapDelete("/operators/{operatorId:guid}/roles/{roleId:guid}", HandleRevokeRoleAsync)
@@ -610,8 +612,34 @@ public static class ConsoleEndpoints
 
         return Results.Ok(result.Value
             .Select(op => new OperatorResponse(
-                op.Id.Value, op.DisplayName, op.IsAccountOwner, [.. op.Roles.Select(r => r.RoleId.Value)]))
+                op.Id.Value,
+                op.DisplayName,
+                op.IsAccountOwner,
+                IsInvited: op.ExternalSubjectId is null,
+                op.InvitedEmail?.Value,
+                [.. op.Roles.Select(r => r.RoleId.Value)]))
             .ToArray());
+    }
+
+    private static async Task<IResult> HandleInviteOperatorAsync(
+        InviteOperatorRequest request,
+        ClaimsPrincipal principal,
+        InviteOperatorHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        var result = await handler.HandleAsync(
+            new InviteOperator(principal.GetOperatorId(), principal.GetTenantId(), request.DisplayName, request.Email),
+            cancellationToken);
+
+        return result.IsSuccess
+            ? Results.Created($"/api/v1/console/operators/{result.Value.Value}", new { operatorId = result.Value.Value })
+            : result.Error!.Value.ToProblem(httpContext);
     }
 
     private static async Task<IResult> HandleGrantRoleAsync(

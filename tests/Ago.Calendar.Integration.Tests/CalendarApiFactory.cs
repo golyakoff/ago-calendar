@@ -92,15 +92,18 @@ internal sealed class ConsoleApiFactory(PostgresFixture fixture) : CalendarApiFa
     }
 }
 
-/// <summary>Authenticates whoever the <c>X-Test-Subject</c> header names, with a single <c>sub</c>
-/// claim - the same claim a Keycloak access token carries and the only one
-/// <c>OperatorIdentityClaimsTransformation</c> reads.</summary>
+/// <summary>Authenticates whoever the <c>X-Test-Subject</c> header names, with a <c>sub</c> claim and,
+/// if <c>X-Test-Email</c> is also present, an <c>email</c> claim beside it - `20-08`: the second claim
+/// a real Keycloak token carries and the only other one
+/// <c>OperatorIdentityClaimsTransformation</c> reads, for its own email fallback.</summary>
 internal sealed class HeaderSubjectAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "TestSubject";
+
+    public const string EmailHeader = "X-Test-Email";
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -112,7 +115,14 @@ internal sealed class HeaderSubjectAuthenticationHandler(
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
-        var identity = new ClaimsIdentity([new Claim("sub", subject)], SchemeName);
+        var claims = new List<Claim> { new("sub", subject) };
+        var email = Request.Headers[EmailHeader].ToString();
+        if (!string.IsNullOrWhiteSpace(email))
+        {
+            claims.Add(new Claim("email", email));
+        }
+
+        var identity = new ClaimsIdentity(claims, SchemeName);
         return Task.FromResult(AuthenticateResult.Success(
             new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName)));
     }

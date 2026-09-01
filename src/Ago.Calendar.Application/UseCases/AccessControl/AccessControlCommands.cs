@@ -27,3 +27,12 @@ public readonly record struct GrantOperatorRole(
 
 public readonly record struct RevokeOperatorRole(
     OperatorId OperatorId, TenantId TenantId, OperatorId TargetOperatorId, RoleId RoleId);
+
+/// <summary>
+/// `adr/0088`: a tenant invites a colleague onto the Access screen. <see cref="DisplayName"/> and
+/// <see cref="Email"/> are the only two fields the interface asks for - the decision's own wording is
+/// "nothing else" - so this command carries nothing an account owner's own provisioning path does not
+/// already carry a version of.
+/// </summary>
+public readonly record struct InviteOperator(
+    OperatorId OperatorId, TenantId TenantId, string DisplayName, string Email);

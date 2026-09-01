@@ -17,6 +17,18 @@ public sealed class OperatorRepository(AgoCalendarDbContext db) : IOperatorRepos
             .Include("_roles")
             .FirstOrDefaultAsync(o => o.ExternalSubjectId == externalSubjectId, cancellationToken);
 
+    /// <summary>See the port's own remarks: zero or more-than-one candidates both come back as
+    /// <see langword="null"/>, so a collision is refused rather than guessed through.</summary>
+    public async Task<Operator?> FindInvitedByEmailAsync(InvitedEmail email, CancellationToken cancellationToken)
+    {
+        var candidates = await db.Operators
+            .Include("_roles")
+            .Where(o => o.ExternalSubjectId == null && o.InvitedEmail == email)
+            .ToListAsync(cancellationToken);
+
+        return candidates.Count == 1 ? candidates[0] : null;
+    }
+
     public async Task<IReadOnlyList<Operator>> ListForTenantAsync(TenantId tenantId, CancellationToken cancellationToken) =>
         await db.Operators
             .Include("_roles")

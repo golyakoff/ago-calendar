@@ -23,9 +23,9 @@ namespace Ago.Calendar.Application.UseCases.MaterializeAvailability;
 /// decides *which days* are working ones: a <see cref="ScheduleKind.Weekly"/> schedule still reads
 /// <see cref="WorkingHoursRule"/> exactly as `20-02` always did, and a <see cref="ScheduleKind.Cycle"/>
 /// schedule asks <see cref="WorkerSchedule.IsCycleWorkingDay"/> instead - the same
-/// <c>GenerateDay</c> call either way, branched once on <see cref="WorkerSchedule.Kind"/>. A worker
-/// with no schedule at all has nothing bookable, the same conclusion this handler already drew for a
-/// worker who offers no service, before this item.</para>
+/// <see cref="DayGenerator.GenerateDay"/> call either way, branched once inside it on
+/// <see cref="WorkerSchedule.Kind"/>. A worker with no schedule at all has nothing bookable, the same
+/// conclusion this handler already drew for a worker who offers no service, before this item.</para>
 ///
 /// <para><b>The non-destructive rule, stated once and enforced twice.</b> <i>This handler only ever
 /// inserts, and only into business-local days that have no event row at all.</i> It never updates,
@@ -138,7 +138,8 @@ public sealed class MaterializeAvailabilityHandler(
                     continue;
                 }
 
-                generated.AddRange(GenerateDay(calendar, worker, schedule, day, workerRules, now));
+                generated.AddRange(
+                    DayGenerator.GenerateDay(calendar, worker, schedule, day, workerRules, wallClock, idGenerator, now));
             }
 
             slotsInserted += await events.InsertAvailableSlotsAsync(generated, cancellationToken);
@@ -152,85 +153,5 @@ public sealed class MaterializeAvailabilityHandler(
         }
 
         return new AvailabilityMaterialized(daysConsidered, daysSkipped, slotsInserted);
-    }
-
-    private IEnumerable<Event> GenerateDay(
-        BookingCalendar calendar,
-        Worker worker,
-        WorkerSchedule schedule,
-        DateOnly day,
-        IReadOnlyList<WorkingHoursRule> workerRules,
-        DateTimeOffset now)
-    {
-        var slotLength = TimeSpan.FromMinutes(schedule.SlotMinutes);
-        var buffer = TimeSpan.FromMinutes(schedule.BufferMinutes);
-
-        foreach (var window in WindowsFor(calendar, schedule, day, workerRules))
-        {
-            foreach (var slot in SlotGrid.Fill(window, slotLength, buffer))
-            {
-                // A first run at three in the afternoon must not publish this morning's slots.
-                // Event.Claim would refuse them anyway, so they would be inert rows a customer can
-                // see and cannot book - which is worse than an absence.
-                if (slot.EndsAt <= now)
-                {
-                    continue;
-                }
-
-                yield return Event.Materialize(
-                    new EventId(idGenerator.NewId(now)),
-                    calendar.TenantId,
-                    calendar.Id,
-                    worker.Id,
-                    slot,
-                    day,
-                    now);
-            }
-        }
-    }
-
-    /// <summary>
-    /// The one or zero working windows <paramref name="day"/> resolves to, wall clock converted to
-    /// absolute time exactly once - the single bridge <c>adr/0049</c> names, unchanged in shape by
-    /// this item even though what feeds it now branches on <see cref="WorkerSchedule.Kind"/>.
-    ///
-    /// <para><b>Weekly</b> can yield more than one window a day (two rules on one day is how this
-    /// product expresses a lunch break); <b>Cycle</b> yields at most one, since a cycle schedule
-    /// carries exactly one pair of hours. Both go through the same
-    /// <see cref="IWallClockResolver.ToInstantWindow"/> call, so a DST gap that leaves no real time
-    /// between the day's edges is handled identically for either kind - the resolver returns
-    /// <see langword="null"/> and this method yields nothing for that day.</para>
-    /// </summary>
-    private IEnumerable<TimeSlot> WindowsFor(
-        BookingCalendar calendar, WorkerSchedule schedule, DateOnly day, IReadOnlyList<WorkingHoursRule> workerRules)
-    {
-        if (schedule.Kind == ScheduleKind.Weekly)
-        {
-            foreach (var rule in workerRules.Where(rule => rule.DayOfWeek == day.DayOfWeek))
-            {
-                var window = wallClock.ToInstantWindow(calendar.TimeZone, day, rule.StartsAt, rule.EndsAt);
-                if (window is not null)
-                {
-                    yield return window.Value;
-                }
-            }
-
-            yield break;
-        }
-
-        // Cycle: the day itself is either working or resting - CycleGrid's pure arithmetic, no
-        // database and no clock involved in that answer. Only a working day resolves an hours window
-        // at all.
-        if (!schedule.IsCycleWorkingDay(day))
-        {
-            yield break;
-        }
-
-        var cycleWindow = wallClock.ToInstantWindow(
-            calendar.TimeZone, day, schedule.CycleStartsAt!.Value, schedule.CycleEndsAt!.Value);
-        if (cycleWindow is not null)
-        {
-            yield return cycleWindow.Value;
-        }
     }
 }

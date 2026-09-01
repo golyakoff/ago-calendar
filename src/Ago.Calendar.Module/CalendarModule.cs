@@ -10,6 +10,7 @@ using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.UseCases.MaterializeAvailability;
 using Ago.Calendar.Application.UseCases.Provisioning;
 using Ago.Calendar.Application.UseCases.PublicBooking;
+using Ago.Calendar.Application.UseCases.RecutSchedule;
 using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Redis;
@@ -148,5 +149,13 @@ public sealed class CalendarModule : IProductModule
 
         // `20-15`: the materialised slot view.
         services.AddScoped<GetWorkerSlotsHandler>();
+
+        // `20-16`: the one deliberate exception to the forward-only cursor - preview what a re-cut
+        // would destroy, then apply it. RecutConfirmHandler takes CancelBookingHandler itself as a
+        // constructor dependency so cancellation goes through the ordinary use case rather than a
+        // second implementation of it; both are scoped, so both resolve against the same DbContext
+        // within one request.
+        services.AddScoped<RecutPreviewHandler>();
+        services.AddScoped<RecutConfirmHandler>();
     }
 }

@@ -25,13 +25,16 @@
 /// <c>1</c> working day in <c>4</c> plus the worker's ordinary daytime hours, not a 24-hour bookable
 /// window. See <see cref="CycleGrid"/> and <see cref="IsCycleWorkingDay"/>.</para>
 ///
-/// <para><b><see cref="MaterializeFrom"/> only ever moves forward, and the aggregate refuses to move
-/// it backwards itself.</b> That is a Domain invariant rather than an Application-level check, for the
-/// same reason <see cref="BookingCalendar"/> bounds its own buffer inside <c>Reconfigure</c> rather
-/// than leaving the caller to remember: the guarantee belongs to the state it protects, so every
-/// caller gets it for free, including a future one that forgets to check. Moving the cursor backwards
-/// on purpose - a destructive re-cut - is deliberately `20-16`'s own entry point, not reachable from
-/// here.</para>
+/// <para><b><see cref="MaterializeFrom"/> only ever moves forward through <see cref="ReconfigureWeekly"/>,
+/// <see cref="ReconfigureCycle"/> and <see cref="AdvanceCursor"/>, and the aggregate refuses to move it
+/// backwards through any of them itself.</b> That is a Domain invariant rather than an
+/// Application-level check, for the same reason <see cref="BookingCalendar"/> bounds its own buffer
+/// inside <c>Reconfigure</c> rather than leaving the caller to remember: the guarantee belongs to the
+/// state it protects, so every caller gets it for free, including a future one that forgets to check.
+/// <see cref="RecutFrom"/> is the one, deliberate exception - `20-16`'s own entry point for moving the
+/// cursor backwards on purpose, ahead of a destructive re-cut. It is not a bypass another caller could
+/// reach by accident: it is a second method with the opposite precondition of every method above, so a
+/// caller has to know it wants a regression and say so by name.</para>
 /// </summary>
 public sealed class WorkerSchedule
 {
@@ -195,6 +198,48 @@ public sealed class WorkerSchedule
     public void AdvanceCursor(DateOnly newCursor, DateTimeOffset now)
     {
         ValidateMaterializeFromNotRegressing(newCursor);
+        MaterializeFrom = newCursor;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// `20-16`'s one blessed exception to the forward-only rule: moves <see cref="MaterializeFrom"/>
+    /// backwards on purpose, ahead of a destructive re-cut that is about to delete and regenerate the
+    /// days in between from the current template.
+    ///
+    /// <para><b>Why this needed a second method rather than a parameter on <see cref="AdvanceCursor"/>.</b>
+    /// A boolean like <c>allowRegression</c> would still be one method whose contract flips depending on
+    /// an argument - exactly the shape that lets a future caller pass <c>true</c> by copy-pasting a call
+    /// site without meaning to. A method whose only precondition is "the requested cursor is earlier
+    /// than the current one" cannot be reached by a caller that is not deliberately asking for a
+    /// regression, and its name says what it is for.</para>
+    ///
+    /// <para><b>Still refuses something, on purpose: a "regression" to the same value or a later one is
+    /// not a regression at all.</b> A caller reaching this method with <paramref name="newCursor"/> at
+    /// or past the current cursor is not moving anything backwards - it is an ordinary forward save
+    /// that has no destructive work to justify, and the ordinary path
+    /// (<see cref="ReconfigureWeekly"/>/<see cref="ReconfigureCycle"/>/<see cref="AdvanceCursor"/>)
+    /// is where that belongs. Refusing it here is what keeps this method's own precondition the exact
+    /// complement of theirs, rather than a superset that would let it quietly do their job too.</para>
+    ///
+    /// <para>Only <see cref="MaterializeFrom"/> and <see cref="UpdatedAt"/> move. Every other field -
+    /// <see cref="SlotMinutes"/>, <see cref="BufferMinutes"/>, <see cref="HorizonDays"/>, the cycle
+    /// fields - is untouched, because a re-cut is "regenerate what is already there from the template
+    /// that is already active", not a place to also change the template itself; a tenant who wants both
+    /// saves the template first, through the ordinary path, and only then re-cuts.</para>
+    /// </summary>
+    public void RecutFrom(DateOnly newCursor, DateTimeOffset now)
+    {
+        if (newCursor >= MaterializeFrom)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(newCursor), newCursor,
+                $"RecutFrom is for moving the cursor backwards only: schedule {Id.Value} is already at " +
+                $"{MaterializeFrom:yyyy-MM-dd}, which {newCursor:yyyy-MM-dd} is not earlier than. There is " +
+                "nothing already cut in that direction to re-cut - use ReconfigureWeekly, ReconfigureCycle " +
+                "or AdvanceCursor for an ordinary forward save.");
+        }
+
         MaterializeFrom = newCursor;
         UpdatedAt = now;
     }

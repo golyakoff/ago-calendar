@@ -22,6 +22,9 @@ internal static class IdConverters
     public static readonly ValueConverter<ChatBookingTaskId, Guid> ChatBookingTask = new(
         id => id.Value, value => new ChatBookingTaskId(value));
 
+    public static readonly ValueConverter<PendingPhoneVerificationId, Guid> PendingPhoneVerification = new(
+        id => id.Value, value => new PendingPhoneVerificationId(value));
+
     public static readonly ValueConverter<ServiceId?, Guid?> NullableService = new(
         id => id.HasValue ? id.Value.Value : (Guid?)null,
         value => value.HasValue ? new ServiceId(value.Value) : (ServiceId?)null);

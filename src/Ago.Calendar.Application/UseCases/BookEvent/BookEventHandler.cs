@@ -50,6 +50,7 @@ public sealed class BookEventHandler(
     IRateLimiter rateLimiter,
     BookingRateLimitOptions rateLimitOptions,
     BookingOptions bookingOptions,
+    PhoneVerificationAssertionResolver phoneVerification,
     IIdGenerator idGenerator,
     IClock clock)
 {
@@ -178,37 +179,46 @@ public sealed class BookEventHandler(
             return BookingOutcome.Rejected(BookingErrors.SlotUnavailable());
         }
 
-        // `20-09`: the last precondition, checked immediately before the claim itself - deliberately
-        // not moved earlier, alongside the phone-shape check, despite being equally cheap and equally
-        // free of any check-then-act race (see the remarks below for why it is safe regardless of
-        // position). Placed here so every other rejection this handler already makes - calendar not
-        // found, rate-limited, slot/service mismatch - keeps its own existing precedence over this
-        // one; a stranger probing an unknown calendar id still learns nothing more than
+        // `20-09`/`20-10`: the last precondition, checked immediately before the claim itself -
+        // deliberately not moved earlier, alongside the phone-shape check, despite being equally cheap
+        // and equally free of any check-then-act race (see the remarks below for why it is safe
+        // regardless of position). Placed here so every other rejection this handler already makes -
+        // calendar not found, rate-limited, slot/service mismatch - keeps its own existing precedence
+        // over this one; a stranger probing an unknown calendar id still learns nothing more than
         // `booking.calendar_not_found`, never this item's own refusal, which would otherwise leak
         // "that calendar exists, you just are not verified" ahead of the identity check that already
         // owns collapsing unknown-vs-unpublished into one answer.
         //
-        // Gated on RequiresVerifiedPhone, not on PhoneVerifiedAt alone - see BookEvent.RequiresVerifiedPhone's
-        // own remarks for why: this item's own scope is chat-only for now, deliberately, because the public
-        // booking widget has no secure way to supply this assertion yet and a self-asserted field on an
-        // anonymous endpoint would be a real hole, not a convenience.
+        // Gated on RequiresVerifiedPhone, not on the resolved instant alone - see
+        // BookEvent.RequiresVerifiedPhone's own remarks. `20-10` widened this from chat-only to every
+        // caller of this command; PhoneVerificationAssertionResolver is what makes that safe for an
+        // anonymous caller with no pre-existing assertion, by trying a returning-customer shortcut and
+        // then a freshly confirmed PendingPhoneVerification before giving up.
         //
-        // Not a check-then-act race of the kind `status = 'Available'` genuinely is: PhoneVerifiedAt
-        // is not a fact read from a row two concurrent callers contend over and that can go stale
-        // between a read and a write - it is a value the caller supplies directly on this exact
-        // command, with no interceding read of anything this handler does not already own. There is
-        // no window for it to change out from under this decision, so refusing here is safe in a way
-        // a pre-check on the slot's own live status would not be - see IBookingStore's own remarks for
-        // that distinction. What this check cannot catch - a caller lying about having verified
-        // something it never did - is the same trust boundary adr/0077 already accepts for the module
-        // task wire itself ("authenticity is checked; the deeper claim is trusted"), not a gap specific
-        // to this check.
-        if (command.RequiresVerifiedPhone && command.PhoneVerifiedAt is null)
+        // Not a check-then-act race of the kind `status = 'Available'` genuinely is: the resolved
+        // instant is either a value the caller supplied directly on this exact command, a fact read
+        // from the customer's own row (immutable once first set - Customer.RecordVerifiedPhone's own
+        // earliest-wins rule), or a fact read from a PendingPhoneVerification row this same request just
+        // validated - none of the three is a value two concurrent callers are contending over and that
+        // can go stale between a read and a write. There is no window for any of them to change out from
+        // under this decision, so refusing here is safe in a way a pre-check on the slot's own live
+        // status would not be - see IBookingStore's own remarks for that distinction. What this check
+        // cannot catch - a caller lying about having verified something it never did - is the same trust
+        // boundary adr/0077 already accepts for the module task wire, and the same bound
+        // PendingPhoneVerification.IsProofValid's own hash comparison already accepts for a forged proof
+        // (it simply fails the comparison, which is not a gap, just the ordinary shape of the check).
+        var now = clock.UtcNow;
+
+        var phoneVerifiedAt = command.RequiresVerifiedPhone
+            ? await phoneVerification.ResolveAsync(
+                calendar.TenantId, phone, command.PhoneVerifiedAt, command.PhoneVerificationId,
+                command.PhoneVerificationProofToken, now, cancellationToken)
+            : command.PhoneVerifiedAt;
+
+        if (command.RequiresVerifiedPhone && phoneVerifiedAt is null)
         {
             return BookingOutcome.Rejected(BookingErrors.PhoneNotVerified());
         }
-
-        var now = clock.UtcNow;
 
         var confirmation = await bookings.TryBookAsync(
             new BookingAttempt(
@@ -221,7 +231,7 @@ public sealed class BookEventHandler(
                 new CustomerId(idGenerator.NewId(now)),
                 now,
                 now + bookingOptions.ConfirmationWindow,
-                command.PhoneVerifiedAt),
+                phoneVerifiedAt),
             cancellationToken);
 
         // Null is the loser of the race, and it is an ordinary Tuesday: reported as a rejection the

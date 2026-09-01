@@ -9,4 +9,21 @@
 /// <param name="Phone">As typed. Normalised server-side, so a customer may write it any way they
 /// like and still reach the same lead card.</param>
 /// <param name="DisplayName">Optional. Never overwrites a name an operator already curated.</param>
-public sealed record BookEventRequest(Guid ServiceId, string Phone, string? DisplayName);
+/// <param name="PhoneVerificationId">
+/// `20-10`: the <c>pendingPhoneVerificationId</c> a prior
+/// <c>POST .../phone-verifications/{id}/confirm</c> call returned. Null for a returning customer whose
+/// phone is already verified from an earlier booking - <see cref="Ago.Calendar.Application.UseCases.BookEvent.BookEventHandler"/>'s
+/// own <c>PhoneVerificationAssertionResolver</c> checks that shortcut first and only needs this field
+/// when it comes back empty.
+/// </param>
+/// <param name="PhoneVerificationProofToken">
+/// `20-10`: the plaintext bearer proof the same confirm call returned, paired with
+/// <paramref name="PhoneVerificationId"/> - unforgeable and bound to the exact phone number it was
+/// issued for (<c>PendingPhoneVerification.IsProofValid</c>).
+/// </param>
+public sealed record BookEventRequest(
+    Guid ServiceId,
+    string Phone,
+    string? DisplayName,
+    Guid? PhoneVerificationId = null,
+    string? PhoneVerificationProofToken = null);

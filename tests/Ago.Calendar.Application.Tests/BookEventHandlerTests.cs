@@ -228,6 +228,138 @@ public class BookEventHandlerTests
         Assert.Equal(verifiedAt, Assert.Single(world.Bookings.Attempts).PhoneVerifiedAt);
     }
 
+    /// <summary>`20-10`'s own Scope item (b), and its own Done-when: "a returning customer whose phone
+    /// is already verified from an earlier chat-originated booking is not asked to re-verify." No
+    /// PhoneVerifiedAt on the command at all - the shortcut alone is what carries this booking
+    /// through.</summary>
+    [Fact]
+    public async Task ANullPhoneVerifiedAt_ButAReturningCustomerAlreadyVerified_Succeeds()
+    {
+        var verifiedAt = BookingFixtures.Now.AddDays(-3);
+        var customer = Customer.Register(
+            BookingFixtures.CustomerId, BookingFixtures.TenantId, new PhoneNumber(BookingFixtures.Phone),
+            BookingFixtures.Now.AddDays(-3));
+        customer.RecordVerifiedPhone(verifiedAt);
+        var world = new World(existingCustomer: customer);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false));
+
+        Assert.True(outcome.IsSuccess);
+        Assert.Equal(verifiedAt, Assert.Single(world.Bookings.Attempts).PhoneVerifiedAt);
+    }
+
+    /// <summary>The shortcut is tenant-scoped: a customer verified at a different tenant is not the
+    /// same lead card, and must not silently satisfy this one.</summary>
+    [Fact]
+    public async Task AReturningCustomerAtAnotherTenant_DoesNotSatisfyTheGate()
+    {
+        var customer = Customer.Register(
+            BookingFixtures.CustomerId, BookingFixtures.OtherTenantId, new PhoneNumber(BookingFixtures.Phone),
+            BookingFixtures.Now.AddDays(-3));
+        customer.RecordVerifiedPhone(BookingFixtures.Now.AddDays(-3));
+        var world = new World(existingCustomer: customer);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false));
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.phone_not_verified", outcome.Error!.Value.Code);
+    }
+
+    /// <summary>`20-10`'s own new mechanism: a freshly confirmed <see cref="PendingPhoneVerification"/>,
+    /// presented as a proof token, carries the claim through with no <c>PhoneVerifiedAt</c> supplied
+    /// directly and no returning customer either - the public widget's own first-time-visitor path.</summary>
+    [Fact]
+    public async Task AFreshlyConfirmedProofToken_Succeeds()
+    {
+        var verification = ConfirmedVerification(out var proofToken);
+        var world = new World(pendingVerification: verification);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false) with
+        {
+            PhoneVerificationId = verification.Id.Value,
+            PhoneVerificationProofToken = proofToken,
+        });
+
+        Assert.True(outcome.IsSuccess);
+        Assert.Equal(verification.ConsumedAt, Assert.Single(world.Bookings.Attempts).PhoneVerifiedAt);
+    }
+
+    /// <summary>`20-10`'s own Done-when: "a forged/missing token is refused the same way `20-09`'s own
+    /// chat-side gate refuses one." A syntactically well-formed but wrong token against a real,
+    /// confirmed row.</summary>
+    [Fact]
+    public async Task AWrongProofToken_IsRejected()
+    {
+        var verification = ConfirmedVerification(out _);
+        var world = new World(pendingVerification: verification);
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false) with
+        {
+            PhoneVerificationId = verification.Id.Value,
+            PhoneVerificationProofToken = "not-the-real-token",
+        });
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.phone_not_verified", outcome.Error!.Value.Code);
+        Assert.Empty(world.Bookings.Attempts);
+    }
+
+    /// <summary>The critical security property `20-10`'s own backlog file names verbatim: "a caller
+    /// must not be able to verify phone A and then book with phone B using that same token." A real,
+    /// correct token, minted for a different phone number than the one this booking asserts.</summary>
+    [Fact]
+    public async Task ACorrectProofToken_ForADifferentPhoneNumber_IsRejected()
+    {
+        var verification = ConfirmedVerification(out var proofToken, phone: "+79990000099");
+        var world = new World(pendingVerification: verification);
+
+        // BookingFixtures.Command()'s own default phone is BookingFixtures.Phone - deliberately not
+        // the number the proof above was issued for.
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false) with
+        {
+            PhoneVerificationId = verification.Id.Value,
+            PhoneVerificationProofToken = proofToken,
+        });
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.phone_not_verified", outcome.Error!.Value.Code);
+        Assert.Empty(world.Bookings.Attempts);
+    }
+
+    /// <summary>A <c>PhoneVerificationId</c> that simply does not exist - the "missing token" half of
+    /// the same Done-when box, alongside <see cref="AWrongProofToken_IsRejected"/>'s "forged token"
+    /// half.</summary>
+    [Fact]
+    public async Task AnUnknownPendingPhoneVerificationId_IsRejected()
+    {
+        var world = new World();
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false) with
+        {
+            PhoneVerificationId = Guid.NewGuid(),
+            PhoneVerificationProofToken = "whatever",
+        });
+
+        Assert.False(outcome.IsSuccess);
+        Assert.Equal("booking.phone_not_verified", outcome.Error!.Value.Code);
+    }
+
+    private static PendingPhoneVerification ConfirmedVerification(
+        out string proofToken, string phone = BookingFixtures.Phone)
+    {
+        const string code = "482913";
+        var codeHash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(code));
+        var verification = PendingPhoneVerification.Request(
+            new PendingPhoneVerificationId(Guid.NewGuid()), BookingFixtures.TenantId, new PhoneNumber(phone),
+            codeHash, PhoneVerificationDeliveryMethod.Sms, BookingFixtures.Now.AddMinutes(-2), TimeSpan.FromMinutes(10), 5);
+        verification.AttemptConfirm(codeHash, BookingFixtures.Now.AddMinutes(-1));
+
+        proofToken = "proof-token-xyz";
+        var proofHash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(proofToken));
+        verification.IssueProof(proofHash, BookingFixtures.Now.AddMinutes(19));
+        return verification;
+    }
+
     [Fact]
     public async Task AServiceTheWorkerDoesNotPerform_IsRejected()
     {
@@ -441,7 +573,13 @@ public class BookEventHandlerTests
             // exception, for the test proving a schedule-less worker is not bookable at all.
             WorkerSchedule? schedule = null,
             bool noSchedule = false,
-            IReadOnlyList<Event>? day = null)
+            IReadOnlyList<Event>? day = null,
+            // `20-10`: the returning-customer shortcut and the fresh-proof lookup
+            // PhoneVerificationAssertionResolver tries when a test's own BookEvent carries no
+            // PhoneVerifiedAt directly. Both default to "nothing here", so every test that never
+            // mentions either exercises the exact same path it did before this item.
+            Customer? existingCustomer = null,
+            PendingPhoneVerification? pendingVerification = null)
         {
             var resolvedService = service ?? BookingFixtures.HaircutService();
             var resolvedCalendar = calendar ?? BookingFixtures.Calendar();
@@ -464,6 +602,9 @@ public class BookEventHandlerTests
                 Limiter,
                 new BookingRateLimitOptions(),
                 Booking,
+                new PhoneVerificationAssertionResolver(
+                    new FakeCustomerRepository(existingCustomer),
+                    new FakePendingPhoneVerificationRepository(pendingVerification)),
                 new SequentialIdGenerator(),
                 new FakeClock(BookingFixtures.Now));
         }

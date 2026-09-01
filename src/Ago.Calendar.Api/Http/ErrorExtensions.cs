@@ -35,6 +35,22 @@ public static class ErrorExtensions
             "booking.invalid_phone" or "booking.service_not_offered" or "booking.phone_not_verified" =>
                 StatusCodes.Status400BadRequest,
             "booking.rate_limited" => StatusCodes.Status429TooManyRequests,
+            // `20-10`. Mirrors `ago-chat`'s own `14-15` mapping for the identical five confirm
+            // outcomes, not by reference: a wrong code is the caller's own mistake to fix (400, the
+            // same group as booking.invalid_phone); already-consumed and expired are each a state that
+            // moved rather than a malformed request (409/410 - 410 specifically because a fresh code,
+            // not a retry of this one, is the only remedy, the same distinction ago-chat's own mapping
+            // draws for `OperatorInvite.Expired`); locked-out shares the rate-limited group for the
+            // identical "a fresh attempt, not a permission, is the remedy" reasoning, even though it
+            // carries no Retry-After.
+            "phone_verification.calendar_not_found" or "phone_verification.not_found" =>
+                StatusCodes.Status404NotFound,
+            "phone_verification.invalid_phone" or "phone_verification.wrong_code" =>
+                StatusCodes.Status400BadRequest,
+            "phone_verification.already_consumed" => StatusCodes.Status409Conflict,
+            "phone_verification.expired" => StatusCodes.Status410Gone,
+            "phone_verification.rate_limited" or "phone_verification.locked_out" =>
+                StatusCodes.Status429TooManyRequests,
             "availability.day_not_materialized" => StatusCodes.Status404NotFound,
             "availability.day_has_bookings" or "availability.day_changed_concurrently" =>
                 StatusCodes.Status409Conflict,

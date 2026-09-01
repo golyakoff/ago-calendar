@@ -273,7 +273,14 @@ public class ChatModuleTaskHandlerTests
             var slotsHandler = new GetOpenSlotsHandler(resolver, ReadStore, clock);
             var bookHandler = new BookEventHandler(
                 calendarRepo, tenantRepo, eventRepo, workerRepo, serviceRepo, scheduleRepo,
-                Bookings, Limiter, new BookingRateLimitOptions(), new BookingOptions(), idGenerator, clock);
+                Bookings, Limiter, new BookingRateLimitOptions(), new BookingOptions(),
+                // `20-10`: the chat-originated flow always supplies PhoneVerifiedAt directly
+                // (RouteConversationToModuleHandler's own `14-15` evidence), so
+                // PhoneVerificationAssertionResolver's own short-circuit never touches either fake
+                // below - see PhoneVerificationAssertionResolver.ResolveAsync's own remarks.
+                new PhoneVerificationAssertionResolver(
+                    new FakeCustomerRepository(), new FakePendingPhoneVerificationRepository()),
+                idGenerator, clock);
 
             var options = new ChatModuleTaskOptions
             {

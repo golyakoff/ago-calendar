@@ -7,7 +7,9 @@ using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.Cors;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
+using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.UseCases.MaterializeAvailability;
+using Ago.Calendar.Application.UseCases.PhoneVerification;
 using Ago.Calendar.Application.UseCases.Provisioning;
 using Ago.Calendar.Application.UseCases.PublicBooking;
 using Ago.Calendar.Application.UseCases.RecutSchedule;
@@ -15,6 +17,7 @@ using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Redis;
 using Ago.Calendar.Infrastructure.Time;
+using Ago.Calendar.Module.PhoneVerification;
 using Ago.Platform.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -84,6 +87,37 @@ public sealed class CalendarModule : IProductModule
             .Bind(configuration.GetSection(BookingRateLimitOptions.SectionName))
             .ValidateOnStart();
         services.AddSingleton(provider => provider.GetRequiredService<IOptions<BookingRateLimitOptions>>().Value);
+
+        // `20-10`: the public widget's own phone-verification primitive. Bound and registered before
+        // BookEventHandler, which now takes PhoneVerificationAssertionResolver as a constructor
+        // dependency.
+        services.AddOptions<PhoneVerificationOptions>()
+            .Bind(configuration.GetSection(PhoneVerificationOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton(provider => provider.GetRequiredService<IOptions<PhoneVerificationOptions>>().Value);
+
+        services.AddOptions<PhoneVerificationRateLimitOptions>()
+            .Bind(configuration.GetSection(PhoneVerificationRateLimitOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton(
+            provider => provider.GetRequiredService<IOptions<PhoneVerificationRateLimitOptions>>().Value);
+
+        // FakePhoneVerificationSender is the *only* IPhoneVerificationSender this module registers -
+        // unconditionally, not behind an `if (configured)` branch and not the
+        // `UnconfiguredPhoneVerificationSender`-shaped "throw" `ago-chat` uses for the identical port.
+        // See that type's own remarks for why. Registered once, as a singleton, under both the port and
+        // its own concrete type: the port is what every real caller depends on, and the concrete type
+        // is what `PhoneVerificationDevEndpoints`' own dev-only surface resolves directly to read back
+        // the last code it captured - a capability deliberately absent from the port itself. Singleton
+        // because it is stateless towards its real callers and its own in-memory capture is a
+        // dev/demo convenience explicitly not meant to survive a restart or span replicas.
+        services.AddSingleton<FakePhoneVerificationSender>();
+        services.AddSingleton<IPhoneVerificationSender>(
+            provider => provider.GetRequiredService<FakePhoneVerificationSender>());
+
+        services.AddScoped<PhoneVerificationAssertionResolver>();
+        services.AddScoped<InitiatePhoneVerificationHandler>();
+        services.AddScoped<ConfirmPhoneVerificationHandler>();
 
         services.AddScoped<BookEventHandler>();
 

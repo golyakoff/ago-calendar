@@ -26,4 +26,25 @@ public interface IWorkerRepository
     Task AddAsync(Worker worker, CancellationToken cancellationToken);
 
     Task SaveAsync(Worker worker, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// `20-13`: deletes a worker who has never been booked, and refuses - deleting nothing - if he
+    /// has. "Never booked" means no <see cref="Event"/> of his is or ever was in
+    /// <see cref="EventStatus.PendingConfirmation"/>, <see cref="EventStatus.Booked"/> or
+    /// <see cref="EventStatus.NoShow"/>; a worker with only <see cref="EventStatus.Available"/> rows
+    /// (or none) is fair game, and those rows go with him - along with his working-hours rules and
+    /// his one calendar/service join - through the same <c>ON DELETE CASCADE</c> the schema already
+    /// declares for every one of those tables.
+    ///
+    /// <para><b>The check and the delete are one call, not two.</b> A caller that read "is this
+    /// worker booked?" through a separate query and deleted afterward would leave a gap a booking
+    /// could land in between the two - exactly the case this port exists to close. The adapter
+    /// implements the whole thing as one guarded <c>DELETE</c> statement so there is no gap to land
+    /// in: see <c>WorkerRepository.DeleteIfNeverBookedAsync</c> for the exact statement.</para>
+    /// </summary>
+    /// <returns><see langword="true"/> if the worker existed and was deleted; <see langword="false"/>
+    /// if he does not exist, belongs to another tenant, or has booking history and was therefore left
+    /// untouched. The caller distinguishes those cases with its own follow-up read - see
+    /// <c>DeleteWorkerHandler</c>.</returns>
+    Task<bool> DeleteIfNeverBookedAsync(WorkerId id, TenantId tenantId, CancellationToken cancellationToken);
 }

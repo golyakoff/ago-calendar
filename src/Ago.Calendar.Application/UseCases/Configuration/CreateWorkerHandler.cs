@@ -47,8 +47,19 @@ public sealed class CreateWorkerHandler(
         Worker worker;
         try
         {
+            var now = clock.UtcNow;
             worker = Worker.Create(
-                new WorkerId(idGenerator.NewId(clock.UtcNow)), command.TenantId, command.DisplayName);
+                new WorkerId(idGenerator.NewId(now)), command.TenantId,
+                command.LastName, command.FirstName, command.MiddleName, now);
+
+            // `20-13`: a human may type a display name at creation time too, not only on a later
+            // edit - the console's own card prefills the derived value and only marks it custom the
+            // moment somebody actually edits the field, whether that happens on the create form or
+            // an edit form later.
+            if (command.DisplayName is not null)
+            {
+                worker.SetDisplayName(command.DisplayName, now);
+            }
 
             // The whole aggregate, not its id - Worker.JoinCalendar and Worker.Offer take the related
             // aggregate precisely so the cross-tenant check is an invariant rather than a convention

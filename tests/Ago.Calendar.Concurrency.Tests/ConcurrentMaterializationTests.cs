@@ -165,7 +165,7 @@ public class ConcurrentMaterializationTests(ConcurrencyFixture fixture)
         var tenant = Tenant.Register(new TenantId(NewId()), "Barbershop", new TenantPublicKey("shop-" + NewId().ToString("N")), Monday);
         var calendar = BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone("Europe/Moscow"), 10, Monday);
-        var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Alex");
+        var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Monday);
         var service = Service.Create(new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45));
 
         calendar.Publish();

@@ -21,8 +21,8 @@ internal static class CalendarFixtures
         BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), bufferMinutes, Now);
 
-    public static Worker Worker(Tenant tenant, string name = "Alex") =>
-        Domain.Worker.Create(new WorkerId(NewId()), tenant.Id, name);
+    public static Worker Worker(Tenant tenant, string firstName = "Alex", string lastName = "Doe") =>
+        Domain.Worker.Create(new WorkerId(NewId()), tenant.Id, lastName, firstName, null, Now);
 
     public static Service Service(Tenant tenant, int minutes = 45, string name = "Haircut") =>
         Domain.Service.Create(new ServiceId(NewId()), tenant.Id, name, TimeSpan.FromMinutes(minutes));

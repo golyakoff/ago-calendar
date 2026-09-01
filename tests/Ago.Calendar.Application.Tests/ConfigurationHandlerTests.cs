@@ -115,6 +115,140 @@ public class ConfigurationHandlerTests
     }
 
     [Fact]
+    public async Task CreatingAWorker_WithAnExplicitDisplayName_MarksItCustomFromTheStart()
+    {
+        var world = new World();
+
+        var result = await world.CreateWorkerAsync(lastName: "Fox", firstName: "Robin", displayName: "Foxy");
+
+        Assert.True(result.IsSuccess);
+        var worker = Assert.Single(world.Workers.Added);
+        Assert.Equal("Foxy", worker.DisplayName);
+        Assert.True(worker.DisplayNameIsCustom);
+    }
+
+    [Fact]
+    public async Task CreatingAWorker_WithNoExplicitDisplayName_DerivesIt()
+    {
+        var world = new World();
+
+        var result = await world.CreateWorkerAsync(lastName: "Fox", firstName: "Robin");
+
+        Assert.True(result.IsSuccess);
+        var worker = Assert.Single(world.Workers.Added);
+        Assert.Equal("Robin Fox", worker.DisplayName);
+        Assert.False(worker.DisplayNameIsCustom);
+    }
+
+    [Fact]
+    public async Task UpdatingAWorker_RequiresCalendarConfigure()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync()).Value;
+        world.Permissions.Deny(Permission.CalendarConfigure);
+
+        var result = await world.UpdateWorkerAsync(workerId);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.forbidden", result.Error!.Value.Code);
+    }
+
+    [Fact]
+    public async Task UpdatingAnotherTenantsWorker_IsNotFound()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync()).Value;
+
+        var result = await world.UpdateWorkerAsync(workerId, tenantId: new TenantId(Guid.NewGuid()));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.not_found", result.Error!.Value.Code);
+    }
+
+    [Fact]
+    public async Task UpdatingAWorker_WithNoExplicitDisplayName_KeepsDerivingIt()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync(lastName: "Fox", firstName: "Robin")).Value;
+
+        var result = await world.UpdateWorkerAsync(workerId, lastName: "Sparrow", firstName: "Robin");
+
+        Assert.True(result.IsSuccess);
+        var worker = Assert.Single(world.Workers.Added);
+        Assert.Equal("Robin Sparrow", worker.DisplayName);
+        Assert.False(worker.DisplayNameIsCustom);
+    }
+
+    [Fact]
+    public async Task UpdatingAWorker_WithAnExplicitDisplayName_FreezesItAgainstLaterRenames()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync(lastName: "Fox", firstName: "Robin")).Value;
+
+        Assert.True((await world.UpdateWorkerAsync(workerId, lastName: "Fox", firstName: "Robin", displayName: "Foxy")).IsSuccess);
+        Assert.True(Assert.Single(world.Workers.Added).DisplayNameIsCustom);
+
+        // A second update, with no explicit display name this time, must not silently recompute over
+        // the custom one - the exact rule `WorkerTests` proves at the aggregate's own level, exercised
+        // here through the handler that actually calls Rename then (conditionally) SetDisplayName.
+        Assert.True((await world.UpdateWorkerAsync(workerId, lastName: "Sparrow", firstName: "Robin")).IsSuccess);
+        Assert.Equal("Foxy", Assert.Single(world.Workers.Added).DisplayName);
+    }
+
+    [Fact]
+    public async Task UpdatingAWorker_TogglesActivity()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync()).Value;
+
+        Assert.True((await world.UpdateWorkerAsync(workerId, isActive: false)).IsSuccess);
+        Assert.False(Assert.Single(world.Workers.Added).IsActive);
+
+        Assert.True((await world.UpdateWorkerAsync(workerId, isActive: true)).IsSuccess);
+        Assert.True(Assert.Single(world.Workers.Added).IsActive);
+    }
+
+    [Fact]
+    public async Task DeletingAWorker_RequiresCalendarConfigure()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync()).Value;
+        world.Permissions.Deny(Permission.CalendarConfigure);
+
+        var result = await world.DeleteWorkerAsync(workerId);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.forbidden", result.Error!.Value.Code);
+        Assert.Single(world.Workers.Added);
+    }
+
+    [Fact]
+    public async Task DeletingAWorker_WithNoBookingHistory_Succeeds()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync()).Value;
+
+        var result = await world.DeleteWorkerAsync(workerId);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(world.Workers.Added);
+    }
+
+    [Fact]
+    public async Task DeletingAWorker_WithBookingHistory_RefusesAndSaysWhy()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync()).Value;
+        world.Workers.Undeletable.Add(workerId);
+
+        var result = await world.DeleteWorkerAsync(workerId);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.worker_has_booking_history", result.Error!.Value.Code);
+        Assert.Single(world.Workers.Added);
+    }
+
+    [Fact]
     public async Task SettingAllowedOrigins_RequiresCalendarConfigure()
     {
         var world = new World();
@@ -176,7 +310,12 @@ public class ConfigurationHandlerTests
                     CancellationToken.None);
 
         public Task<Result<WorkerId>> CreateWorkerAsync(
-            Guid? calendarId = null, IReadOnlyList<Guid>? serviceIds = null) =>
+            Guid? calendarId = null,
+            IReadOnlyList<Guid>? serviceIds = null,
+            string lastName = "Doe",
+            string firstName = "Alex",
+            string? middleName = null,
+            string? displayName = null) =>
             new CreateWorkerHandler(
                     Calendars,
                     new FakeServiceRepository(BookingFixtures.HaircutService()),
@@ -188,10 +327,38 @@ public class ConfigurationHandlerTests
                     new CreateWorker(
                         Actor,
                         BookingFixtures.TenantId,
-                        "Alex",
+                        lastName,
+                        firstName,
+                        middleName,
+                        displayName,
                         new CalendarId(calendarId ?? BookingFixtures.CalendarId.Value),
                         serviceIds ?? []),
                     CancellationToken.None);
+
+        public Task<Result> UpdateWorkerAsync(
+            WorkerId workerId,
+            string lastName = "Doe",
+            string firstName = "Alex",
+            string? middleName = null,
+            string? displayName = null,
+            bool isActive = true,
+            TenantId? tenantId = null,
+            DateTimeOffset? now = null) =>
+            new UpdateWorkerHandler(Workers, Permissions, new FakeClock(now ?? BookingFixtures.Now))
+                .HandleAsync(
+                    new UpdateWorker(
+                        Actor, tenantId ?? BookingFixtures.TenantId, workerId,
+                        lastName, firstName, middleName, displayName, isActive),
+                    CancellationToken.None);
+
+        public Task<Result> DeleteWorkerAsync(WorkerId workerId, TenantId? tenantId = null) =>
+            new DeleteWorkerHandler(Workers, Permissions)
+                .HandleAsync(
+                    new DeleteWorker(Actor, tenantId ?? BookingFixtures.TenantId, workerId), CancellationToken.None);
+
+        public Task<Result<IReadOnlyList<WorkerDetail>>> ListWorkersAsync() =>
+            new ListWorkersForTenantHandler(Workers, Permissions)
+                .HandleAsync(new ListWorkersForTenant(Actor, BookingFixtures.TenantId), CancellationToken.None);
 
         public Task<Result> SetOriginsAsync(IReadOnlyList<string> origins) =>
             new SetAllowedOriginsHandler(new FakeTenantRepository(Tenant), Permissions)
@@ -235,6 +402,13 @@ internal sealed class RecordingWorkerRepository : IWorkerRepository
 {
     public List<Worker> Added { get; } = [];
 
+    /// <summary>Workers this fake refuses to delete - the handler-level stand-in for "has booking
+    /// history", which only <see cref="Ago.Calendar.Infrastructure.Postgres.WorkerRepository"/>'s own
+    /// real SQL can prove for real (see the integration tests for that proof).</summary>
+    public HashSet<WorkerId> Undeletable { get; } = [];
+
+    public List<WorkerId> Deleted { get; } = [];
+
     public Task<Worker?> GetByIdAsync(WorkerId id, CancellationToken cancellationToken) =>
         Task.FromResult<Worker?>(Added.Find(worker => worker.Id == id));
 
@@ -253,4 +427,17 @@ internal sealed class RecordingWorkerRepository : IWorkerRepository
     }
 
     public Task SaveAsync(Worker worker, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task<bool> DeleteIfNeverBookedAsync(WorkerId id, TenantId tenantId, CancellationToken cancellationToken)
+    {
+        var worker = Added.Find(w => w.Id == id && w.TenantId == tenantId);
+        if (worker is null || Undeletable.Contains(id))
+        {
+            return Task.FromResult(false);
+        }
+
+        Added.Remove(worker);
+        Deleted.Add(id);
+        return Task.FromResult(true);
+    }
 }

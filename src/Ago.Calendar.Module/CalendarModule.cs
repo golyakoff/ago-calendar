@@ -121,6 +121,14 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<UpdateCalendarHandler>();
         services.AddScoped<CreateServiceHandler>();
         services.AddScoped<CreateWorkerHandler>();
+
+        // `20-13`: the rest of the worker CRUD surface - GET /workers, GET /workers/{id},
+        // PUT /workers/{id}, DELETE /workers/{id}.
+        services.AddScoped<ListWorkersForTenantHandler>();
+        services.AddScoped<GetWorkerHandler>();
+        services.AddScoped<UpdateWorkerHandler>();
+        services.AddScoped<DeleteWorkerHandler>();
+
         services.AddScoped<AddWorkingHoursRuleHandler>();
         services.AddScoped<SetAllowedOriginsHandler>();
         services.AddScoped<RegisterTenantHandler>();

@@ -12,9 +12,38 @@ public sealed record UpdateCalendarRequest(string Name, int BufferMinutes, bool 
 
 public sealed record CreateServiceRequest(string Name, int DurationMinutes);
 
+/// <param name="MiddleName">Отчество - optional.</param>
+/// <param name="DisplayName">`20-13`. Non-null means the console's own display-name field was
+/// edited by hand before this request was sent; <see langword="null"/> means let the server derive
+/// it from <paramref name="FirstName"/>/<paramref name="LastName"/>.</param>
 /// <param name="ServiceIds">May be empty while a shop is still being set up - see
 /// <c>CreateWorker</c> for why that is a real state rather than a validation gap.</param>
-public sealed record CreateWorkerRequest(string DisplayName, Guid CalendarId, IReadOnlyList<Guid> ServiceIds);
+public sealed record CreateWorkerRequest(
+    string LastName,
+    string FirstName,
+    string? MiddleName,
+    string? DisplayName,
+    Guid CalendarId,
+    IReadOnlyList<Guid> ServiceIds);
+
+/// <summary>`20-13`. See <see cref="CreateWorkerRequest.DisplayName"/> for what <c>null</c> means
+/// here too.</summary>
+public sealed record UpdateWorkerRequest(
+    string LastName, string FirstName, string? MiddleName, string? DisplayName, bool IsActive);
+
+/// <summary>`20-13`: one worker, in full - the workers table's own row shape and the edit card's
+/// prefill, in one response so the console never needs a second request to open a card for a worker
+/// it has already listed.</summary>
+public sealed record WorkerResponse(
+    Guid WorkerId,
+    string LastName,
+    string FirstName,
+    string? MiddleName,
+    string DisplayName,
+    bool DisplayNameIsCustom,
+    bool IsActive,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
 
 /// <param name="DayOfWeek">0 = Sunday, matching <see cref="System.DayOfWeek"/>. An integer rather
 /// than a name because a name would need a culture to parse and this is a machine boundary.</param>

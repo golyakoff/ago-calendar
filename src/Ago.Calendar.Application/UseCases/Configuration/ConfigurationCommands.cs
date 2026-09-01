@@ -1,4 +1,5 @@
-﻿using Ago.Calendar.Domain;
+﻿using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Domain;
 
 namespace Ago.Calendar.Application.UseCases.Configuration;
 
@@ -34,6 +35,12 @@ public readonly record struct UpdateCalendar(
 public readonly record struct CreateService(
     OperatorId OperatorId, TenantId TenantId, string Name, int DurationMinutes);
 
+/// <param name="MiddleName">Отчество - optional, unlike <paramref name="LastName"/> and
+/// <paramref name="FirstName"/>.</param>
+/// <param name="DisplayName">`20-13`. Non-null means the console's own display-name field was
+/// edited by hand this call, so the worker is created with a custom name from the start
+/// (<see cref="Worker.SetDisplayName"/>); <see langword="null"/> means let it derive from
+/// <paramref name="FirstName"/>/<paramref name="LastName"/> the normal way.</param>
 /// <param name="CalendarId">The one calendar this worker joins. v1 allows exactly one
 /// (<see cref="Worker.JoinCalendar"/>), so this is a single value rather than a list - a list would
 /// promise a shape the aggregate refuses.</param>
@@ -43,9 +50,39 @@ public readonly record struct CreateService(
 public readonly record struct CreateWorker(
     OperatorId OperatorId,
     TenantId TenantId,
-    string DisplayName,
+    string LastName,
+    string FirstName,
+    string? MiddleName,
+    string? DisplayName,
     CalendarId CalendarId,
     IReadOnlyList<Guid> ServiceIds);
+
+/// <summary>`20-13`. Names, the optional custom display name, and the activity toggle - not the
+/// calendar or the services, which keep the surface they had: v1 is one calendar per worker and
+/// moving one is out of this item's scope (see the item's own "out of scope" section).</summary>
+/// <param name="DisplayName">Non-null means a human edited the display-name field directly this
+/// call - see <see cref="CreateWorker.DisplayName"/> for the same rule at creation time.</param>
+public readonly record struct UpdateWorker(
+    OperatorId OperatorId,
+    TenantId TenantId,
+    WorkerId WorkerId,
+    string LastName,
+    string FirstName,
+    string? MiddleName,
+    string? DisplayName,
+    bool IsActive);
+
+/// <summary>`20-13`. Refused - deleting nothing - if the worker has ever been booked; see
+/// <see cref="IWorkerRepository.DeleteIfNeverBookedAsync"/> for exactly what that means and why the
+/// check has to run in the same statement as the delete.</summary>
+public readonly record struct DeleteWorker(OperatorId OperatorId, TenantId TenantId, WorkerId WorkerId);
+
+/// <summary>`20-13`. One worker, for the card the console opens to edit him.</summary>
+public readonly record struct GetWorker(OperatorId OperatorId, TenantId TenantId, WorkerId WorkerId);
+
+/// <summary>`20-13`. Every worker of one tenant - the console's own table. No paging and no filter:
+/// the item's own scope says ten workers is a lot for this product, by the author's own measure.</summary>
+public readonly record struct ListWorkersForTenant(OperatorId OperatorId, TenantId TenantId);
 
 public readonly record struct AddWorkingHoursRule(
     OperatorId OperatorId,

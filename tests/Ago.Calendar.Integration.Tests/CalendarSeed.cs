@@ -42,7 +42,7 @@ internal static class CalendarSeed
             allowedOrigins);
         var calendar = BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), 10, Now);
-        var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Alex");
+        var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);
         var service = Service.Create(new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45));
         var customer = Customer.Register(
             new CustomerId(NewId()), tenant.Id, new PhoneNumber("+79991234567"), Now);

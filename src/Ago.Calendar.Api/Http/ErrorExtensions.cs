@@ -55,6 +55,11 @@ public static class ErrorExtensions
             // nothing about the request was malformed; the world moved.
             "booking.invalid_state" or "booking.concurrency_conflict" => StatusCodes.Status409Conflict,
             "configuration.invalid" or "provisioning.invalid" => StatusCodes.Status400BadRequest,
+            // `20-13`. 409, not 400: the request was well-formed and the worker exists - what refuses
+            // it is a state the deletion rule itself protects (the same "the world moved" reasoning
+            // booking.invalid_state's own comment gives), and deactivation is the alternative action
+            // this response's own message points the caller at.
+            "configuration.worker_has_booking_history" => StatusCodes.Status409Conflict,
             // `20-07`. A deployment fault - this host's static ChatModule:* configuration does not
             // resolve to a real, published calendar - not something the caller (Ago.Chat.*) can act
             // on by retrying differently, so it is mapped to 500 explicitly rather than left to the

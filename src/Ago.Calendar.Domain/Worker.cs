@@ -20,6 +20,15 @@
 /// services this worker performs. An aggregate that owns a relationship is the one that can enforce
 /// a rule about it in a single transaction; splitting them across two aggregates would make the v1
 /// one-calendar rule a cross-aggregate check, which is a race, not an invariant.</para>
+///
+/// <para><b>`20-13`: the name is four fields, not one.</b> <see cref="LastName"/> and
+/// <see cref="FirstName"/> are required, <see cref="MiddleName"/> is optional, and
+/// <see cref="DisplayName"/> is what the booking surface and every list actually render. Two shapes
+/// were weighed for the last one - a nullable override with a computed property, or a stored column
+/// with a flag - and the stored column won: every read model that selects a worker's name (the
+/// public booking surface, `20-15`'s slot table, `20-12`'s contacts report) selects one column
+/// instead of reproducing the derivation rule in SQL. <see cref="DisplayNameIsCustom"/> is that
+/// flag, and <see cref="Rename"/>'s own remarks say exactly when it stops the recomputation.</para>
 /// </summary>
 public sealed class Worker
 {
@@ -30,23 +39,49 @@ public sealed class Worker
 
     public TenantId TenantId { get; }
 
+    public string LastName { get; private set; } = string.Empty;
+
+    public string FirstName { get; private set; } = string.Empty;
+
+    public string? MiddleName { get; private set; }
+
     public string DisplayName { get; private set; } = string.Empty;
+
+    /// <summary>Whether a human typed <see cref="DisplayName"/> directly, through
+    /// <see cref="SetDisplayName"/>. While this is <see langword="false"/>, <see cref="Rename"/> keeps
+    /// recomputing <see cref="DisplayName"/> from the name fields on every call; the moment it becomes
+    /// <see langword="true"/> it stays that way until nothing (there is no "un-custom" operation, the
+    /// same way there is no route back to <see cref="EventStatus.Available"/> on <see cref="Event"/> -
+    /// a human who typed a name meant it, and a later rename should not silently discard that).</summary>
+    public bool DisplayNameIsCustom { get; private set; }
 
     /// <summary>An inactive worker keeps their history and their materialised events; `20-02` simply
     /// stops extending their horizon. Deleting a worker who has bookings is not a thing this product
-    /// should offer.</summary>
+    /// should offer - see <see cref="IWorkerRepository"/>'s deletion port for the narrower case it
+    /// does offer instead.</summary>
     public bool IsActive { get; private set; }
+
+    public DateTimeOffset CreatedAt { get; }
+
+    public DateTimeOffset UpdatedAt { get; private set; }
 
     public IReadOnlyList<CalendarMembership> Calendars => _calendars;
 
     public IReadOnlyList<ServiceOffering> Services => _services;
 
-    private Worker(WorkerId id, TenantId tenantId, string displayName)
+    private Worker(
+        WorkerId id, TenantId tenantId, string lastName, string firstName, string? middleName, DateTimeOffset now)
     {
         Id = id;
         TenantId = tenantId;
-        DisplayName = displayName;
+        LastName = lastName;
+        FirstName = firstName;
+        MiddleName = middleName;
+        DisplayName = Derive(firstName, lastName);
+        DisplayNameIsCustom = false;
         IsActive = true;
+        CreatedAt = now;
+        UpdatedAt = now;
     }
 
     // EF Core materialization only - never called by domain code.
@@ -54,10 +89,13 @@ public sealed class Worker
     {
     }
 
-    public static Worker Create(WorkerId id, TenantId tenantId, string displayName)
+    public static Worker Create(
+        WorkerId id, TenantId tenantId, string lastName, string firstName, string? middleName, DateTimeOffset now)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
-        return new Worker(id, tenantId, displayName.Trim());
+        ArgumentException.ThrowIfNullOrWhiteSpace(lastName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(firstName);
+
+        return new Worker(id, tenantId, lastName.Trim(), firstName.Trim(), NormalizeMiddleName(middleName), now);
     }
 
     /// <summary>
@@ -116,13 +154,66 @@ public sealed class Worker
     public bool Offers(ServiceId serviceId) =>
         _services.Exists(offering => offering.ServiceId == serviceId);
 
-    public void Deactivate() => IsActive = false;
+    public void Deactivate(DateTimeOffset now)
+    {
+        IsActive = false;
+        UpdatedAt = now;
+    }
 
-    public void Reactivate() => IsActive = true;
+    public void Reactivate(DateTimeOffset now)
+    {
+        IsActive = true;
+        UpdatedAt = now;
+    }
 
-    public void Rename(string displayName)
+    /// <summary>
+    /// Changes the three name fields and recomputes <see cref="DisplayName"/> - but only while
+    /// <see cref="DisplayNameIsCustom"/> is still <see langword="false"/>.
+    ///
+    /// <para><b>The order of operations is the whole guarantee.</b> The check reads the flag *before*
+    /// this call can possibly change it - <see cref="Rename"/> never sets
+    /// <see cref="DisplayNameIsCustom"/>, only <see cref="SetDisplayName"/> does - so calling this
+    /// method a second time after a human has set a custom name is a no-op on
+    /// <see cref="DisplayName"/> itself: "если ввели руками, а потом меняют Имя или Фамилию -
+    /// значение уже не рассчитывается" is exactly the branch below.</para>
+    /// </summary>
+    public void Rename(string lastName, string firstName, string? middleName, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(lastName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(firstName);
+
+        LastName = lastName.Trim();
+        FirstName = firstName.Trim();
+        MiddleName = NormalizeMiddleName(middleName);
+
+        if (!DisplayNameIsCustom)
+        {
+            DisplayName = Derive(FirstName, LastName);
+        }
+
+        UpdatedAt = now;
+    }
+
+    /// <summary>A human overrides <see cref="DisplayName"/> directly. Raises
+    /// <see cref="DisplayNameIsCustom"/>, which is what stops every later <see cref="Rename"/> from
+    /// recomputing over it.</summary>
+    public void SetDisplayName(string displayName, DateTimeOffset now)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+
         DisplayName = displayName.Trim();
+        DisplayNameIsCustom = true;
+        UpdatedAt = now;
     }
+
+    /// <summary>First-name-space-last-name, with whitespace collapsed - not just trimmed, because a
+    /// stray double space typed into either field should not survive into what the booking surface
+    /// renders.</summary>
+    private static string Derive(string firstName, string lastName) =>
+        string.Join(
+            ' ',
+            $"{firstName} {lastName}".Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    private static string? NormalizeMiddleName(string? middleName) =>
+        string.IsNullOrWhiteSpace(middleName) ? null : middleName.Trim();
 }

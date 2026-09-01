@@ -61,12 +61,12 @@ internal static class BookingFixtures
 
     public static Worker WorkerOffering(Service service, bool active = true)
     {
-        var worker = Worker.Create(WorkerId, TenantId, "Alex");
+        var worker = Worker.Create(WorkerId, TenantId, "Doe", "Alex", null, Now);
         worker.JoinCalendar(Calendar());
         worker.Offer(service);
         if (!active)
         {
-            worker.Deactivate();
+            worker.Deactivate(Now);
         }
 
         return worker;

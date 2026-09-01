@@ -29,11 +29,11 @@ namespace Ago.Calendar.Api.Configuration;
 /// throws rather than returning null for exactly this case, so a route that escaped the group would
 /// fail loudly on its first request rather than acting as nobody.</para>
 ///
-/// <para><b>What is deliberately not here.</b> No delete for a calendar, a worker or a service:
-/// <c>Worker.IsActive</c>'s own remarks rule out deleting a worker who has bookings, and the same
-/// argument covers the rest - a booked history is what a lead card is for. Deactivation and
-/// unpublishing are the reversible operations this product offers, and they are the ones on this
-/// surface.</para>
+/// <para><b>What is deliberately not here.</b> No delete for a calendar or a service - the same
+/// argument <c>Worker.IsActive</c>'s own remarks make for a worker applies to both, and deactivation/
+/// unpublishing are the reversible operations this product offers for them. `20-13` narrowed that
+/// rule for a worker specifically: one who has never been booked carries no history worth keeping,
+/// so <c>DELETE /workers/{id}</c> exists and every other worker still falls back to deactivation.</para>
 /// </summary>
 public static class ConsoleEndpoints
 {
@@ -51,6 +51,10 @@ public static class ConsoleEndpoints
         group.MapPut("/calendars/{calendarId:guid}", HandleUpdateCalendarAsync).WithName("UpdateCalendar");
         group.MapPost("/services", HandleCreateServiceAsync).WithName("CreateService");
         group.MapPost("/workers", HandleCreateWorkerAsync).WithName("CreateWorker");
+        group.MapGet("/workers", HandleListWorkersAsync).WithName("ListWorkers");
+        group.MapGet("/workers/{workerId:guid}", HandleGetWorkerAsync).WithName("GetWorker");
+        group.MapPut("/workers/{workerId:guid}", HandleUpdateWorkerAsync).WithName("UpdateWorker");
+        group.MapDelete("/workers/{workerId:guid}", HandleDeleteWorkerAsync).WithName("DeleteWorker");
         group.MapPost("/working-hours", HandleAddWorkingHoursAsync).WithName("AddWorkingHoursRule");
 
         group.MapGet("/pending-bookings", HandlePendingBookingsAsync).WithName("GetPendingBookings");
@@ -219,7 +223,8 @@ public static class ConsoleEndpoints
 
         var result = await handler.HandleAsync(
             new CreateWorker(
-                principal.GetOperatorId(), principal.GetTenantId(), request.DisplayName,
+                principal.GetOperatorId(), principal.GetTenantId(),
+                request.LastName, request.FirstName, request.MiddleName, request.DisplayName,
                 new CalendarId(request.CalendarId), request.ServiceIds ?? []),
             cancellationToken);
 
@@ -227,6 +232,82 @@ public static class ConsoleEndpoints
             ? Results.Created($"/api/v1/console/workers/{result.Value.Value}", new { workerId = result.Value.Value })
             : result.Error!.Value.ToProblem(httpContext);
     }
+
+    private static async Task<IResult> HandleListWorkersAsync(
+        ClaimsPrincipal principal,
+        ListWorkersForTenantHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new ListWorkersForTenant(principal.GetOperatorId(), principal.GetTenantId()), cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok(result.Value.Select(ToWorkerResponse).ToArray());
+    }
+
+    private static async Task<IResult> HandleGetWorkerAsync(
+        Guid workerId,
+        ClaimsPrincipal principal,
+        GetWorkerHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetWorker(principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId)),
+            cancellationToken);
+
+        return result.IsSuccess ? Results.Ok(ToWorkerResponse(result.Value)) : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    private static async Task<IResult> HandleUpdateWorkerAsync(
+        Guid workerId,
+        UpdateWorkerRequest request,
+        ClaimsPrincipal principal,
+        UpdateWorkerHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        return Complete(
+            await handler.HandleAsync(
+                new UpdateWorker(
+                    principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId),
+                    request.LastName, request.FirstName, request.MiddleName, request.DisplayName, request.IsActive),
+                cancellationToken),
+            httpContext);
+    }
+
+    private static async Task<IResult> HandleDeleteWorkerAsync(
+        Guid workerId,
+        ClaimsPrincipal principal,
+        DeleteWorkerHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken) =>
+        Complete(
+            await handler.HandleAsync(
+                new DeleteWorker(principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId)),
+                cancellationToken),
+            httpContext);
+
+    private static WorkerResponse ToWorkerResponse(WorkerDetail worker) => new(
+        worker.WorkerId.Value,
+        worker.LastName,
+        worker.FirstName,
+        worker.MiddleName,
+        worker.DisplayName,
+        worker.DisplayNameIsCustom,
+        worker.IsActive,
+        worker.CreatedAt,
+        worker.UpdatedAt);
 
     private static async Task<IResult> HandleAddWorkingHoursAsync(
         AddWorkingHoursRuleRequest request,

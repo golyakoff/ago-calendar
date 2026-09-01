@@ -55,7 +55,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 
         var workerId = await CreatedIdAsync(
             "/api/v1/console/workers",
-            new CreateWorkerRequest("Robin", calendarId, [serviceId]),
+            new CreateWorkerRequest("Fox", "Robin", null, null, calendarId, [serviceId]),
             seed,
             "workerId");
 
@@ -97,7 +97,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         var first = await APendingBookingAsync(seed, seed.Calendar.Id, seed.Worker.Id);
         var secondWorkerId = await CreatedIdAsync(
             "/api/v1/console/workers",
-            new CreateWorkerRequest("Robin", secondCalendarId, [seed.Service.Id.Value]),
+            new CreateWorkerRequest("Fox", "Robin", null, null, secondCalendarId, [seed.Service.Id.Value]),
             seed,
             "workerId");
         var second = await APendingBookingAsync(seed, new CalendarId(secondCalendarId), new WorkerId(secondWorkerId));

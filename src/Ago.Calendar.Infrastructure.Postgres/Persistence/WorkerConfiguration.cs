@@ -12,8 +12,14 @@ internal sealed class WorkerConfiguration : IEntityTypeConfiguration<Worker>
         builder.HasKey(w => w.Id);
         builder.Property(w => w.Id).HasColumnName("id").HasConversion(IdConverters.Worker).ValueGeneratedNever();
         builder.Property(w => w.TenantId).HasColumnName("tenant_id").HasConversion(IdConverters.Tenant);
+        builder.Property(w => w.LastName).HasColumnName("last_name").HasMaxLength(100).IsRequired();
+        builder.Property(w => w.FirstName).HasColumnName("first_name").HasMaxLength(100).IsRequired();
+        builder.Property(w => w.MiddleName).HasColumnName("middle_name").HasMaxLength(100);
         builder.Property(w => w.DisplayName).HasColumnName("display_name").HasMaxLength(200).IsRequired();
+        builder.Property(w => w.DisplayNameIsCustom).HasColumnName("display_name_is_custom");
         builder.Property(w => w.IsActive).HasColumnName("is_active");
+        builder.Property(w => w.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+        builder.Property(w => w.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 
         builder.HasOne<Tenant>().WithMany().HasForeignKey(w => w.TenantId);
 

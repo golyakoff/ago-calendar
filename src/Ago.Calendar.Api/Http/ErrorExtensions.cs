@@ -99,6 +99,12 @@ public static class ErrorExtensions
             // itself protects, the same "the world moved" reasoning booking.invalid_state's own
             // comment gives, not a permission the caller lacks.
             "access.account_owner_requires_contact_access" => StatusCodes.Status409Conflict,
+            // 2026-09-01: PublicBookingApiGate's own kill switch. 403, not the 404 that
+            // booking.surface_not_found/booking.origin_not_allowed use two cases above - those hide a
+            // caller-specific fact (whether a tenant/origin exists); this refusal is identical for
+            // every caller, so a 404 would only risk reading as a stale route rather than a deliberate
+            // one. See PublicBookingApiGate's own remarks for the full reasoning.
+            "booking.public_api_disabled" => StatusCodes.Status403Forbidden,
             // Anything unmapped is a bug in this switch, not a client error - a 500 says so honestly
             // instead of inventing a 400 that would make a caller retry something that cannot work.
             _ => StatusCodes.Status500InternalServerError,

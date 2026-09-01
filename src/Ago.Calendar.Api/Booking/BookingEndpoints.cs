@@ -1,4 +1,5 @@
 ﻿using Ago.Calendar.Api.Http;
+using Ago.Calendar.Api.PublicBookingApi;
 using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
@@ -37,7 +38,10 @@ public static class BookingEndpoints
 
         app.MapPost("/api/v1/calendars/{calendarId:guid}/events/{eventId:guid}/book", HandleBookAsync)
             .WithName("BookEvent")
-            .AllowAnonymous();
+            .AllowAnonymous()
+            // 2026-09-01: closed to every caller until a real "publish the booking API" product
+            // decision is made - see PublicBookingApiGate's own remarks for the full reasoning.
+            .AddEndpointFilter<PublicBookingApiGate>();
 
         return app;
     }
@@ -69,9 +73,6 @@ public static class BookingEndpoints
                 new ServiceId(request.ServiceId),
                 request.Phone,
                 request.DisplayName,
-                // `20-06`, layer 2. Read here and passed in, never reached for from inside the
-                // handler: Application must not know there is an HttpContext (see BookEvent.Origin).
-                PublicBookingEndpoints.OriginOf(httpContext),
                 // `20-10`: this endpoint's own actual "done" signal at the code level - the public
                 // widget now enforces the identical guarantee `20-09` gave the chat-originated flow,
                 // through its own independent verification mechanism (PendingPhoneVerification) rather
@@ -79,9 +80,12 @@ public static class BookingEndpoints
                 // one in hand directly, only the two proof fields below, which
                 // PhoneVerificationAssertionResolver resolves into an equivalent instant.
                 RequiresVerifiedPhone: true,
+                // `20-06`, layer 2. Read here and passed in, never reached for from inside the
+                // handler: Application must not know there is an HttpContext (see BookEvent.Origin).
+                Origin: PublicBookingEndpoints.OriginOf(httpContext),
                 PhoneVerifiedAt: null,
-                request.PhoneVerificationId,
-                request.PhoneVerificationProofToken),
+                PhoneVerificationId: request.PhoneVerificationId,
+                PhoneVerificationProofToken: request.PhoneVerificationProofToken),
             cancellationToken);
 
         if (outcome.Booking is not { } booking)

@@ -181,10 +181,11 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
                 NullLogger<RedisRateLimiter>.Instance),
             options,
             new BookingOptions(),
-            // `20-10`: RequiresVerifiedPhone stays false (the default) on every BookEvent this file
-            // builds below, so PhoneVerificationAssertionResolver.ResolveAsync is never actually
-            // invoked - real repositories rather than fakes only because this test project has no
-            // access to Ago.Calendar.Application.Tests' internal fakes across the assembly boundary.
+            // `20-10`: RequiresVerifiedPhone is explicitly false on every BookEvent this file builds
+            // below (the record has no default any more - a caller must always name this), so
+            // PhoneVerificationAssertionResolver.ResolveAsync is never actually invoked - real
+            // repositories rather than fakes only because this test project has no access to
+            // Ago.Calendar.Application.Tests' internal fakes across the assembly boundary.
             new PhoneVerificationAssertionResolver(new CustomerRepository(db), new PendingPhoneVerificationRepository(db)),
             new UuidV7Generator(),
             new FixedClock(Now));
@@ -194,7 +195,9 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
         // phone would be refused before the limiter is ever consulted at all, defeating every test
         // here.
         return await handler.HandleAsync(
-            new BookEvent(seed.CalendarId, eventId, seed.ServiceId, phone, "Anna", PhoneVerifiedAt: Now),
+            new BookEvent(
+                seed.CalendarId, eventId, seed.ServiceId, phone, "Anna",
+                RequiresVerifiedPhone: false, PhoneVerifiedAt: Now),
             CancellationToken.None);
     }
 

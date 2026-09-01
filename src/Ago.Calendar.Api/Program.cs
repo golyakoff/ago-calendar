@@ -5,9 +5,11 @@ using Ago.Calendar.Api.Configuration;
 using Ago.Calendar.Api.Cors;
 using Ago.Calendar.Api.PhoneVerification;
 using Ago.Calendar.Api.Provisioning;
+using Ago.Calendar.Api.PublicBookingApi;
 using Ago.Calendar.Module;
 using Ago.Platform.Hosting;
 using Microsoft.AspNetCore.Cors.Infrastructure;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,6 +33,17 @@ builder.Services.AddCors();
 builder.Services.AddSingleton(_ => new ConsoleOrigins(
     builder.Configuration.GetSection(ConsoleOrigins.SectionKey).Get<string[]>() ?? []));
 builder.Services.AddSingleton<ICorsPolicyProvider, TenantOriginCorsPolicyProvider>();
+
+// 2026-09-01: `20-10`'s public booking surface's own kill switch - bound here, in this host's own
+// Program.cs, rather than in CalendarModule alongside BookingRateLimitOptions/PhoneVerificationOptions:
+// only Ago.Calendar.Api maps the routes it gates (Ago.Calendar.Worker never does), and unlike those two
+// options classes nothing here is a fact Application could have an opinion about - see
+// PublicBookingApiOptions's own remarks. Bound the identical way regardless: AddOptions + ValidateOnStart,
+// the plain value registered for PublicBookingApiGate to take as a constructor dependency.
+builder.Services.AddOptions<PublicBookingApiOptions>()
+    .Bind(builder.Configuration.GetSection(PublicBookingApiOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddSingleton(provider => provider.GetRequiredService<IOptions<PublicBookingApiOptions>>().Value);
 
 var app = builder.Build();
 
@@ -63,7 +76,11 @@ if (!app.Environment.IsProduction())
     app.MapDevProvisioningEndpoints();
 
     // `20-10`: read back the code FakePhoneVerificationSender captured, for a person clicking through
-    // the widget by hand - see PhoneVerificationDevEndpoints's own remarks.
+    // the widget by hand - see PhoneVerificationDevEndpoints's own remarks. Unaffected by
+    // PublicBookingApiGate above: this route is not part of MapBookingEndpoints/
+    // MapPhoneVerificationEndpoints's own route groups, so the gate is never attached to it, and its
+    // own environment gate is a different concern entirely - "can this run outside a real deployment"
+    // rather than "is this a real product surface for the public internet".
     app.MapPhoneVerificationDevEndpoints();
 }
 

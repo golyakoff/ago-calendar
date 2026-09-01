@@ -16,15 +16,6 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// <param name="Phone">Raw, as typed. Normalised by <see cref="PhoneNumber"/> so that
 /// <c>+7 (999) 123-45-67</c> and <c>+79991234567</c> are one lead card.</param>
 /// <param name="DisplayName">Optional.</param>
-/// <param name="Origin">
-/// The request's own <c>Origin</c> header, or null when there is none - `20-06`'s layer-2 check.
-///
-/// <para><b>Passed in rather than read from an ambient context, because Application must not know
-/// there is an HTTP request.</b> The alternative, injecting <c>IHttpContextAccessor</c>, would put a
-/// hosting type inside a use case and make this handler untestable without a request pipeline - the
-/// exact coupling <c>ForbiddenTypeTests</c> exists to catch. It is a parameter for the same reason
-/// <c>DateTimeOffset now</c> is one everywhere else in this repository.</para>
-/// </param>
 /// <param name="RequiresVerifiedPhone">
 /// `20-09`/`20-10`: whether *this calling surface* enforces the phone-verification gate at all - a fact
 /// about which caller is booking, not about whether verification happened to occur. <c>true</c> from
@@ -36,9 +27,18 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// the self-asserted value that would have been the only alternative - see that item's own backlog file
 /// for why a universal gate had to wait for a real mechanism rather than either shipping a forgeable
 /// field or leaving the widget permanently unable to book. There is no longer a caller of this command
-/// that supplies <see langword="false"/>; the parameter default remains <see langword="false"/> only so
-/// that a future third caller must decide the question explicitly rather than inheriting a value that
-/// happens to have been safe for the two callers that exist today.
+/// that supplies <see langword="false"/>; this parameter has <b>no default</b> so that a future third
+/// caller cannot compile without deciding the question explicitly - the compiler enforces what used to
+/// be only a convention a reader of this doc comment had to notice and honour on their own.
+/// </param>
+/// <param name="Origin">
+/// The request's own <c>Origin</c> header, or null when there is none - `20-06`'s layer-2 check.
+///
+/// <para><b>Passed in rather than read from an ambient context, because Application must not know
+/// there is an HTTP request.</b> The alternative, injecting <c>IHttpContextAccessor</c>, would put a
+/// hosting type inside a use case and make this handler untestable without a request pipeline - the
+/// exact coupling <c>ForbiddenTypeTests</c> exists to catch. It is a parameter for the same reason
+/// <c>DateTimeOffset now</c> is one everywhere else in this repository.</para>
 /// </param>
 /// <param name="PhoneVerifiedAt">
 /// The calling side's own assertion that <paramref name="Phone"/> has been proven reachable, when the
@@ -68,8 +68,8 @@ public readonly record struct BookEvent(
     ServiceId ServiceId,
     string Phone,
     string? DisplayName,
+    bool RequiresVerifiedPhone,
     string? Origin = null,
-    bool RequiresVerifiedPhone = false,
     DateTimeOffset? PhoneVerifiedAt = null,
     Guid? PhoneVerificationId = null,
     string? PhoneVerificationProofToken = null);

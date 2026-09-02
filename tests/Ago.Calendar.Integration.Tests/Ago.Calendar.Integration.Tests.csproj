@@ -31,6 +31,9 @@
     <!-- `20-03`: the real host, so the booking endpoint's status codes and headers are proven over a
          real request rather than inferred from the handler's return value. -->
     <ProjectReference Include="..\..\src\Ago.Calendar.Api\Ago.Calendar.Api.csproj" />
+    <!-- `20-20`: SchemaMigratorTests drives Ago.Calendar.Migrator's own MigratorRunner against a real
+         Postgres - the same shape Ago.Chat.Integration.Tests.SchemaMigratorTests uses (`8-08`). -->
+    <ProjectReference Include="..\..\src\Ago.Calendar.Migrator\Ago.Calendar.Migrator.csproj" />
   </ItemGroup>
 
 </Project>

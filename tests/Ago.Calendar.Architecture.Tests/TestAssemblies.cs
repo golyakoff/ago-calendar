@@ -31,6 +31,19 @@ internal static class TestAssemblies
     public static ProductAssembly PlatformKernel { get; } = Load("Ago.Platform.Kernel");
     public static ProductAssembly PlatformHosting { get; } = Load("Ago.Platform.Hosting");
 
+    // `20-20`: the deployables. Loaded the same way as everything else here, by simple name from
+    // this project's own output directory.
+    public static ProductAssembly Api { get; } = Load("Ago.Calendar.Api");
+    public static ProductAssembly Worker { get; } = Load("Ago.Calendar.Worker");
+    public static ProductAssembly Migrator { get; } = Load("Ago.Calendar.Migrator");
+
+    /// <summary>The serving hosts - `adr/0013`'s split, applied here the same way it is in
+    /// `Ago.Chat.Architecture.Tests`. `20-20`'s rule is precisely that neither may apply a schema
+    /// migration; <see cref="Migrator"/> is deliberately not in this list, because it is the one that
+    /// may. No `Ago.Calendar.Webhooks` exists in this product (`20-00`'s own scope note), so this list
+    /// has two members where ago-chat's has three.</summary>
+    public static IReadOnlyList<ProductAssembly> ServingHosts { get; } = [Api, Worker];
+
     /// <summary>Every product assembly the "time and identity only in Infrastructure" rule
     /// (adr/0011) applies to - i.e. everything except Infrastructure itself.</summary>
     public static IReadOnlyList<ProductAssembly> NonInfrastructure { get; } =

@@ -7,6 +7,7 @@
     <Project Path="src/Ago.Calendar.Infrastructure.Postgres/Ago.Calendar.Infrastructure.Postgres.csproj" />
     <Project Path="src/Ago.Calendar.Infrastructure.Redis/Ago.Calendar.Infrastructure.Redis.csproj" />
     <Project Path="src/Ago.Calendar.Infrastructure.Time/Ago.Calendar.Infrastructure.Time.csproj" />
+    <Project Path="src/Ago.Calendar.Migrator/Ago.Calendar.Migrator.csproj" />
     <Project Path="src/Ago.Calendar.Module/Ago.Calendar.Module.csproj" />
     <Project Path="src/Ago.Calendar.Worker/Ago.Calendar.Worker.csproj" />
   </Folder>

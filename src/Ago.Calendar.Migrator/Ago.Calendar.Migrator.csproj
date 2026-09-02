@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <!-- `20-20`/`adr/0056`: "It references Ago.Calendar.Infrastructure.Postgres and nothing above it" -
+       the same rule `Ago.Chat.Migrator` states for itself (`8-08`). Not Ago.Calendar.Module - that
+       wires Redis and validates its options at startup, so a migrator built on it could not run in an
+       environment where Redis is down, which is exactly an environment somebody might be migrating.
+       SchemaMigrationTests (Ago.Calendar.Architecture.Tests) asserts this reference list rather than
+       trusting this comment. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Infrastructure.Postgres\Ago.Calendar.Infrastructure.Postgres.csproj" />
+  </ItemGroup>
+
+  <!-- Microsoft.NET.Sdk, not Microsoft.NET.Sdk.Web like Ago.Calendar.Api: this one serves nothing and
+       has no port. It exits, which is the entire contract. -->
+
+</Project>

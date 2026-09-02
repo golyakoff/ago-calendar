@@ -91,3 +91,120 @@ jobs:
         with:
           name: test-results
           path: TestResults
+
+  # `20-20`/`adr/0047`: images are published to GHCR from here, not built on the deployment node -
+  # the same job ago-chat's own CI runs (`15-06`), ported unchanged in shape. Only on `main`, and only
+  # after build-test passed - a pull request never publishes, so a fork or a draft branch cannot put
+  # an image into the registry a deploy might later reach for.
+  publish-images:
+    needs: build-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # A repository's own GITHUB_TOKEN can write to that repository's own package feed - the same
+      # property adr/0018 already relies on for the NuGet feed, so publishing needs no new secret.
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      # The Dockerfile restores Ago.Platform.* from a *folder* mounted in as a Buildx build context
+      # (nuget.docker.config), because the local developer loop's feed lives outside the build
+      # context. CI has no such folder - it restores from GitHub Packages - so materialise one:
+      # restore into a scratch global-packages directory and copy the .nupkg files out of it. The
+      # alternative, teaching the Dockerfile to authenticate against GitHub Packages itself, would
+      # push AGO_PLATFORM_PACKAGES_TOKEN into the image build, and a token that never enters a build
+      # cannot leak from a layer.
+      - name: Materialise the Ago.Platform.* feed for the image build
+        env:
+          AGO_PLATFORM_PACKAGES_TOKEN: ${{ secrets.AGO_PLATFORM_PACKAGES_TOKEN }}
+        run: |
+          mkdir -p /tmp/nuget-feed
+          dotnet restore Ago.Calendar.slnx --configfile nuget.ci.config --packages /tmp/global-packages
+          find /tmp/global-packages -name 'ago.platform.*.nupkg' -exec cp {} /tmp/nuget-feed/ \;
+          ls -1 /tmp/nuget-feed
+
+      # No docker/login-action: `docker login` with the workflow token does the same thing with one
+      # fewer third-party action in the supply chain, and Buildx is already installed on the runner.
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Tagging (adr/0047): the canonical tag is the full 40-character commit SHA. Plain `docker
+      # build` with BuildKit and a separate `docker push`, rather than `buildx build --push`: this is
+      # byte-for-byte what a developer machine or a redeploy script would run by hand, so an image
+      # built by CI and one built locally come out of the same command. --build-context is the reason
+      # BuildKit is required at all (the Ago.Platform.* feed is a folder outside the build context,
+      # per the Dockerfile's header).
+      - name: Build the three host images
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          set -euo pipefail
+          for project in Ago.Calendar.Api Ago.Calendar.Worker Ago.Calendar.Migrator; do
+            name="ago-calendar-$(echo "${project#Ago.Calendar.}" | tr '[:upper:]' '[:lower:]')"
+            repo="ghcr.io/${{ github.repository_owner }}/${name}"
+            echo "::group::${repo}"
+            docker build \
+              --build-context "nugetfeed=/tmp/nuget-feed" \
+              --build-arg "PROJECT_NAME=${project}" \
+              --build-arg "GIT_COMMIT=${{ github.sha }}" \
+              -t "${repo}:${{ github.sha }}" \
+              -t "${repo}:main" \
+              .
+            echo "::endgroup::"
+          done
+
+      # `17-04`, and `15-06`/`adr/0047` is what makes it possible - there was nowhere to scan into
+      # before a registry existed. Runs between build and push, not after push: nothing this check
+      # would fail ever reaches the registry from this pipeline. Same threshold as the dependency
+      # check above (Critical/High fails, Moderate/Low is reported -
+      # docs/runbooks/vulnerability-response.md in ago-root) and `--scanners vuln` only, deliberately
+      # out of scope for secret scanning of source.
+      #
+      # Pinned by digest, not by a version tag or the `aquasecurity/trivy-action` wrapper - same
+      # reasoning and the same digest ago-chat's own workflow pins (`aquasec/trivy:0.74.0`, verified
+      # there well past the 2026-03 supply-chain compromise of both the Action's git tags and the
+      # Docker Hub image). Dependabot's github-actions/docker entries will not bump a `docker run`
+      # invocation like this one, so this digest needs updating by hand when it goes stale - a real
+      # limitation of choosing the CLI form over the Action, stated rather than hidden.
+      - name: Scan images for known vulnerabilities (Trivy)
+        run: |
+          set -euo pipefail
+          fail=0
+          for project in Ago.Calendar.Api Ago.Calendar.Worker Ago.Calendar.Migrator; do
+            name="ago-calendar-$(echo "${project#Ago.Calendar.}" | tr '[:upper:]' '[:lower:]')"
+            repo="ghcr.io/${{ github.repository_owner }}/${name}"
+            echo "::group::${repo}"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+              aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+              image --scanners vuln --severity CRITICAL,HIGH --exit-code 1 --format table \
+              "${repo}:${{ github.sha }}" || fail=1
+            echo "::endgroup::"
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::At least one image has a Critical/High vulnerability - see the groups above. Nothing was pushed."
+            exit 1
+          fi
+
+      - name: Push the three host images
+        run: |
+          set -euo pipefail
+          for n in api worker migrator; do
+            repo="ghcr.io/${{ github.repository_owner }}/ago-calendar-${n}"
+            docker push "${repo}:${{ github.sha }}"
+            docker push "${repo}:main"
+          done
+
+      - name: Summarise what was published
+        run: |
+          {
+            echo "### Images published"
+            echo
+            for n in api worker migrator; do
+              echo "- \`ghcr.io/${{ github.repository_owner }}/ago-calendar-${n}:${{ github.sha }}\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

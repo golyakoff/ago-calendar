@@ -29,6 +29,16 @@
     <ProjectReference Include="..\..\src\Ago.Calendar.Infrastructure.Postgres\Ago.Calendar.Infrastructure.Postgres.csproj" />
     <ProjectReference Include="..\..\src\Ago.Calendar.Infrastructure.Time\Ago.Calendar.Infrastructure.Time.csproj" />
     <ProjectReference Include="..\..\src\Ago.Calendar.Module\Ago.Calendar.Module.csproj" />
+    <!--
+      `20-20`: the deployables. Until this item, no arch rule had anything to say about a host, so
+      none was referenced here - the layering rules all concern the projects underneath. The rule
+      this item adds is specifically about hosts ("only Ago.Calendar.Migrator may apply a
+      migration"), so their assemblies have to be loadable - the same shape
+      Ago.Chat.Architecture.Tests uses for the same reason (`8-08`).
+    -->
+    <ProjectReference Include="..\..\src\Ago.Calendar.Api\Ago.Calendar.Api.csproj" />
+    <ProjectReference Include="..\..\src\Ago.Calendar.Worker\Ago.Calendar.Worker.csproj" />
+    <ProjectReference Include="..\..\src\Ago.Calendar.Migrator\Ago.Calendar.Migrator.csproj" />
   </ItemGroup>
 
   <ItemGroup>

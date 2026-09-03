@@ -83,6 +83,44 @@ public class RegisterTenantHandlerTests
         Assert.Null(world.Store.Registered);
     }
 
+    /// <summary>
+    /// `22-03`/adr/0093: the whole point. A caller-supplied id - the account id, in production - is
+    /// used as-is rather than as a hint the handler is free to discard, and the proof is against the
+    /// row the fake store actually received, not against the handler's returned value alone.
+    /// </summary>
+    [Fact]
+    public async Task RegisterWithASuppliedTenantId_TheStoredTenantCarriesThatExactId()
+    {
+        var world = new World();
+        var accountId = new TenantId(Guid.NewGuid());
+
+        var result = await world.RegisterAsync(externalSubjectId: "kc-owner-sub", tenantId: accountId);
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        Assert.Equal(accountId, result.Value.TenantId);
+        var (tenant, _, @operator) = world.Store.Registered!.Value;
+        Assert.Equal(accountId, tenant.Id);
+        Assert.Equal(accountId, @operator.TenantId);
+    }
+
+    /// <summary>
+    /// `22-03`'s other half of "equals, not replaced by": with nothing supplied, this handler still
+    /// mints its own id - the standalone door adr/0093 keeps open, proven here rather than only by
+    /// the earlier tests never happening to pass one.
+    /// </summary>
+    [Fact]
+    public async Task RegisterWithNoTenantIdSupplied_TheHandlerStillMintsOne()
+    {
+        var world = new World();
+
+        var result = await world.RegisterAsync(externalSubjectId: "kc-owner-sub");
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        Assert.NotEqual(default, result.Value.TenantId.Value);
+        var (tenant, _, _) = world.Store.Registered!.Value;
+        Assert.Equal(result.Value.TenantId, tenant.Id);
+    }
+
     private sealed class World
     {
         private readonly RegisterTenantHandler _handler;
@@ -96,7 +134,7 @@ public class RegisterTenantHandlerTests
         public FakeTenantProvisioningStore Store { get; }
 
         public Task<Ago.Platform.Kernel.Result<RegisteredTenant>> RegisterAsync(
-            string? externalSubjectId = null, string? ownerEmail = null) =>
+            string? externalSubjectId = null, string? ownerEmail = null, TenantId? tenantId = null) =>
             _handler.HandleAsync(
                 new RegisterTenant(
                     "Barbershop",
@@ -104,7 +142,8 @@ public class RegisterTenantHandlerTests
                     "Owner",
                     externalSubjectId,
                     [],
-                    ownerEmail),
+                    ownerEmail,
+                    tenantId),
                 CancellationToken.None);
     }
 }

@@ -166,4 +166,75 @@ public sealed class ProvisionerRunnerTests(PostgresFixture fixture) : IAsyncLife
         await using var db = fixture.CreateDbContext();
         Assert.False(await db.Tenants.AnyAsync(t => t.PublicKey == new TenantPublicKey(publicKey)));
     }
+
+    /// <summary>
+    /// `22-03`/adr/0093, the end-to-end proof this item asks for: a tenant provisioned with a
+    /// caller-supplied id - standing in for the account id AGO Chat calls <c>SiteId</c> - is read back
+    /// from a fresh <see cref="AgoCalendarDbContext"/> as that exact value, not merely returned by the
+    /// handler in-process. This is what a hoped-for "the id round-trips" assumption looks like proven
+    /// rather than assumed.
+    /// </summary>
+    [Fact]
+    public async Task ProvisionedWithASuppliedTenantId_TheTenantRowReadsBackAsThatExactId()
+    {
+        var publicKey = $"shop-{Guid.NewGuid():N}"[..24];
+        var accountId = new TenantId(Guid.NewGuid());
+        var command = new RegisterTenant(
+            "Barbershop On Birch", publicKey, "Jamie Owner", ExternalSubjectId: null, [], "jamie@example.com",
+            accountId);
+
+        await using var report = new StringWriter();
+        var exitCode = await ProvisionerRunner.RunAsync(
+            fixture.ConnectionString, command, report, CancellationToken.None);
+
+        Assert.Equal(ProvisionerRunner.Success, exitCode);
+        Assert.Contains(accountId.Value.ToString(), report.ToString(), StringComparison.Ordinal);
+
+        // A fresh context, not the one the run itself used - so this reads back what Postgres actually
+        // holds rather than an EF change-tracker entity the run happened to still have in memory.
+        await using var db = fixture.CreateDbContext();
+        var tenant = await db.Tenants.SingleAsync(t => t.PublicKey == new TenantPublicKey(publicKey));
+        Assert.Equal(accountId, tenant.Id);
+
+        var owner = await db.Operators.SingleAsync(o => o.TenantId == accountId);
+        Assert.True(owner.IsAccountOwner);
+    }
+
+    /// <summary>
+    /// The other half of "accepting an id is not the same as trusting one": nothing in the calendar
+    /// can confirm a supplied id names a real account, so the only defence available today is the
+    /// store's own primary key - a second run repeating the same id is refused exactly as a second run
+    /// repeating the same public key already was, and writes nothing.
+    /// </summary>
+    [Fact]
+    public async Task RunningItTwiceWithTheSameSuppliedTenantId_TheSecondRunWritesNothing()
+    {
+        var accountId = new TenantId(Guid.NewGuid());
+        var firstPublicKey = $"shop-{Guid.NewGuid():N}"[..24];
+        var firstCommand = new RegisterTenant(
+            "Barbershop On Cedar", firstPublicKey, "Robin Owner", ExternalSubjectId: null, [], "robin2@example.com",
+            accountId);
+
+        await using var first = new StringWriter();
+        Assert.Equal(
+            ProvisionerRunner.Success,
+            await ProvisionerRunner.RunAsync(fixture.ConnectionString, firstCommand, first, CancellationToken.None));
+
+        // A different public key, a different email, the same account id - the id is what collides.
+        var secondPublicKey = $"shop-{Guid.NewGuid():N}"[..24];
+        var secondCommand = new RegisterTenant(
+            "Barbershop On Cedar Annex", secondPublicKey, "Robin Owner", ExternalSubjectId: null, [],
+            "robin2-annex@example.com", accountId);
+
+        await using var second = new StringWriter();
+        var secondExitCode = await ProvisionerRunner.RunAsync(
+            fixture.ConnectionString, secondCommand, second, CancellationToken.None);
+
+        Assert.Equal(ProvisionerRunner.Failure, secondExitCode);
+        Assert.Contains("ALREADY PROVISIONED", second.ToString(), StringComparison.Ordinal);
+
+        await using var db = fixture.CreateDbContext();
+        Assert.Equal(1, await db.Tenants.CountAsync(t => t.Id == accountId));
+        Assert.False(await db.Tenants.AnyAsync(t => t.PublicKey == new TenantPublicKey(secondPublicKey)));
+    }
 }

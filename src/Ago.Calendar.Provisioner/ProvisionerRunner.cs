@@ -27,6 +27,14 @@ namespace Ago.Calendar.Provisioner;
 /// anyway would invite the shortcut this item's report argues against (inventing or guessing a
 /// subject id). <see cref="RegisterTenant.OwnerEmail"/> is the only identity this tool ever writes,
 /// which is what keeps the write this tool can make narrow enough to audit by reading this file.</para>
+///
+/// <para><b>`22-03`/adr/0093: does accept a tenant id.</b> <see cref="Program"/> reads it from
+/// <c>AGO_CALENDAR_TENANT_ID</c>, optional - the account side's own id, when this run is provisioning
+/// AGO Calendar for an account that already exists on the chat side, rather than the calendar minting
+/// one of its own. Accepting it is not the same as trusting it: this tool has no way to confirm the
+/// value names a real account, so the only protection is <see cref="IsUniqueViolation"/> below,
+/// extended by the primary key to a second run repeating the same id, exactly as it already refused a
+/// second run repeating the same public key.</para>
 /// </summary>
 public static class ProvisionerRunner
 {
@@ -49,14 +57,18 @@ public static class ProvisionerRunner
         }
         catch (DbUpdateException exception) when (IsUniqueViolation(exception))
         {
-            // `ux_tenants_public_key` (or its `external_subject_id`/invited-email siblings) refusing
-            // a second write with this run's own values - the one failure mode worth naming
-            // specifically, because "already provisioned" and "something else broke" call for
-            // different reactions from whoever is reading this output.
+            // `tenants_pkey` (the tenant id, `22-03`), `ux_tenants_public_key` or the
+            // `external_subject_id`/invited-email siblings refusing a second write with this run's own
+            // values - the one failure mode worth naming specifically, because "already provisioned"
+            // and "something else broke" call for different reactions from whoever is reading this
+            // output. The message stays generic about *which* value collided rather than naming the
+            // public key specifically, because since `22-03` the id can collide too, and this tool has
+            // no cheap way to tell the two apart after Postgres has already rolled the write back.
             await output.WriteLineAsync(
-                $"ALREADY PROVISIONED: '{command.PublicKey}' collides with a row that already exists. "
-                + "Nothing was written by this run. If this is a genuine repeat, that is the protection "
-                + "working as intended; if it is not, choose a different public key.");
+                "ALREADY PROVISIONED: this run's tenant id or public key collides with a row that "
+                + "already exists. Nothing was written by this run. If this is a genuine repeat, that "
+                + "is the protection working as intended; if it is not, choose a different id or "
+                + "public key.");
             return Failure;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

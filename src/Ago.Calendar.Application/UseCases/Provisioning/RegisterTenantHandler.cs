@@ -19,13 +19,22 @@ namespace Ago.Calendar.Application.UseCases.Provisioning;
 /// colleague <c>InviteOperatorHandler</c> invites. No second linking mechanism, no Keycloak admin
 /// call - see this item's own report for why that was the deciding argument over a service-account
 /// shape.</param>
+/// <param name="TenantId">`22-03`/adr/0093: the account id, when the caller already has one -
+/// AGO Chat calls the same value <c>SiteId</c>. <see langword="null"/> keeps this handler's older
+/// behaviour of minting its own id, which is what the standalone door adr/0093 deliberately left open
+/// (`RegisterTenantHandler` and the `20-27` provisioner both still work with nothing supplied here).
+/// Accepting a value is not the same as trusting it: nothing downstream can tell a genuine account id
+/// from any other GUID - the only defence today is the store's own unique key on <c>id</c>, which
+/// turns a repeat into a refusal (see <c>ProvisionerRunner.IsUniqueViolation</c>) rather than a silent
+/// second row.</param>
 public readonly record struct RegisterTenant(
     string Name,
     string PublicKey,
     string OperatorDisplayName,
     string? ExternalSubjectId,
     IReadOnlyList<string> AllowedOrigins,
-    string? OwnerEmail = null);
+    string? OwnerEmail = null,
+    TenantId? TenantId = null);
 
 /// <summary>
 /// Creates a tenant, the v1 <see cref="Role.OperatorRoleName"/> role and its first operator, in one
@@ -75,8 +84,11 @@ public sealed class RegisterTenantHandler(
         Operator @operator;
         try
         {
+            // `22-03`/adr/0093: provenance moves, nothing else does - a caller-supplied id (the
+            // account id) is used as-is; otherwise this handler still mints its own, exactly as it
+            // did before this item, so the standalone door stays open.
             tenant = Tenant.Register(
-                new TenantId(idGenerator.NewId(now)),
+                command.TenantId ?? new TenantId(idGenerator.NewId(now)),
                 command.Name,
                 new TenantPublicKey(command.PublicKey ?? string.Empty),
                 now,

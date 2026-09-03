@@ -81,6 +81,11 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <!-- `20-24`: PostgresHealthCheck lives in Ago.Calendar.Infrastructure.Postgres, not
+         Ago.Calendar.Api - see that class's own remarks. IHealthCheck is the ASP.NET Core port
+         already, and this Abstractions package is the one piece of it a non-Web SDK project can take
+         without pulling in the whole shared framework. Same version ago-chat pins. -->
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="10.0.11" />
     <!-- `20-03`: named directly, not taken transitively. Ago.Calendar.Infrastructure.Redis
          constructs RedisRateLimiter itself, so it has to name IConnectionMultiplexer and
          ResiliencePipeline in its own code. Versions match ago-chat's pins. -->

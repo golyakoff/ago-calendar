@@ -31,6 +31,13 @@ internal class CalendarApiFactory(PostgresFixture fixture) : WebApplicationFacto
     /// type's own remarks.</summary>
     public const string UnreachableAuthority = "https://keycloak.invalid/realms/ago";
 
+    /// <summary>`22-11`: the shared secret every suite using this factory can provision with -
+    /// <see cref="ModuleRegistrationEndpointTests"/>'s own <c>X-Ago-Module-Provisioning-Secret</c>
+    /// header. Set here rather than per-suite, the same "one wide-open value every consumer of this
+    /// factory can rely on" shape the <c>BookingRateLimit</c> settings below already use, since no
+    /// other suite in this project has any reason to send a competing value.</summary>
+    public const string TestProvisioningSecret = "integration-test-provisioning-secret-of-sufficient-length";
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -38,6 +45,7 @@ internal class CalendarApiFactory(PostgresFixture fixture) : WebApplicationFacto
         builder.UseSetting("ConnectionStrings:Calendar", fixture.ConnectionString);
         builder.UseSetting("Redis:ConnectionString", fixture.RedisConnectionString);
         builder.UseSetting("Operator:Authority", UnreachableAuthority);
+        builder.UseSetting("ModuleProvisioning:Secret", TestProvisioningSecret);
 
         // `22-05`/`adr/0093`: AddRabbitMqMessaging's own ValidateOnStart runs for every host that
         // loads CalendarModule, this one included, even though the Api host never resolves

@@ -169,6 +169,24 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<StartModuleTaskHandler>();
         services.AddScoped<ReplyToModuleTaskHandler>();
 
+        // `22-11`: provisioning - the write that had nothing outside a test calling it. A different
+        // secret and a different mechanism from the credential validator just above (see
+        // IModuleProvisioningAuthenticator's own remarks for why); bound and registered here rather
+        // than in Ago.Calendar.Api's own Program.cs because, like IModuleCallCredentialValidator
+        // beside it, ChatModuleRegistrationErrors's four handlers are plain Application types the
+        // Worker's DI graph can build even though only the Api host ever maps a route to them - the
+        // identical "a scoped registration nobody resolves costs the Worker nothing" reasoning this
+        // file already gives for EmbedScopeResolver.
+        services.AddOptions<ModuleProvisioningOptions>()
+            .Bind(configuration.GetSection(ModuleProvisioningOptions.SectionName))
+            .ValidateOnStart();
+        services.AddScoped<IModuleProvisioningAuthenticator, SharedSecretModuleProvisioningAuthenticator>();
+
+        services.AddScoped<Application.UseCases.ChatModuleRegistration.RegisterChatModuleHandler>();
+        services.AddScoped<Application.UseCases.ChatModuleRegistration.RotateChatModuleCredentialHandler>();
+        services.AddScoped<Application.UseCases.ChatModuleRegistration.RevokeChatModuleRegistrationHandler>();
+        services.AddScoped<Application.UseCases.ChatModuleRegistration.GetChatModuleRegistrationStatusHandler>();
+
         services.AddScoped<GetTenantConfigurationHandler>();
         services.AddScoped<CreateCalendarHandler>();
         services.AddScoped<UpdateCalendarHandler>();

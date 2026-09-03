@@ -97,6 +97,10 @@ app.MapConsoleEndpoints();
 // outside TenantOriginCorsPolicyProvider's two layers - see ChatModuleTaskEndpoints's own remarks.
 app.MapChatModuleTaskEndpoints();
 
+// `22-11`: the generic provisioning surface that makes the row ChatModuleTaskEndpoints checks on
+// every call actually exist - see ModuleRegistrationEndpoints's own remarks.
+app.MapModuleRegistrationEndpoints();
+
 // Outside Production only - see DevProvisioningEndpoints for why the gate is the environment.
 if (!app.Environment.IsProduction())
 {

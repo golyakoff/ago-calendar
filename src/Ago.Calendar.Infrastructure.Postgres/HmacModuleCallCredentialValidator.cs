@@ -108,9 +108,17 @@ public sealed class HmacModuleCallCredentialValidator(IChatModuleRegistrationRep
             return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
         }
 
-        var expectedSignature = HMACSHA256.HashData(
-            Encoding.UTF8.GetBytes(registration.Credential.Value), Encoding.UTF8.GetBytes(encodedPayload));
-        if (!CryptographicOperations.FixedTimeEquals(presentedSignature, expectedSignature))
+        // `22-11`: tries every credential this row currently honours, current and (for a grace
+        // window after a rotation) previous - see ChatModuleRegistration.ActiveCredentials's own
+        // remarks. A call signed a moment before a rotation must still verify a moment after it, or
+        // rotation is not the no-downtime operation the item's own Done-when asks for.
+        var verified = registration.ActiveCredentials(now).Any(candidate =>
+        {
+            var expectedSignature = HMACSHA256.HashData(
+                Encoding.UTF8.GetBytes(candidate.Value), Encoding.UTF8.GetBytes(encodedPayload));
+            return CryptographicOperations.FixedTimeEquals(presentedSignature, expectedSignature);
+        });
+        if (!verified)
         {
             return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
         }

@@ -33,16 +33,25 @@ public class ChatModuleTaskHandlerTests
         Assert.Contains("Haircut", action.Label, StringComparison.Ordinal);
     }
 
+    /// <summary>`22-04`: a site with no provisioned tenant at all - the "module not enabled for this
+    /// site" case, refused rather than falling back to the fixture's own tenant.</summary>
     [Fact]
-    public async Task Start_WhenTheConfiguredCalendarDoesNotMatchAnyPublishedCalendar_IsNotConfigured()
+    public async Task Start_WhenTheSiteIdMatchesNoProvisionedTenant_IsNotConfigured()
     {
-        var world = new World(configuredCalendarId: Guid.NewGuid());
+        var world = new World();
 
-        var result = await world.StartAsync();
+        var result = await world.StartAsync(siteId: Guid.NewGuid());
 
         Assert.False(result.IsSuccess);
         Assert.Equal("chat_module_task.not_configured", result.Error!.Value.Code);
     }
+
+    // `22-04`'s own Done-when ("two sites reach two different tenants") is proven at the HTTP level
+    // instead of here - Ago.Calendar.Integration.Tests.ChatModuleTaskEndpointTests, over two real
+    // per-tenant registrations and two real signed credentials. This fixture's Calendar/Service/Worker
+    // helpers all hardcode BookingFixtures.TenantId, so a second, independently resolving tenant
+    // cannot be expressed at this level without duplicating every one of those fixtures - the
+    // integration suite is the level that already has a real database to seed a second tenant into.
 
     [Fact]
     public async Task AFullWalkthrough_AllFiveSteps_EndsInACompletionCard()
@@ -178,6 +187,24 @@ public class ChatModuleTaskHandlerTests
         Assert.Equal("chat_module_task.kind_mismatch", result.Error!.Value.Code);
     }
 
+    /// <summary>`22-04`: closes the asymmetry adr/0094 named between this route and Calendar's own
+    /// Start route - a credential proven for a different tenant is refused as if the task did not
+    /// exist, the identical property <c>Ago.Faq.Application.Tests</c>' own sibling test proves for
+    /// that product.</summary>
+    [Fact]
+    public async Task AReplyWithACredentialForAnotherTenant_IsNotFound_AsIfTheTaskDidNotExist()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+
+        var result = await world.ReplyAsync(
+            start.Value.ExternalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString(),
+            credentialSiteId: Guid.NewGuid());
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("chat_module_task.not_found", result.Error!.Value.Code);
+    }
+
     [Fact]
     public async Task AReplyForAnUnknownTask_IsNotFound()
     {
@@ -243,10 +270,12 @@ public class ChatModuleTaskHandlerTests
     {
         private readonly StartModuleTaskHandler _startHandler;
         private readonly ReplyToModuleTaskHandler _replyHandler;
+        private readonly TenantId _tenantId;
 
-        public World(Guid? configuredCalendarId = null)
+        public World()
         {
             var tenant = BookingFixtures.Tenant();
+            _tenantId = tenant.Id;
             var calendar = BookingFixtures.Calendar();
             var service = BookingFixtures.HaircutService();
             var worker = BookingFixtures.WorkerOffering(service);
@@ -282,15 +311,12 @@ public class ChatModuleTaskHandlerTests
                     new FakeCustomerRepository(), new FakePendingPhoneVerificationRepository()),
                 idGenerator, clock);
 
-            var options = new ChatModuleTaskOptions
-            {
-                TenantPublicKey = "barbershop",
-                CalendarId = configuredCalendarId ?? BookingFixtures.CalendarId.Value,
-            };
-
-            _startHandler = new StartModuleTaskHandler(surfaceHandler, tenantRepo, Tasks, options, idGenerator, clock);
+            // `22-04`: no more ChatModuleTaskOptions/ModuleCallCredentialOptions - StartModuleTaskHandler
+            // resolves the tenant from the site id it is handed directly, and ReplyToModuleTaskHandler
+            // resolves the tenant's public key itself, from the task's own TenantId.
+            _startHandler = new StartModuleTaskHandler(tenantRepo, calendarRepo, ReadStore, Tasks, idGenerator, clock);
             _replyHandler = new ReplyToModuleTaskHandler(
-                Tasks, workersHandler, slotsHandler, ReadStore, bookHandler, options, clock);
+                Tasks, tenantRepo, workersHandler, slotsHandler, ReadStore, bookHandler, clock);
         }
 
         public FakeBookingSurfaceReadStore ReadStore { get; } = new();
@@ -301,14 +327,25 @@ public class ChatModuleTaskHandlerTests
 
         public FakeRateLimiter Limiter { get; } = new();
 
-        public Task<Ago.Platform.Kernel.Result<ModuleTaskStarted>> StartAsync() =>
+        /// <summary>`22-04`: the site id this call claims - defaults to this world's own fixture
+        /// tenant (the happy path every existing test in this file exercises); a caller passes a
+        /// different value to prove resolution genuinely depends on it rather than on some other
+        /// ambient state.</summary>
+        public Task<Ago.Platform.Kernel.Result<ModuleTaskStarted>> StartAsync(Guid? siteId = null) =>
             _startHandler.HandleAsync(
-                new StartModuleTask(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking"),
+                new StartModuleTask(Guid.NewGuid(), siteId ?? _tenantId.Value, Guid.NewGuid(), "/booking"),
                 CancellationToken.None);
 
+        /// <summary>`22-04`: <paramref name="credentialSiteId"/> defaults to this world's own tenant -
+        /// the identical "credential proved this task's own tenant" happy path every existing test
+        /// exercises - see <see cref="ReplyToModuleTask.CredentialSiteId"/>'s own remarks. A caller
+        /// passes a different value to prove the cross-tenant refusal.</summary>
         public Task<Ago.Platform.Kernel.Result<ModuleTaskReplied>> ReplyAsync(
-            string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null) =>
+            string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null,
+            Guid? credentialSiteId = null) =>
             _replyHandler.HandleAsync(
-                new ReplyToModuleTask(externalTaskId, Guid.NewGuid(), kind, value, phoneVerifiedAt), CancellationToken.None);
+                new ReplyToModuleTask(
+                    externalTaskId, Guid.NewGuid(), kind, value, phoneVerifiedAt, credentialSiteId ?? _tenantId.Value),
+                CancellationToken.None);
     }
 }

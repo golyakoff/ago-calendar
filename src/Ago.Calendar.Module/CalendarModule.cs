@@ -148,27 +148,15 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<GetOpenSlotsHandler>();
         services.AddScoped<CheckTenantOriginHandler>();
 
-        // `20-07`: the chat entry point. Bound at startup like every other options class here, but
-        // deliberately *not* given a hard `.Validate(...)` the way `Operator:Authority` gets one -
-        // see ChatModuleTaskOptions's own remarks on why an unconfigured value is a per-request
-        // chat_module_task.not_configured rejection rather than a reason to refuse to boot the whole
-        // host. `Operator:Authority`'s no-fallback rule exists because a host with no authority has
-        // no authentication at all; leaving ChatModule:* unset disables one feature, and every other
-        // route - including the widget's own booking flow - keeps working.
-        services.AddOptions<ChatModuleTaskOptions>()
-            .Bind(configuration.GetSection(ChatModuleTaskOptions.SectionName))
-            .ValidateOnStart();
-        services.AddSingleton(provider => provider.GetRequiredService<IOptions<ChatModuleTaskOptions>>().Value);
-
-        // `22-02`: the same `ChatModule:*` section as ChatModuleTaskOptions above - see
-        // ModuleCallCredentialOptions's own remarks. Bound the same way, for the same reason: an
-        // unconfigured secret disables the feature (every credential is refused) rather than stopping
-        // this host from booting, matching ChatModuleTaskOptions's own no-hard-validation call.
-        services.AddOptions<ModuleCallCredentialOptions>()
-            .Bind(configuration.GetSection(ModuleCallCredentialOptions.SectionName))
-            .ValidateOnStart();
-        services.AddSingleton(provider => provider.GetRequiredService<IOptions<ModuleCallCredentialOptions>>().Value);
-        services.AddSingleton<IModuleCallCredentialValidator, HmacModuleCallCredentialValidator>();
+        // `20-07`/`22-04`: the chat entry point. No more options class to bind here - this
+        // deployment no longer answers for one statically configured tenant
+        // (`ChatModuleTaskOptions`, removed by `22-04`) and no longer checks calls against one
+        // deployment-wide secret (`ModuleCallCredentialOptions`, also removed). Both are replaced by
+        // Ago.Calendar.Domain.ChatModuleRegistration, a per-tenant database row read fresh on every
+        // call - see that type's own remarks and HmacModuleCallCredentialValidator's own remarks.
+        // Scoped, not singleton, for the identical reason every other adapter holding a
+        // DbContext-backed dependency here is.
+        services.AddScoped<IModuleCallCredentialValidator, HmacModuleCallCredentialValidator>();
 
         services.AddScoped<StartModuleTaskHandler>();
         services.AddScoped<ReplyToModuleTaskHandler>();

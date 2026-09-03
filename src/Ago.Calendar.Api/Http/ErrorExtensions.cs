@@ -76,12 +76,13 @@ public static class ErrorExtensions
             // booking.invalid_state's own comment gives), and deactivation is the alternative action
             // this response's own message points the caller at.
             "configuration.worker_has_booking_history" => StatusCodes.Status409Conflict,
-            // `20-07`. A deployment fault - this host's static ChatModule:* configuration does not
-            // resolve to a real, published calendar - not something the caller (Ago.Chat.*) can act
-            // on by retrying differently, so it is mapped to 500 explicitly rather than left to the
-            // catch-all below, which exists to catch a bug in this switch rather than to describe a
-            // real operational state on purpose.
-            "chat_module_task.not_configured" => StatusCodes.Status500InternalServerError,
+            // `20-07`/`22-04`. Before per-site resolution this was a single deployment-wide fault
+            // (mapped to 500); now it is per call - this site's own tenant is not provisioned, or is
+            // not configured with exactly one published calendar - the same "does not confirm what
+            // exists to a caller not entitled to know" reasoning booking.surface_not_found's own
+            // comment gives, and this route already sits behind a proven credential so there is no
+            // stranger-enumeration concern driving vagueness beyond that.
+            "chat_module_task.not_configured" => StatusCodes.Status404NotFound,
             "chat_module_task.not_found" => StatusCodes.Status404NotFound,
             // 409, not 404: the task exists and the request was well-formed - it simply already
             // finished. The same reasoning booking.slot_unavailable's own comment gives.

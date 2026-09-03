@@ -12,12 +12,15 @@ namespace Ago.Calendar.Application.UseCases.ChatModuleTask;
 /// </summary>
 public static class ChatModuleTaskErrors
 {
-    /// <summary>This deployment's static <c>ChatModule:*</c> configuration does not resolve to a
-    /// real, published calendar. A deployment fault, not a caller mistake - see <c>ErrorExtensions</c>
-    /// for why it maps to <c>500</c> rather than to a client-actionable code.</summary>
+    /// <summary>`22-04`: this call's own claimed site has no provisioned tenant, or that tenant does
+    /// not have exactly one published calendar to answer chat with - see
+    /// <c>StartModuleTaskHandler</c>'s own remarks on why "more than one" refuses rather than guesses.
+    /// A per-call, caller-visible state now (this site is not set up for the calendar module), not the
+    /// single deployment-wide fault it used to be before per-site resolution replaced the pinned
+    /// tenant - see <c>ErrorExtensions</c> for the status code this maps to today.</summary>
     public static Error NotConfigured() => new(
         "chat_module_task.not_configured",
-        "This deployment's calendar module is not configured with a published calendar.");
+        "This site's calendar module is not configured with exactly one published calendar.");
 
     public static Error TaskNotFound() => new(
         "chat_module_task.not_found",

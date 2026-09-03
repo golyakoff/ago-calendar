@@ -1,5 +1,4 @@
 ﻿using System.Net;
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,8 +7,6 @@ using System.Text.Json.Serialization;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 
 namespace Ago.Calendar.Integration.Tests;
@@ -25,6 +22,15 @@ namespace Ago.Calendar.Integration.Tests;
 /// and the real <c>ChatBookingTaskStore</c>/EF round trip - none of which the fake-backed handler tests
 /// exercise.</para>
 ///
+/// <para><b>`22-04`: no more <c>ChatModule:TenantPublicKey</c>/<c>ChatModule:CalendarId</c>/
+/// <c>ChatModule:SharedSecret</c> settings.</b> This suite now seeds a real
+/// <see cref="ChatModuleRegistration"/> row per tenant through <see cref="RegisterChatModuleAsync"/> -
+/// the registry's own consuming half, proven separately for its domain shape in
+/// <c>Ago.Calendar.Domain.Tests</c> - and every call's own <c>siteId</c> is that tenant's real
+/// <see cref="TenantId"/>, matching how a real deployment resolves once `22-04` ships (no console or
+/// provisioning endpoint exists yet to do this over HTTP - out of this item's own scope, see this
+/// item's report).</para>
+///
 /// <para><b>The wire's exact casing is asserted against the real serialized bytes</b>, not against a
 /// hand-rolled <c>JsonSerializerOptions</c> copy that could quietly drift from what
 /// <c>Ago.Calendar.Api</c> actually ships - the same reasoning <c>BookingEndpointTests</c> already
@@ -33,15 +39,13 @@ namespace Ago.Calendar.Integration.Tests;
 [Collection(PostgresCollection.Name)]
 public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 {
-    /// <summary>`22-02`: this suite's own shared secret, matching what <see cref="ChatModuleApiFactory"/>
-    /// configures as <c>ChatModule:SharedSecret</c> - the same "the two sides are configured with the
-    /// identical string" manual pairing a real deployment's operator would do between this host and its
-    /// `ago-chat` registration (<c>Ago.Chat.Domain.ModuleCredential</c>'s own remarks).</summary>
-    private const string TestSharedSecret = "integration-test-shared-secret-of-sufficient-length";
-
-    private ChatModuleApiFactory _factory = null!;
+    private CalendarApiFactory _factory = null!;
     private HttpClient _client = null!;
     private SeededTenant _seed = null!;
+
+    /// <summary>The secret registered for <see cref="_seed"/>'s own tenant - see
+    /// <see cref="RegisterChatModuleAsync"/>.</summary>
+    private const string TestSharedSecret = "integration-test-shared-secret-of-sufficient-length";
 
     public async Task InitializeAsync()
     {
@@ -62,7 +66,9 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
             await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
         }
 
-        _factory = new ChatModuleApiFactory(fixture, _seed.Tenant.PublicKey.Value, _seed.Calendar.Id.Value, TestSharedSecret);
+        await RegisterChatModuleAsync(_seed.Tenant.Id, TestSharedSecret);
+
+        _factory = new CalendarApiFactory(fixture);
         _client = _factory.CreateClient();
     }
 
@@ -75,7 +81,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task AFullWalkthrough_AllFiveSteps_EndsInACompleteConfirmation_WithARealBookedEvent()
     {
-        var startResponse = await StartAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking");
+        var startResponse = await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking");
         Assert.Equal(HttpStatusCode.OK, startResponse.StatusCode);
 
         var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
@@ -123,7 +129,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
             await new EventRepository(db).AddRangeAsync([secondSlot], CancellationToken.None);
         }
 
-        var started = (await (await StartAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking"))
+        var started = (await (await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking"))
             .Content.ReadFromJsonAsync<ModuleTaskStartResponse>())!;
 
         var afterService = await ReplyAsync(
@@ -185,7 +191,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task APhoneStepReply_WithNoVerificationAssertion_NeverClaimsTheSlot()
     {
-        var started = (await (await StartAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking"))
+        var started = (await (await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking"))
             .Content.ReadFromJsonAsync<ModuleTaskStartResponse>())!;
 
         var afterService = await ReplyAsync(
@@ -211,7 +217,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task TheStartResponse_UsesExactCamelCaseFieldNamesOnTheWire()
     {
-        var response = await StartAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking");
+        var response = await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking");
 
         var body = await response.Content.ReadAsStringAsync();
         using var document = JsonDocument.Parse(body);
@@ -237,7 +243,8 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task AReplyForAnUnknownTask_Returns404()
     {
-        var response = await PostReplyAsync(Guid.NewGuid().ToString(), ModuleStepKinds.ChoiceList, Guid.NewGuid().ToString());
+        var response = await PostReplyAsync(
+            Guid.NewGuid().ToString(), ModuleStepKinds.ChoiceList, Guid.NewGuid().ToString());
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Contains("chat_module_task.not_found", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
@@ -250,6 +257,11 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     // suite's own "unknown route" test provides is `AReplyForAnUnknownTask_Returns404` above (a
     // known route, an unknown *resource*) plus `AnUnmappedSiblingRoute_Returns404` below (an
     // unknown route entirely) - `20-24`'s own lesson about the two never being conflated.
+    //
+    // `22-04` adds a fourth: the secret itself is now per tenant, not per deployment - proven by
+    // TwoTenants_EachWithItsOwnRegistration_ResolveIndependently and
+    // CredentialSignedWithOneTenantsOwnSecret_ButClaimingAnotherTenant_IsRefused below, the exact
+    // regression adr/0094 named as this item's own to close.
     // ------------------------------------------------------------------------------------------
 
     [Fact]
@@ -257,7 +269,8 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/module-tasks")
         {
-            Content = JsonContent.Create(new ModuleTaskStartRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking")),
+            Content = JsonContent.Create(
+                new ModuleTaskStartRequest(Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking")),
         };
 
         var response = await _client.SendAsync(request);
@@ -268,26 +281,25 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task StartWithAWrongCredential_IsRefused()
     {
-        var siteId = Guid.NewGuid();
         var response = await StartAsync(
-            Guid.NewGuid(), siteId, Guid.NewGuid(), "/booking", MintCredentialHeader(siteId, "a-completely-different-secret-value"));
+            Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking",
+            MintCredentialHeader(_seed.Tenant.Id.Value, "a-completely-different-secret-value"));
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    /// <summary>The sharpest claim: a credential that is genuinely valid - signed with this
-    /// deployment's own real secret - still cannot act for a site other than the one it names. This
+    /// <summary>The sharpest claim: a credential that is genuinely valid - signed with this tenant's
+    /// own real, registered secret - still cannot act for a site other than the one it names. This
     /// is the property that stops a body's own <c>siteId</c> from becoming the tenant selector
     /// `22-04` would otherwise hand the internet, the exact gap `docs/backlog/22-02-*` names.</summary>
     [Fact]
     public async Task StartWithACredentialForAnotherSite_IsRefused()
     {
-        var credentialedSiteId = Guid.NewGuid();
         var differentBodySiteId = Guid.NewGuid();
 
         var response = await StartAsync(
             Guid.NewGuid(), differentBodySiteId, Guid.NewGuid(), "/booking",
-            MintCredentialHeader(credentialedSiteId, TestSharedSecret));
+            MintCredentialHeader(_seed.Tenant.Id.Value, TestSharedSecret));
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -295,10 +307,102 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task StartWithTheMatchingCredential_Succeeds()
     {
-        var siteId = Guid.NewGuid();
-        var response = await StartAsync(Guid.NewGuid(), siteId, Guid.NewGuid(), "/booking", MintCredentialHeader(siteId, TestSharedSecret));
+        var response = await StartAsync(
+            Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking",
+            MintCredentialHeader(_seed.Tenant.Id.Value, TestSharedSecret));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    /// <summary>A site nobody registered - no <see cref="ChatModuleRegistration"/> row at all - has
+    /// no secret to be checked against, and is refused exactly like any other unauthenticated call,
+    /// never answered by falling back to anybody else's tenant.</summary>
+    [Fact]
+    public async Task StartForAnUnregisteredSite_IsRefused()
+    {
+        var unregisteredSite = Guid.NewGuid();
+
+        var response = await StartAsync(
+            Guid.NewGuid(), unregisteredSite, Guid.NewGuid(), "/booking",
+            MintCredentialHeader(unregisteredSite, "a-secret-nobody-ever-registered-anywhere"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    /// <summary>`22-04`'s own regression guard for adr/0094's named limit: under the old
+    /// deployment-wide secret this exact call would have succeeded, because one secret verified every
+    /// tenant. Both tenants below are real, registered rows with real, different secrets; the token
+    /// merely claims to be the second tenant while signed with the first's own secret, and the
+    /// signature can only ever verify against the secret the claimed tenant actually owns.</summary>
+    [Fact]
+    public async Task CredentialSignedWithOneTenantsOwnSecret_ButClaimingAnotherTenant_IsRefused()
+    {
+        var otherSeed = await CalendarSeed.WriteAsync(fixture, publicKey: $"chatmod2-{CalendarSeed.NewId():N}"[..24]);
+        const string otherSecret = "a-second-tenants-own-independently-generated-secret";
+        await RegisterChatModuleAsync(otherSeed.Tenant.Id, otherSecret);
+
+        // Signed with _seed's own secret, but the payload claims to be otherSeed's tenant.
+        var forgedForOther = MintCredentialHeader(otherSeed.Tenant.Id.Value, TestSharedSecret);
+
+        var response = await StartAsync(Guid.NewGuid(), otherSeed.Tenant.Id.Value, Guid.NewGuid(), "/booking", forgedForOther);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    /// <summary>The Done-when's own sharpest requirement: two sites, each with the module enabled
+    /// under its own independently generated secret, resolve to two different tenants - proven by each
+    /// Start response carrying that tenant's own, distinct seeded service id.</summary>
+    [Fact]
+    public async Task TwoTenants_EachWithItsOwnRegistration_ResolveIndependently()
+    {
+        var otherSeed = await CalendarSeed.WriteAsync(fixture, publicKey: $"chatmod3-{CalendarSeed.NewId():N}"[..24]);
+        const string otherSecret = "yet-another-tenants-own-independent-secret-value";
+        await RegisterChatModuleAsync(otherSeed.Tenant.Id, otherSecret);
+
+        var responseA = await StartAsync(
+            Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking",
+            MintCredentialHeader(_seed.Tenant.Id.Value, TestSharedSecret));
+        var responseB = await StartAsync(
+            Guid.NewGuid(), otherSeed.Tenant.Id.Value, Guid.NewGuid(), "/booking",
+            MintCredentialHeader(otherSeed.Tenant.Id.Value, otherSecret));
+
+        Assert.Equal(HttpStatusCode.OK, responseA.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, responseB.StatusCode);
+
+        var bodyA = await responseA.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
+        var bodyB = await responseB.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
+
+        // Each tenant's own, independently seeded service id - not merely "both succeeded", but
+        // "each one resolved to its own data", which is what "reaches two different tenants" means.
+        var serviceA = Assert.Single(bodyA!.Step.Actions).Value;
+        var serviceB = Assert.Single(bodyB!.Step.Actions).Value;
+        Assert.Equal(_seed.Service.Id.Value.ToString(), serviceA);
+        Assert.Equal(otherSeed.Service.Id.Value.ToString(), serviceB);
+        Assert.NotEqual(serviceA, serviceB);
+    }
+
+    /// <summary>Closes the asymmetry adr/0094 named between this route and Calendar's own Start
+    /// route: a credential proven for a different tenant is refused as if the task did not exist,
+    /// the identical property <c>Ago.Faq.Integration.Tests</c>' own sibling test proves for that
+    /// product.</summary>
+    [Fact]
+    public async Task ReplyWithACredentialForAnotherTenant_IsRefused_AsIfTheTaskDidNotExist()
+    {
+        var otherSeed = await CalendarSeed.WriteAsync(fixture, publicKey: $"chatmod4-{CalendarSeed.NewId():N}"[..24]);
+        const string otherSecret = "a-fourth-tenants-own-independently-generated-secret";
+        await RegisterChatModuleAsync(otherSeed.Tenant.Id, otherSecret);
+
+        var started = (await (await StartAsync(
+                Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking",
+                MintCredentialHeader(_seed.Tenant.Id.Value, TestSharedSecret)))
+            .Content.ReadFromJsonAsync<ModuleTaskStartResponse>())!;
+
+        var response = await PostReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString(),
+            siteId: otherSeed.Tenant.Id.Value, secret: otherSecret);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("chat_module_task.not_found", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -310,6 +414,18 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var response = await _client.GetAsync("/api/v1/module-tasks-nonexistent-sibling-route");
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    /// <summary>`22-04`: seeds one <c>ChatModuleRegistration</c> row directly through the write-side
+    /// repository - the registry's own consuming half, proven separately by
+    /// <c>Ago.Calendar.Domain.Tests</c>; no console or provisioning endpoint exists yet to do this
+    /// over HTTP (out of this item's own scope - see this item's report).</summary>
+    private async Task RegisterChatModuleAsync(TenantId tenantId, string secret)
+    {
+        await using var db = fixture.CreateDbContext();
+        await new ChatModuleRegistrationRepository(db).AddAsync(
+            ChatModuleRegistration.Register(tenantId, new ChatModuleCredential(secret), CalendarSeed.Now),
+            CancellationToken.None);
     }
 
     private async Task<HttpResponseMessage> StartAsync(
@@ -335,20 +451,25 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         return (await response.Content.ReadFromJsonAsync<ModuleTaskReplyResponse>())!;
     }
 
+    /// <summary>`22-04`: <paramref name="siteId"/>/<paramref name="secret"/> default to this suite's
+    /// own seeded tenant and its registered secret - every existing test in this file replies to a
+    /// task it started under that same tenant, so this is the happy path. A caller passes a different
+    /// pair to prove the cross-tenant refusal (<see cref="ReplyWithACredentialForAnotherTenant_IsRefused_AsIfTheTaskDidNotExist"/>).</summary>
     private async Task<HttpResponseMessage> PostReplyAsync(
-        string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null)
+        string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null,
+        Guid? siteId = null, string? secret = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/module-tasks/{externalTaskId}/replies")
         {
             Content = JsonContent.Create(new ModuleTaskReplyRequest(Guid.NewGuid(), kind, value, phoneVerifiedAt)),
         };
-        // The reply route never cross-checks a site id (ChatModuleTaskEndpoints's own remarks), so
-        // any site claim in a genuinely valid credential authenticates every reply in this suite.
-        request.Headers.Add("X-Ago-Module-Credential", MintCredentialHeader(Guid.NewGuid(), TestSharedSecret));
+        request.Headers.Add(
+            "X-Ago-Module-Credential",
+            MintCredentialHeader(siteId ?? _seed.Tenant.Id.Value, secret ?? TestSharedSecret));
         return await _client.SendAsync(request);
     }
 
-    /// <summary>`22-02`: this suite's own independent re-derivation of the wire format
+    /// <summary>`22-02`/`22-04`: this suite's own independent re-derivation of the wire format
     /// <c>HmacModuleCallCredentialValidator</c> checks - written from the contract's own description
     /// (see that class's remarks), not by calling production code, so this test would catch the
     /// validator disagreeing with its own documented contract rather than merely agreeing with
@@ -372,26 +493,4 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         [property: JsonPropertyName("siteId")] Guid SiteId,
         [property: JsonPropertyName("iat")] long Iat,
         [property: JsonPropertyName("exp")] long Exp);
-}
-
-/// <summary>
-/// <see cref="CalendarApiFactory"/> with <c>ChatModule:*</c> pointed at this test class's own seeded
-/// tenant and calendar - the static-wiring config this item's own backlog entry names, supplied per
-/// test the same way <c>BookingApiFactory</c> supplies a tuned rate limit.
-/// </summary>
-internal sealed class ChatModuleApiFactory(PostgresFixture fixture, string tenantPublicKey, Guid calendarId, string sharedSecret)
-    : CalendarApiFactory(fixture)
-{
-    protected override void ConfigureWebHost(IWebHostBuilder builder)
-    {
-        base.ConfigureWebHost(builder);
-
-        builder.UseSetting("ChatModule:TenantPublicKey", tenantPublicKey);
-        builder.UseSetting("ChatModule:CalendarId", calendarId.ToString());
-
-        // `22-02`: the matching half of ChatModuleTaskEndpointTests's own TestSharedSecret -
-        // RequireCredential is left at its own default (true), matching what this host actually
-        // ships with.
-        builder.UseSetting("ChatModule:SharedSecret", sharedSecret);
-    }
 }

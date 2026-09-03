@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace Ago.Calendar.Infrastructure.Postgres;
 
@@ -45,8 +46,19 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 /// tolerance a `20-10` phone-verification-code TTL uses for the identical reason: two independent hosts'
 /// clocks are never perfectly synchronized, and `docs/conventions/date-and-time.md`'s own UTC discipline
 /// does not by itself guarantee NTP agreement.</para>
+///
+/// <para><b>`22-12`/adr/0099: every refusal is classified and logged before it returns.</b> The wire
+/// answer stays the flat <c>401</c> <c>ChatModuleTaskEndpoints</c> always returned -
+/// <see cref="ModuleCallRefusalReason"/> is never serialized - but each branch below now logs which
+/// case it was, structured on <c>{Reason}</c> and (whenever the payload parsed far enough to name one)
+/// <c>{ClaimedSiteId}</c>, and nothing else: never the header, never a signature, never a secret. A
+/// site id is not a credential - it is the same value this product's own console URLs and
+/// <c>ModuleTaskStartRequest.SiteId</c> already carry in the clear - so logging it here discloses
+/// nothing a legitimate operator could not already see, and gives the "not enabled" and "forged" cases
+/// a value to alert on <em>per site</em>.</para>
 /// </summary>
-public sealed class HmacModuleCallCredentialValidator(IChatModuleRegistrationRepository registrations)
+public sealed class HmacModuleCallCredentialValidator(
+    IChatModuleRegistrationRepository registrations, ILogger<HmacModuleCallCredentialValidator> logger)
     : IModuleCallCredentialValidator
 {
     private static readonly TimeSpan ClockSkewAllowance = TimeSpan.FromSeconds(5);
@@ -61,13 +73,13 @@ public sealed class HmacModuleCallCredentialValidator(IChatModuleRegistrationRep
         // to resolve into - see IModuleCallCredentialValidator's own remarks.
         if (string.IsNullOrEmpty(headerValue))
         {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+            return Refuse(ModuleCallRefusalReason.NoCredential, claimedSiteId: null);
         }
 
         var parts = headerValue.Split('.');
         if (parts.Length != 2)
         {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+            return Refuse(ModuleCallRefusalReason.Malformed, claimedSiteId: null);
         }
 
         var encodedPayload = parts[0];
@@ -80,7 +92,7 @@ public sealed class HmacModuleCallCredentialValidator(IChatModuleRegistrationRep
         }
         catch (FormatException)
         {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+            return Refuse(ModuleCallRefusalReason.Malformed, claimedSiteId: null);
         }
 
         Payload? payload;
@@ -90,12 +102,12 @@ public sealed class HmacModuleCallCredentialValidator(IChatModuleRegistrationRep
         }
         catch (JsonException)
         {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+            return Refuse(ModuleCallRefusalReason.Malformed, claimedSiteId: null);
         }
 
         if (payload is null)
         {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+            return Refuse(ModuleCallRefusalReason.Malformed, claimedSiteId: null);
         }
 
         // The claimed site id, not yet trusted - only used to find which secret this signature must
@@ -105,32 +117,66 @@ public sealed class HmacModuleCallCredentialValidator(IChatModuleRegistrationRep
         var registration = await registrations.GetByTenantIdAsync(new TenantId(payload.SiteId), cancellationToken);
         if (registration is null)
         {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+            return Refuse(ModuleCallRefusalReason.SiteNotRegistered, payload.SiteId);
         }
 
         // `22-11`: tries every credential this row currently honours, current and (for a grace
         // window after a rotation) previous - see ChatModuleRegistration.ActiveCredentials's own
         // remarks. A call signed a moment before a rotation must still verify a moment after it, or
         // rotation is not the no-downtime operation the item's own Done-when asks for.
-        var verified = registration.ActiveCredentials(now).Any(candidate =>
-        {
-            var expectedSignature = HMACSHA256.HashData(
-                Encoding.UTF8.GetBytes(candidate.Value), Encoding.UTF8.GetBytes(encodedPayload));
-            return CryptographicOperations.FixedTimeEquals(presentedSignature, expectedSignature);
-        });
+        var verified = registration.ActiveCredentials(now).Any(candidate => SignatureMatches(candidate, encodedPayload, presentedSignature));
         if (!verified)
         {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+            // `22-12`: before answering "forged", ask whether this is instead `22-11`'s own fourth
+            // case - a signature that matches the site's *previous* credential, checked here
+            // regardless of whether its grace window has already closed (unlike ActiveCredentials
+            // above, which only ever yields it while still open). Never accepted as authentication -
+            // only asked to tell "late" apart from "wrong" for the log line below.
+            var reason = registration.PreviousCredential is { } previous
+                && SignatureMatches(previous, encodedPayload, presentedSignature)
+                    ? ModuleCallRefusalReason.CredentialRotatedOut
+                    : ModuleCallRefusalReason.InvalidSignature;
+            return Refuse(reason, payload.SiteId);
         }
 
         var nowSeconds = now.ToUnixTimeSeconds();
         var skewSeconds = (long)ClockSkewAllowance.TotalSeconds;
         if (nowSeconds > payload.Exp + skewSeconds || nowSeconds < payload.Iat - skewSeconds)
         {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+            return Refuse(ModuleCallRefusalReason.AssertionExpired, payload.SiteId);
         }
 
         return new ModuleCallCredentialResult(IsAuthenticated: true, payload.SiteId);
+    }
+
+    private static bool SignatureMatches(ChatModuleCredential candidate, string encodedPayload, byte[] presentedSignature)
+    {
+        var expectedSignature = HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes(candidate.Value), Encoding.UTF8.GetBytes(encodedPayload));
+        return CryptographicOperations.FixedTimeEquals(presentedSignature, expectedSignature);
+    }
+
+    /// <summary>`22-12`: the one place every refusal leaves through - logs <paramref name="reason"/>
+    /// and, when known, <paramref name="claimedSiteId"/>, then returns the unauthenticated result.
+    /// <see cref="ModuleCallRefusalReason.NoCredential"/> and <see cref="ModuleCallRefusalReason.Malformed"/>
+    /// log at <see cref="LogLevel.Debug"/> - neither names a site anything downstream could act on, and
+    /// an anonymous scanner probing this route with no header at all is the highest-volume, least
+    /// actionable case this method ever sees. Every other reason logs at
+    /// <see cref="LogLevel.Warning"/>: each one is either an operator-actionable configuration gap or a
+    /// credential that did not verify, and coding-style.md reserves <c>Warning</c> for exactly a
+    /// "needs a look, not yet an outage" condition.</summary>
+    private ModuleCallCredentialResult Refuse(ModuleCallRefusalReason reason, Guid? claimedSiteId)
+    {
+        if (reason is ModuleCallRefusalReason.NoCredential or ModuleCallRefusalReason.Malformed)
+        {
+            logger.LogDebug("Module call refused: {Reason}", reason);
+        }
+        else
+        {
+            logger.LogWarning("Module call refused: {Reason} for site {ClaimedSiteId}", reason, claimedSiteId);
+        }
+
+        return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null, reason);
     }
 
     private sealed record Payload(

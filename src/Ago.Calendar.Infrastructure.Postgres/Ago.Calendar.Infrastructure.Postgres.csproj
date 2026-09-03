@@ -20,6 +20,8 @@
     <!-- ServiceCollectionExtensions: DI wiring lives in the host, but the extension method that
          names this adapter's own registrations belongs beside the adapter (clean-architecture.md). -->
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <!-- `20-24`: PostgresHealthCheck lives here, not Ago.Calendar.Api - see that class's own remarks. -->
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" />
     <!-- Migration tooling only - never used at runtime, so it never ships in a container image. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>

@@ -6,10 +6,14 @@ using Ago.Calendar.Api.Cors;
 using Ago.Calendar.Api.PhoneVerification;
 using Ago.Calendar.Api.Provisioning;
 using Ago.Calendar.Api.PublicBookingApi;
+using Ago.Calendar.Contracts;
+using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Postgres.Schema;
 using Ago.Calendar.Module;
+using Ago.Platform.Caching.Redis;
 using Ago.Platform.Hosting;
 using Microsoft.AspNetCore.Cors.Infrastructure;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -21,6 +25,19 @@ builder.Services.AddPlatformKernel();
 
 IProductModule module = new CalendarModule();
 module.ConfigureServices(builder.Services, builder.Configuration);
+
+// `20-24`: readiness means "can do the job" - Postgres and Redis, the two dependencies this host
+// actually has (no RabbitMQ, no broker at all yet - CalendarModule's own remarks). Ported from
+// Ago.Chat.Api's identical registration (`3-06`) rather than invented again: PostgresHealthCheck is
+// this product's own copy (Ago.Calendar.Infrastructure.Postgres, `20-24`), RedisHealthCheck is the
+// platform's own generic adapter (Ago.Platform.Caching.Redis) that ago-chat already consumes the
+// same way. Both AddCalendarPostgresPersistence and AddCalendarRateLimiting above register their
+// respective singletons (NpgsqlDataSource, IConnectionMultiplexer) unconditionally, so both checks
+// can always resolve. Liveness stays the trivial "process responded" check - conflating the two is
+// exactly what edge.md warns against, and it is the same reason Ago.Chat.Api keeps them apart.
+builder.Services.AddHealthChecks()
+    .AddCheck<PostgresHealthCheck>("postgres", tags: ["ready"])
+    .AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
 
 // `20-06`: adr/0022's OIDC scheme, this product's own copy (adr/0027). Host-level, not module-level,
 // and that is the layering rather than a convenience: authentication is how *this deployable* decides
@@ -93,6 +110,17 @@ if (!app.Environment.IsProduction())
     // rather than "is this a real product surface for the public internet".
     app.MapPhoneVerificationDevEndpoints();
 }
+
+// `20-24`: the three routes `Ago.Chat.Api` already maps (`3-06`/`15-06`), this host's own gap closed
+// rather than a second convention invented. Liveness runs no registered check at all (`Predicate: _
+// => false`) - a dependency outage must fail readiness, never liveness, or Kubernetes would restart a
+// pod that is fine and only its database that is down. Readiness runs every check tagged "ready"
+// above. Version reads the commit baked into this assembly by the Dockerfile's own
+// `-p:SourceRevisionId` (ported alongside the Dockerfile at `20-20`, unused by any endpoint until
+// now) - `smoke.sh`'s two calendar SKIPs exist because this line did not.
+app.MapHealthChecks("/healthz/live", new HealthCheckOptions { Predicate = _ => false });
+app.MapHealthChecks("/healthz/ready", new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") });
+app.MapGet("/healthz/version", () => BuildInfoResponse.For(typeof(Program).Assembly));
 
 // Still here, and still earning its place: it answers with the loaded module's name rather than a
 // constant, so "the host composed the module" is something the running process can be asked.

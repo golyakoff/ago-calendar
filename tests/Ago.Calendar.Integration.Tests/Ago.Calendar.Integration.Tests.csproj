@@ -34,6 +34,10 @@
     <!-- `20-20`: SchemaMigratorTests drives Ago.Calendar.Migrator's own MigratorRunner against a real
          Postgres - the same shape Ago.Chat.Integration.Tests.SchemaMigratorTests uses (`8-08`). -->
     <ProjectReference Include="..\..\src\Ago.Calendar.Migrator\Ago.Calendar.Migrator.csproj" />
+    <!-- `ago-root#363`: ProvisionerTests drives Ago.Calendar.Provisioner's own ProvisionerRunner
+         against a real Postgres - the identical shape SchemaMigratorTests already established one
+         line above, for the sibling one-shot tool. -->
+    <ProjectReference Include="..\..\src\Ago.Calendar.Provisioner\Ago.Calendar.Provisioner.csproj" />
   </ItemGroup>
 
 </Project>

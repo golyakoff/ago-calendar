@@ -1,11 +1,17 @@
 # syntax=docker/dockerfile:1
 #
-# One Dockerfile for all three hosts (Api, Worker, Migrator) - they share the same dependency
-# closure (Module -> Application, Infrastructure.Postgres -> Domain), so three near-identical
+# One Dockerfile for all four hosts (Api, Worker, Migrator, Provisioner) - they share the same
+# dependency closure (Module -> Application, Infrastructure.Postgres -> Domain), so near-identical
 # files would only be able to drift apart, not stay honestly in sync. Copied from ago-chat's own
 # Dockerfile shape (20-20's brief: "follow ago-chat's own chiselled-base shape rather than
 # inventing a second one") - same build-arg selection, same nuget-feed mount, same fixed-filename
 # entrypoint trick, same final base image. Select the host with --build-arg PROJECT_NAME=Ago.Calendar.Api.
+#
+# `ago-root#363`: Ago.Calendar.Provisioner joins the other three here rather than getting its own
+# file, for the identical reason the comment above already gives - it shares the same closure
+# (Application, Infrastructure.Postgres), so a second Dockerfile would only be able to drift from
+# this one. It never listens on a port and is never routed to by anything (see that project's own
+# remarks); EXPOSE below is inert for it, exactly as it already is for Migrator.
 #
 # The local NuGet feed (ago-root/docs/runbooks/workspace.md) lives outside this repository, so it
 # cannot be COPY'd from the normal build context - it is mounted in via Buildx's --build-context
@@ -35,6 +41,7 @@ COPY Directory.Build.props Directory.Packages.props nuget.docker.config ./
 COPY src/Ago.Calendar.Api/Ago.Calendar.Api.csproj src/Ago.Calendar.Api/
 COPY src/Ago.Calendar.Worker/Ago.Calendar.Worker.csproj src/Ago.Calendar.Worker/
 COPY src/Ago.Calendar.Migrator/Ago.Calendar.Migrator.csproj src/Ago.Calendar.Migrator/
+COPY src/Ago.Calendar.Provisioner/Ago.Calendar.Provisioner.csproj src/Ago.Calendar.Provisioner/
 COPY src/Ago.Calendar.Module/Ago.Calendar.Module.csproj src/Ago.Calendar.Module/
 COPY src/Ago.Calendar.Application/Ago.Calendar.Application.csproj src/Ago.Calendar.Application/
 COPY src/Ago.Calendar.Contracts/Ago.Calendar.Contracts.csproj src/Ago.Calendar.Contracts/

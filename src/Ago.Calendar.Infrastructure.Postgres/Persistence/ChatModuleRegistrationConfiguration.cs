@@ -31,6 +31,21 @@ internal sealed class ChatModuleRegistrationConfiguration : IEntityTypeConfigura
             .HasConversion(c => c.Value, v => new ChatModuleCredential(v))
             .IsRequired();
 
+        // `22-11`: nullable, unlike Credential above - most rows are never rotated, and a row that
+        // has never been rotated (or whose grace window has already elapsed) has no previous secret
+        // at all, not an empty one. See ChatModuleRegistration.Rotate's own remarks for when this is
+        // populated and ActiveCredentials for when it is read.
+        builder.Property(r => r.PreviousCredential)
+            .HasColumnName("previous_credential")
+            .HasMaxLength(ChatModuleCredential.MaxLength)
+            .HasConversion(
+                c => c == null ? null : c.Value.Value,
+                v => v == null ? null : new ChatModuleCredential(v));
+
+        builder.Property(r => r.PreviousCredentialExpiresAt)
+            .HasColumnName("previous_credential_expires_at")
+            .HasColumnType("timestamptz");
+
         builder.Property(r => r.RegisteredAt).HasColumnName("registered_at").HasColumnType("timestamptz");
     }
 }

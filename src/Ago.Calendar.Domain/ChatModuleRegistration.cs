@@ -36,6 +36,18 @@
 /// is a fact about one integration channel with its own lifecycle (registered once, rotated
 /// independently), not a fact about the account itself, and folding it onto <see cref="Tenant"/> would
 /// grow that aggregate's surface for every tenant regardless of whether it ever enables chat.</para>
+///
+/// <para><b>`22-11`: <see cref="PreviousCredential"/> is the domain's own answer to "rotate without
+/// downtime".</b> The moment this row's <see cref="Credential"/> changes, <c>Ago.Chat.*</c> switches to
+/// signing every new call with the new value - but a call already in flight, or one signed a moment
+/// before the switch and only now arriving, was signed with the old one. Refusing it outright would be
+/// the "downtime" this item's own Done-when names as the thing to avoid. So a rotation does not
+/// discard the old secret; it demotes it to <see cref="PreviousCredential"/> with its own
+/// <see cref="PreviousCredentialExpiresAt"/>, and <see cref="ActiveCredentials"/> is the one place that
+/// answers "which secrets currently prove a call for this tenant" - a domain policy (how long a retired
+/// secret keeps working) rather than an infrastructure detail, which is why it lives here and not in
+/// <c>HmacModuleCallCredentialValidator</c>, which only asks this type the question and iterates
+/// whatever it gets back.</para>
 /// </summary>
 public sealed class ChatModuleRegistration
 {
@@ -43,12 +55,25 @@ public sealed class ChatModuleRegistration
 
     public ChatModuleCredential Credential { get; }
 
+    /// <summary>`22-11`: the credential a rotation just replaced, kept valid until
+    /// <see cref="PreviousCredentialExpiresAt"/> - <see langword="null"/> for a row that has never been
+    /// rotated, and for one whose grace window has already been read as expired by <see cref="Rotate"/>
+    /// itself (a rotation collapses an already-expired previous credential rather than chaining a
+    /// second one - see that method's own remarks).</summary>
+    public ChatModuleCredential? PreviousCredential { get; }
+
+    public DateTimeOffset? PreviousCredentialExpiresAt { get; }
+
     public DateTimeOffset RegisteredAt { get; }
 
-    private ChatModuleRegistration(TenantId tenantId, ChatModuleCredential credential, DateTimeOffset registeredAt)
+    private ChatModuleRegistration(
+        TenantId tenantId, ChatModuleCredential credential, ChatModuleCredential? previousCredential,
+        DateTimeOffset? previousCredentialExpiresAt, DateTimeOffset registeredAt)
     {
         TenantId = tenantId;
         Credential = credential;
+        PreviousCredential = previousCredential;
+        PreviousCredentialExpiresAt = previousCredentialExpiresAt;
         RegisteredAt = registeredAt;
     }
 
@@ -58,5 +83,36 @@ public sealed class ChatModuleRegistration
     }
 
     public static ChatModuleRegistration Register(TenantId tenantId, ChatModuleCredential credential, DateTimeOffset now) =>
-        new(tenantId, credential, now);
+        new(tenantId, credential, previousCredential: null, previousCredentialExpiresAt: null, now);
+
+    /// <summary>
+    /// `22-11`: replaces <see cref="Credential"/>, keeping the outgoing value valid for
+    /// <paramref name="overlapWindow"/> more - the grace period an operator relies on for "rotate
+    /// without downtime for the site being rotated", the sharper of the two claims that Done-when
+    /// makes (the weaker one - other sites unaffected - already followed for free from every row being
+    /// independent, since `22-04`).
+    ///
+    /// <para><b>Does not chain a second previous credential.</b> If this row already carries a
+    /// <see cref="PreviousCredential"/> whose own window has not yet expired, rotating again would
+    /// leave three secrets simultaneously valid unless this method special-cased it - so it does not:
+    /// only the current <see cref="Credential"/> is ever demoted, and a not-yet-expired previous one is
+    /// silently dropped. A second rotation inside one grace window is rare enough (an operator rotating
+    /// twice in the same few minutes) that dropping the still-valid-but-superseded value is the honest
+    /// choice - the caller asked for a fresh secret, not for two old ones to keep working.</para>
+    /// </summary>
+    public ChatModuleRegistration Rotate(ChatModuleCredential newCredential, DateTimeOffset now, TimeSpan overlapWindow) =>
+        new(TenantId, newCredential, Credential, now + overlapWindow, RegisteredAt);
+
+    /// <summary>Every credential that currently proves a call for this tenant - the current one, plus
+    /// the previous one if it was demoted less than its own grace window ago. Order matters to nobody:
+    /// <c>HmacModuleCallCredentialValidator</c> tries each until one verifies or none do.</summary>
+    public IEnumerable<ChatModuleCredential> ActiveCredentials(DateTimeOffset now)
+    {
+        yield return Credential;
+
+        if (PreviousCredential is { } previous && PreviousCredentialExpiresAt is { } expiresAt && now < expiresAt)
+        {
+            yield return previous;
+        }
+    }
 }

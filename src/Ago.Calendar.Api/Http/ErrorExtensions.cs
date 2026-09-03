@@ -106,6 +106,16 @@ public static class ErrorExtensions
             // every caller, so a 404 would only risk reading as a stale route rather than a deliberate
             // one. See PublicBookingApiGate's own remarks for the full reasoning.
             "booking.public_api_disabled" => StatusCodes.Status403Forbidden,
+            // `22-11`. Provisioning's own vocabulary - this route sits behind
+            // IModuleProvisioningAuthenticator rather than an operator identity (ModuleRegistrationEndpoints'
+            // own remarks), so there is no enumeration concern shaping these toward vagueness.
+            "chat_module_registration.tenant_not_found" or "chat_module_registration.not_found" =>
+                StatusCodes.Status404NotFound,
+            // 409, not 400: the request was well-formed and the tenant exists - a second registration
+            // for an already-registered tenant is a caller mistake with its own remedy (rotate), the
+            // same "the world moved" reasoning booking.invalid_state's own comment gives.
+            "chat_module_registration.already_registered" => StatusCodes.Status409Conflict,
+            "chat_module_registration.invalid_credential" => StatusCodes.Status400BadRequest,
             // Anything unmapped is a bug in this switch, not a client error - a 500 says so honestly
             // instead of inventing a 400 that would make a caller retry something that cannot work.
             _ => StatusCodes.Status500InternalServerError,

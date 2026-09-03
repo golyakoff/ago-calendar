@@ -17,31 +17,28 @@ public enum MigratorMode
 }
 
 /// <summary>
-/// `20-20`: the migrator's whole behaviour, separated from <c>Program.cs</c> so it can be driven from
-/// a test against a real Postgres - the same split `Ago.Chat.Migrator.MigratorRunner` (`8-08`) uses,
-/// ported here as this repository's own equivalent deployable (`adr/0056`: "Ago.Calendar gets
-/// Ago.Calendar.Migrator when it needs one").
+/// `20-20`/`ago-root#340`: the migrator's whole behaviour, separated from <c>Program.cs</c> so it can be
+/// driven from a test against a real Postgres - the same split <c>Ago.Chat.Migrator.MigratorRunner</c>
+/// (`8-08`) uses.
 ///
 /// <para><b>Exit codes are the contract</b>, so they are named here rather than left as bare integers
 /// at the call sites: <see cref="Success"/> when the schema is at the version this build expects
 /// (whether or not anything was applied), <see cref="Failure"/> when it is not. `adr/0056` requires a
-/// non-zero exit to stop a deploy rather than be retried into a crash loop - the manifest that carries
-/// <c>backoffLimit: 0</c> is the next wave's own work (this item's brief scopes deploying to a later
-/// change), and this exit-code contract is what it will rely on.</para>
+/// non-zero exit to stop a deploy rather than be retried into a crash loop.</para>
 ///
 /// <para><b>No dependency-injection container at all.</b> Two objects and a
 /// <c>DbContextOptionsBuilder</c> is the whole graph, and a container would add a startup surface (and
 /// a set of options to validate) to a process whose value is that it does one thing and stops.</para>
 ///
-/// <para><b>Deliberately no connectivity wait.</b> <c>Ago.Chat.Migrator</c> gained
-/// <c>DatabaseAvailabilityWait</c> in `8-10`, after a live deploy started this Job racing a restarting
-/// Postgres pod. Nothing has deployed AGO Calendar yet, so that incident has no analogue here to fix,
-/// and porting `8-10`'s SQLSTATE/socket-error classification pre-emptively would be a second decision
-/// smuggled into a build-and-migrate change. A connection failure here is still reported, just less
-/// precisely: it falls into the same <c>catch</c> below as a migration failure and is logged as
-/// <c>MIGRATION FAILED</c> even when no migration was attempted. Worth porting before this repository
-/// is actually rolled out against a multi-workload deploy - noted in this item's report rather than
-/// solved here.</para>
+/// <para><b>`ago-root#340`: the connectivity wait, added.</b> `20-20`'s own report named this gap
+/// explicitly rather than leaving it implicit: the migrator's correctness depended on
+/// <c>ago-deploy</c>'s init container waiting for Postgres on its behalf, which is a dependency on
+/// deployment configuration to make application code correct - exactly the coupling the platform's own
+/// abstractions exist to remove. Ported unchanged in shape from <c>Ago.Chat.Migrator.MigratorRunner</c>
+/// (`8-10`): the wait wraps <b>only</b> the connectivity probe, never a migration. By the time
+/// <see cref="SchemaVersionCheck"/>/<see cref="SchemaMigrationApplier"/> are constructed below, this
+/// wait has already returned, so a genuinely failing migration is still reported and exited on
+/// immediately - never retried, never waited on.</para>
 /// </summary>
 public static class MigratorRunner
 {
@@ -52,8 +49,25 @@ public static class MigratorRunner
         string connectionString,
         MigratorMode mode,
         TextWriter output,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DatabaseAvailabilityOptions? wait = null)
     {
+        // `ago-root#340`: the wait is here, in front of everything, and it is the *only* thing it
+        // wraps. The migration below is reached with a connection already proven to authenticate and
+        // answer, so a failure past this point is a migration failure and is reported and exited on
+        // immediately.
+        var availability = await DatabaseAvailabilityWait.UntilReadyAsync(
+            token => DatabaseAvailabilityWait.ProbeAsync(connectionString, token),
+            wait ?? new DatabaseAvailabilityOptions(),
+            output,
+            cancellationToken);
+
+        if (availability.Outcome != DatabaseAvailability.Available)
+        {
+            await ReportUnavailableAsync(availability, connectionString, output);
+            return Failure;
+        }
+
         var options = new DbContextOptionsBuilder<AgoCalendarDbContext>().UseNpgsql(connectionString).Options;
         await using var db = new AgoCalendarDbContext(options);
 
@@ -70,9 +84,8 @@ public static class MigratorRunner
             // Caught and reported rather than allowed to escape as an unhandled exception: the exit
             // code is the deliverable, and an unhandled exception in .NET exits with a platform-
             // dependent code that is not this contract's Failure. The message still goes out in full,
-            // because the operator reading `kubectl logs` on a failed Job needs the provider's own
-            // error, not a summary of it. This label also covers "could not connect at all" - see the
-            // "Deliberately no connectivity wait" remark on this type.
+            // because the operator reading the logs on a failed Job needs the provider's own error,
+            // not a summary of it.
             await output.WriteLineAsync($"MIGRATION FAILED: {ex.GetType().Name}: {ex.Message}");
             if (ex.InnerException is { } inner)
             {
@@ -81,6 +94,48 @@ public static class MigratorRunner
 
             return Failure;
         }
+    }
+
+    /// <summary>
+    /// `ago-root#340`: the two failures that are <b>not</b> migration failures, and they are worded so
+    /// that the first token of the first line tells them apart in the logs - ported unchanged in shape
+    /// from <c>Ago.Chat.Migrator.MigratorRunner.ReportUnavailableAsync</c> (`8-10`).
+    ///
+    /// <para>The item's whole premise is that "gave up waiting for Postgres" and "the migration threw"
+    /// need different reactions - one is an infrastructure problem, the other is a code problem.
+    /// Every line below therefore says explicitly that no migration was attempted, because the
+    /// operator's first question on a failed run is whether the database was left half-changed.</para>
+    /// </summary>
+    private static async Task ReportUnavailableAsync(
+        DatabaseAvailabilityResult availability, string connectionString, TextWriter output)
+    {
+        var target = DatabaseAvailabilityWait.DescribeTarget(connectionString);
+        var last = availability.LastFailure is null
+            ? "(no error recorded)"
+            : DatabaseAvailabilityWait.Describe(availability.LastFailure);
+
+        if (availability.Outcome == DatabaseAvailability.GaveUpWaiting)
+        {
+            await output.WriteLineAsync(
+                $"WAITING FOR DATABASE FAILED: gave up after {availability.Elapsed.TotalSeconds:F1}s and "
+                + $"{availability.Attempts} attempt(s) waiting for Postgres at {target} to accept "
+                + "connections.");
+            await output.WriteLineAsync($"  last attempt: {last}");
+            await output.WriteLineAsync(
+                "  No migration was attempted and the schema is unchanged. This is an infrastructure "
+                + "problem, not a migration problem: check that Postgres is running and reachable, then "
+                + "re-run this Job.");
+            return;
+        }
+
+        await output.WriteLineAsync(
+            $"CANNOT CONNECT TO DATABASE: Postgres at {target} rejected the connection with something "
+            + "waiting will not fix.");
+        await output.WriteLineAsync($"  {last}");
+        await output.WriteLineAsync(
+            "  No migration was attempted and the schema is unchanged. Reported immediately rather than "
+            + "waited on, because a wrong credential, a missing database or a missing grant does not "
+            + "become correct with time.");
     }
 
     private static async Task<int> ApplyAsync(
@@ -92,8 +147,8 @@ public static class MigratorRunner
         if (outcome.Applied.Count == 0)
         {
             // The idempotent case, and the common one - the Job is meant to run on every deploy, not
-            // only the deploys that need it, because a conditional step is a step that gets skipped
-            // (the 2026-08-25 ago-chat incident this whole pattern exists to avoid repeating here).
+            // only the deploys that need it, because a conditional deploy step is a step that gets
+            // skipped.
             await output.WriteLineAsync(
                 $"Schema already current at '{outcome.After.ExpectedLatest}'; {outcome.After.Applied.Count} "
                 + "migration(s) applied previously, nothing to do.");

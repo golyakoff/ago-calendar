@@ -1,4 +1,5 @@
-﻿using Ago.Calendar.Migrator;
+﻿using Ago.Calendar.Infrastructure.Postgres.Schema;
+using Ago.Calendar.Migrator;
 
 // `20-20`/`adr/0056`: the deployable that applies migrations, and the only thing that does - this
 // product's own equivalent of `Ago.Chat.Migrator` (`8-08`).
@@ -32,8 +33,20 @@ if (unknown.Count > 0)
     return MigratorRunner.Failure;
 }
 
-// Ctrl-C / SIGTERM cancels the run - Postgres runs the DDL transactionally, so an interrupted apply
-// rolls its current migration back and the history table stays truthful about what completed.
+// `ago-root#340`: the one *optional* variable, added alongside the required connection string above.
+// Unset means the chosen 90s default, so the set of variables the migrator *requires* is still exactly
+// one. An unparseable value is refused rather than silently defaulted - a manifest typo that quietly
+// restored the default would be the same class of drift `20-21`'s schema guard exists to prevent.
+if (!DatabaseAvailabilityOptions.TryReadFromEnvironment(
+        Environment.GetEnvironmentVariable, out var waitOptions, out var waitError))
+{
+    await Console.Error.WriteLineAsync(waitError);
+    return MigratorRunner.Failure;
+}
+
+// Ctrl-C / SIGTERM cancels the wait for a connection, not a migration already in flight - Postgres
+// runs the DDL transactionally, so an interrupted apply rolls its current migration back and the
+// history table stays truthful about what completed.
 using var lifetime = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
 {
@@ -41,4 +54,4 @@ Console.CancelKeyPress += (_, e) =>
     lifetime.Cancel();
 };
 
-return await MigratorRunner.RunAsync(connectionString, mode, Console.Out, lifetime.Token);
+return await MigratorRunner.RunAsync(connectionString, mode, Console.Out, lifetime.Token, waitOptions);

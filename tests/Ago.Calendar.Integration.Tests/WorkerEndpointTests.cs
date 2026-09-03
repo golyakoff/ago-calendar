@@ -233,7 +233,7 @@ public class WorkerEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string url, object? content, SeededTenant seed)
     {
         using var request = new HttpRequestMessage(method, url);
-        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.Operator.ExternalSubjectId);
+        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.ExternalSubjectId);
         if (content is not null)
         {
             request.Content = JsonContent.Create(content, content.GetType());

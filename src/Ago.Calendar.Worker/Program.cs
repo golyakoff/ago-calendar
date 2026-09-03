@@ -30,6 +30,14 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<PendingBookingSweepJob>();
 
+// `22-05`/`adr/0093`: this product's first broker consumer - projects `ago-chat`'s own
+// `RoleAssignmentsChanged` into the local `role_assignment_projections` table.
+builder.Services
+    .AddOptions<RoleAssignmentsChangedConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(RoleAssignmentsChangedConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<RoleAssignmentsChangedConsumer>();
+
 var host = builder.Build();
 
 // `20-21`/`adr/0056`: the same guard Ago.Calendar.Api runs, in the same place - before anything can

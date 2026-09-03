@@ -5,10 +5,14 @@ using Ago.Calendar.Provisioner;
 // `ago-root#363`: the one-shot admin path chosen over a public signup endpoint and over a
 // Keycloak-admin-API service account - see this item's own report for the argument. Argument parsing
 // and a connection string; everything else is ProvisionerRunner, which a test drives against a real
-// Postgres. No generic host, no DI container, no HTTP surface at all: this process reads six
-// environment variables (one of them optional), writes one tenant, says what it did, and exits - the
-// same shape Ago.Calendar.Migrator already established for "a process whose value is that it does one
-// thing".
+// Postgres. No generic host, no DI container, no HTTP surface at all: this process reads a handful of
+// environment variables, writes one tenant, says what it did, and exits - the same shape
+// Ago.Calendar.Migrator already established for "a process whose value is that it does one thing".
+//
+// `22-05`/`adr/0093`: AGO_CALENDAR_OWNER_DISPLAY_NAME and AGO_CALENDAR_OWNER_EMAIL are gone - this
+// tool no longer writes an operator alongside the tenant (ProvisionerRunner's own remarks). The
+// account owner's calendar access is a permission grant on the account side now, not something this
+// tool provisions.
 
 var connectionString = Environment.GetEnvironmentVariable("AGO_CALENDAR_CONNECTION_STRING");
 if (string.IsNullOrWhiteSpace(connectionString))
@@ -21,17 +25,11 @@ if (string.IsNullOrWhiteSpace(connectionString))
 
 var tenantName = Environment.GetEnvironmentVariable("AGO_CALENDAR_TENANT_NAME");
 var publicKey = Environment.GetEnvironmentVariable("AGO_CALENDAR_TENANT_PUBLIC_KEY");
-var ownerDisplayName = Environment.GetEnvironmentVariable("AGO_CALENDAR_OWNER_DISPLAY_NAME");
-// Deliberately the only identity this tool ever reads - no AGO_CALENDAR_OWNER_SUBJECT variable
-// exists here, and none should be added. See ProvisionerRunner's own remarks: a real owner's
-// Keycloak sub is never known at provisioning time, so a variable for it would only invite guessing
-// one.
-var ownerEmail = Environment.GetEnvironmentVariable("AGO_CALENDAR_OWNER_EMAIL");
 var allowedOriginsRaw = Environment.GetEnvironmentVariable("AGO_CALENDAR_ALLOWED_ORIGINS");
-// `22-03`/adr/0093: optional, and deliberately the only new variable this item adds. Set when the
+// `22-03`/adr/0093: optional, and the only variable `22-03` added, unchanged since. Set when the
 // caller already has an account id - the chat side's own `SiteId` - so this run provisions the
 // calendar's tenant *as* that account rather than minting a tenancy id of its own. Unset keeps the
-// standalone door adr/0093 kept open: this tool still mints its own id, exactly as before this item.
+// standalone door adr/0093 kept open: this tool still mints its own id, exactly as before that item.
 var tenantIdRaw = Environment.GetEnvironmentVariable("AGO_CALENDAR_TENANT_ID");
 
 var missing = new List<string>();
@@ -45,24 +43,13 @@ if (string.IsNullOrWhiteSpace(publicKey))
     missing.Add("AGO_CALENDAR_TENANT_PUBLIC_KEY");
 }
 
-if (string.IsNullOrWhiteSpace(ownerDisplayName))
-{
-    missing.Add("AGO_CALENDAR_OWNER_DISPLAY_NAME");
-}
-
-if (string.IsNullOrWhiteSpace(ownerEmail))
-{
-    missing.Add("AGO_CALENDAR_OWNER_EMAIL");
-}
-
 if (missing.Count > 0)
 {
     await Console.Error.WriteLineAsync(
         $"Missing required variable(s): {string.Join(", ", missing)}. Usage: set "
-        + "AGO_CALENDAR_CONNECTION_STRING, AGO_CALENDAR_TENANT_NAME, AGO_CALENDAR_TENANT_PUBLIC_KEY, "
-        + "AGO_CALENDAR_OWNER_DISPLAY_NAME, AGO_CALENDAR_OWNER_EMAIL and, optionally, "
-        + "AGO_CALENDAR_ALLOWED_ORIGINS (comma-separated) and AGO_CALENDAR_TENANT_ID (the account id, "
-        + "when this tenant is not standalone).");
+        + "AGO_CALENDAR_CONNECTION_STRING, AGO_CALENDAR_TENANT_NAME, AGO_CALENDAR_TENANT_PUBLIC_KEY and, "
+        + "optionally, AGO_CALENDAR_ALLOWED_ORIGINS (comma-separated) and AGO_CALENDAR_TENANT_ID (the "
+        + "account id, when this tenant is not standalone).");
     return ProvisionerRunner.Failure;
 }
 
@@ -83,7 +70,6 @@ IReadOnlyList<string> allowedOrigins = string.IsNullOrWhiteSpace(allowedOriginsR
     ? []
     : allowedOriginsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-var command = new RegisterTenant(
-    tenantName!, publicKey!, ownerDisplayName!, ExternalSubjectId: null, allowedOrigins, ownerEmail, tenantId);
+var command = new RegisterTenant(tenantName!, publicKey!, allowedOrigins, tenantId);
 
 return await ProvisionerRunner.RunAsync(connectionString, command, Console.Out, CancellationToken.None);

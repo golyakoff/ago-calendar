@@ -10,8 +10,12 @@ namespace Ago.Calendar.Infrastructure.Postgres.Persistence;
 internal static class IdConverters
 {
     public static readonly ValueConverter<TenantId, Guid> Tenant = new(id => id.Value, value => new TenantId(value));
+
+    // `22-05`/`adr/0093`: still needed - RoleAssignmentProjectionConfiguration's own `operator_id`
+    // column - even though nothing constructs an OperatorId from a database identity column any more
+    // (OperatorId.FromExternalSubjectId's own remarks). Role is gone: RoleId had no reason to exist
+    // once Role itself did.
     public static readonly ValueConverter<OperatorId, Guid> Operator = new(id => id.Value, value => new OperatorId(value));
-    public static readonly ValueConverter<RoleId, Guid> Role = new(id => id.Value, value => new RoleId(value));
     public static readonly ValueConverter<WorkerId, Guid> Worker = new(id => id.Value, value => new WorkerId(value));
     public static readonly ValueConverter<ServiceId, Guid> Service = new(id => id.Value, value => new ServiceId(value));
     public static readonly ValueConverter<CalendarId, Guid> Calendar = new(id => id.Value, value => new CalendarId(value));
@@ -54,14 +58,6 @@ internal static class IdConverters
     /// </summary>
     public static readonly ValueConverter<PhoneNumber, string> Phone = new(
         phone => phone.Value, value => new PhoneNumber(value));
-
-    /// <summary>`adr/0088`: null for every operator except an invited one whose person has not signed
-    /// in yet, or has and the field was simply never cleared - see <see cref="InvitedEmail"/>'s own
-    /// remarks on why it stays. Same read-back-through-the-constructor asymmetry as <see cref="Phone"/>
-    /// above, for the same reason.</summary>
-    public static readonly ValueConverter<InvitedEmail?, string?> NullableInvitedEmail = new(
-        email => email.HasValue ? email.Value.Value : null,
-        value => value != null ? new InvitedEmail(value) : (InvitedEmail?)null);
 
     public static readonly ValueConverter<CalendarTimeZone, string> TimeZone = new(
         zone => zone.Value, value => new CalendarTimeZone(value));

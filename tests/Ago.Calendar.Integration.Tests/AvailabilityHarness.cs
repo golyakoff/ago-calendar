@@ -69,13 +69,13 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
         await using var db = fixture.CreateDbContext();
         var handler = new DeleteDayOffHandler(
             new BookingCalendarRepository(db),
-            new PermissionChecker(db),
+            new PermissionChecker(new RoleAssignmentProjectionStore(db)),
             new EventRepository(db),
             new UuidV7Generator(),
             Clock);
 
         return await handler.HandleAsync(
-            new DeleteDayOff(seed.Operator.Id, seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, localDate),
+            new DeleteDayOff(seed.OperatorId, seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, localDate),
             CancellationToken.None);
     }
 
@@ -87,7 +87,7 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
         await using var db = fixture.CreateDbContext();
         var handler = new EditDayBoundaryHandler(
             new BookingCalendarRepository(db),
-            new PermissionChecker(db),
+            new PermissionChecker(new RoleAssignmentProjectionStore(db)),
             new WorkerRepository(db),
             new WorkerScheduleRepository(db),
             new EventRepository(db),
@@ -97,7 +97,7 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
 
         return await handler.HandleAsync(
             new EditDayBoundary(
-                seed.Operator.Id, seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, localDate, opensAt, closesAt),
+                seed.OperatorId, seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, localDate, opensAt, closesAt),
             CancellationToken.None);
     }
 
@@ -115,11 +115,11 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
             new WorkerScheduleRepository(db),
             new WorkerSlotReadStore(fixture.DataSource),
             Resolver,
-            new PermissionChecker(db),
+            new PermissionChecker(new RoleAssignmentProjectionStore(db)),
             Clock);
 
         return await handler.HandleAsync(
-            new RecutPreview(seed.Operator.Id, seed.Tenant.Id, seed.Worker.Id, from), CancellationToken.None);
+            new RecutPreview(seed.OperatorId, seed.Tenant.Id, seed.Worker.Id, from), CancellationToken.None);
     }
 
     /// <summary>
@@ -135,7 +135,7 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
         ArgumentNullException.ThrowIfNull(seed);
 
         await using var db = fixture.CreateDbContext();
-        var cancelHandler = new CancelBookingHandler(new EventRepository(db), new PermissionChecker(db), Clock);
+        var cancelHandler = new CancelBookingHandler(new EventRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), Clock);
         var handler = new RecutConfirmHandler(
             new BookingCalendarRepository(db),
             new WorkerRepository(db),
@@ -144,12 +144,12 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
             new EventRepository(db),
             Resolver,
             new UuidV7Generator(),
-            new PermissionChecker(db),
+            new PermissionChecker(new RoleAssignmentProjectionStore(db)),
             Clock,
             cancelHandler);
 
         return await handler.HandleAsync(
-            new RecutConfirm(seed.Operator.Id, seed.Tenant.Id, seed.Worker.Id, from, fingerprint, decisions),
+            new RecutConfirm(seed.OperatorId, seed.Tenant.Id, seed.Worker.Id, from, fingerprint, decisions),
             CancellationToken.None);
     }
 }

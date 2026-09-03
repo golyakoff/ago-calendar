@@ -33,10 +33,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<SchemaVersionCheck>();
 
         services.AddScoped<ITenantRepository, TenantRepository>();
-        services.AddScoped<IOperatorRepository, OperatorRepository>();
-        // `20-12`: the second role and every role-assignment change go through this - see
-        // IRoleRepository's own remarks for why it did not exist before this item.
-        services.AddScoped<IRoleRepository, RoleRepository>();
+        // `22-05`/`adr/0093`: IOperatorRepository/IRoleRepository are gone - there is no local
+        // `operators`/`roles` table left to back them. IRoleAssignmentProjectionStore, registered
+        // below, is what a permission check and the claims transformation read instead.
         services.AddScoped<IBookingCalendarRepository, BookingCalendarRepository>();
         services.AddScoped<IWorkerRepository, WorkerRepository>();
         services.AddScoped<IServiceRepository, ServiceRepository>();
@@ -54,6 +53,12 @@ public static class ServiceCollectionExtensions
         // `20-04`: the sweep's one transactional step, and the permission resolution every
         // operator-facing handler goes through. Scoped like the rest - both hold the DbContext.
         services.AddScoped<IExpiredBookingConfirmer, ExpiredBookingConfirmer>();
+
+        // `22-05`/`adr/0093`: the projection replicated from AGO Chat's own `RoleAssignmentsChanged` -
+        // the one thing both a permission check and OperatorIdentityClaimsTransformation now read.
+        // Same DbContext, same "Infrastructure adapter behind an Application port" shape every other
+        // repository here already uses.
+        services.AddScoped<IRoleAssignmentProjectionStore, RoleAssignmentProjectionStore>();
         services.AddScoped<IPermissionChecker, PermissionChecker>();
 
         // adr/0004's read side. Its own NpgsqlDataSource rather than the DbContext's connection: a
@@ -76,7 +81,8 @@ public static class ServiceCollectionExtensions
         // `20-06`: the public booking surface's own read side, and the multi-aggregate provisioning
         // write ITenantRepository's remarks predicted would be the first use case to need one.
         services.AddScoped<IBookingSurfaceReadStore, BookingSurfaceReadStore>();
-        services.AddScoped<ITenantProvisioningStore, TenantProvisioningStore>();
+        // `22-05`/`adr/0093`: ITenantProvisioningStore is gone - provisioning a tenant is now a
+        // single-aggregate write, so RegisterTenantHandler uses ITenantRepository directly.
 
         // `20-07`: the chat module's own orchestration state. Plain load/save, unlike IBookingStore -
         // see IChatBookingTaskStore's own remarks.

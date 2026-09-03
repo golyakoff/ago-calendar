@@ -39,6 +39,17 @@ internal class CalendarApiFactory(PostgresFixture fixture) : WebApplicationFacto
         builder.UseSetting("Redis:ConnectionString", fixture.RedisConnectionString);
         builder.UseSetting("Operator:Authority", UnreachableAuthority);
 
+        // `22-05`/`adr/0093`: AddRabbitMqMessaging's own ValidateOnStart runs for every host that
+        // loads CalendarModule, this one included, even though the Api host never resolves
+        // IEventConsumer/IEventPublisher/RabbitMqConnection (RoleAssignmentsChangedConsumer is
+        // Ago.Calendar.Worker-only) - RabbitMqConnection connects lazily on first use, so a
+        // syntactically valid, never-dialled value satisfies validation without a broker container
+        // in this fixture, the same "Operator:Authority answers nothing and is never contacted"
+        // shape this class's own remarks already use above.
+        builder.UseSetting("Messaging:RabbitMq:HostName", "rabbitmq.invalid");
+        builder.UseSetting("Messaging:RabbitMq:UserName", "unused");
+        builder.UseSetting("Messaging:RabbitMq:Password", "unused");
+
         // Wide open, so a rate limit never interferes with a test that is about something else. The
         // limiter's own behaviour is proved separately, against a real Redis, in
         // Ago.Calendar.Concurrency.Tests.
@@ -57,7 +68,8 @@ internal class CalendarApiFactory(PostgresFixture fixture) : WebApplicationFacto
 /// replaces exactly one thing - proof that Keycloak signed a token for a subject - and leaves the
 /// step this item actually built running for real:
 /// <c>OperatorIdentityClaimsTransformation</c> still resolves that <c>sub</c> against the real
-/// <c>operators</c> table on a real Postgres, the <c>calendar-operator</c> policy still refuses a
+/// <c>role_assignment_projections</c> table on a real Postgres (`22-05`/`adr/0093`: no
+/// <c>operators</c> table exists any more), the <c>calendar-operator</c> policy still refuses a
 /// principal it fails to resolve, and every handler still checks a real permission through the real
 /// <c>PermissionChecker</c>. A fake that minted <c>operator_id</c> directly would have skipped all
 /// three and proved nothing but that the fake works.</para>
@@ -92,18 +104,17 @@ internal sealed class ConsoleApiFactory(PostgresFixture fixture) : CalendarApiFa
     }
 }
 
-/// <summary>Authenticates whoever the <c>X-Test-Subject</c> header names, with a <c>sub</c> claim and,
-/// if <c>X-Test-Email</c> is also present, an <c>email</c> claim beside it - `20-08`: the second claim
-/// a real Keycloak token carries and the only other one
-/// <c>OperatorIdentityClaimsTransformation</c> reads, for its own email fallback.</summary>
+/// <summary>Authenticates whoever the <c>X-Test-Subject</c> header names, with a <c>sub</c> claim and
+/// nothing else. `22-05`/`adr/0093`: the <c>X-Test-Email</c> header and the <c>email</c> claim it used
+/// to add are gone - <c>OperatorIdentityClaimsTransformation</c> reads only <c>sub</c> now, since
+/// adr/0088's email fallback (the only reader of an email claim) was retired along with the rest of
+/// this product's own identity model.</summary>
 internal sealed class HeaderSubjectAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "TestSubject";
-
-    public const string EmailHeader = "X-Test-Email";
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -115,14 +126,7 @@ internal sealed class HeaderSubjectAuthenticationHandler(
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
-        var claims = new List<Claim> { new("sub", subject) };
-        var email = Request.Headers[EmailHeader].ToString();
-        if (!string.IsNullOrWhiteSpace(email))
-        {
-            claims.Add(new Claim("email", email));
-        }
-
-        var identity = new ClaimsIdentity(claims, SchemeName);
+        var identity = new ClaimsIdentity([new Claim("sub", subject)], SchemeName);
         return Task.FromResult(AuthenticateResult.Success(
             new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName)));
     }

@@ -41,6 +41,10 @@
          pieces itself instead of calling AddRedisCaching. -->
     <PackageVersion Include="Ago.Platform.Caching.Redis" Version="0.18.0" />
     <PackageVersion Include="Ago.Platform.Resilience" Version="0.18.0" />
+    <!-- `22-05`/`adr/0093`: RoleAssignmentsChangedConsumer's own adapter - this product's first
+         broker connection, consuming a topic `ago-chat` publishes rather than one this product
+         produces. Same pinned version as every other Ago.Platform.* package here. -->
+    <PackageVersion Include="Ago.Platform.Messaging.RabbitMq" Version="0.18.0" />
   </ItemGroup>
 
   <ItemGroup Label="Hosting">

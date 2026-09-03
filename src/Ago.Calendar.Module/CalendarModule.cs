@@ -1,5 +1,4 @@
-﻿using Ago.Calendar.Application.UseCases.AccessControl;
-using Ago.Calendar.Application.UseCases.BookEvent;
+﻿using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
 using Ago.Calendar.Application.UseCases.ChatModuleTask;
 using Ago.Calendar.Application.UseCases.Configuration;
@@ -20,6 +19,7 @@ using Ago.Calendar.Infrastructure.Redis;
 using Ago.Calendar.Infrastructure.Time;
 using Ago.Calendar.Module.PhoneVerification;
 using Ago.Platform.Hosting;
+using Ago.Platform.Messaging.RabbitMq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -81,6 +81,14 @@ public sealed class CalendarModule : IProductModule
         // hosts differ in what they run, not in what the product is (adr/0013), and a connection is
         // opened lazily on first use, so the Worker pays nothing for the registration.
         services.AddCalendarRateLimiting(configuration);
+
+        // `22-05`/`adr/0093`: this product's first broker connection - `RoleAssignmentsChangedConsumer`
+        // (`Ago.Calendar.Worker`) is the one caller. Registered for every host, the same "hosts differ
+        // in what they run, not in what the product is" shape `AddCalendarRateLimiting` above already
+        // follows: `Ago.Calendar.Api` never resolves `IEventConsumer`, so it pays nothing beyond the
+        // registration itself. `Messaging:RabbitMq:*` must name the same broker/vhost `ago-chat`'s own
+        // Worker publishes to - a deploy-time configuration fact, not something this module can assert.
+        services.AddRabbitMqMessaging(configuration);
 
         services.AddScoped<MaterializeAvailabilityHandler>();
         services.AddScoped<DeleteDayOffHandler>();
@@ -182,16 +190,11 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<SetAllowedOriginsHandler>();
         services.AddScoped<RegisterTenantHandler>();
 
-        // `20-12`: the second role, moving an operator on/off it, and the tenant contacts report.
-        services.AddScoped<CreateRoleHandler>();
-        services.AddScoped<ListRolesForTenantHandler>();
-        services.AddScoped<ListOperatorsForTenantHandler>();
-        services.AddScoped<GrantOperatorRoleHandler>();
-        services.AddScoped<RevokeOperatorRoleHandler>();
+        // `22-05`/`adr/0093`: CreateRoleHandler/ListRolesForTenantHandler/ListOperatorsForTenantHandler/
+        // GrantOperatorRoleHandler/RevokeOperatorRoleHandler/InviteOperatorHandler are gone - there is
+        // no local `operators`/`roles` table left for any of them to manage. The tenant contacts
+        // report stays; it reads `customers`, not identity.
         services.AddScoped<GetTenantContactsHandler>();
-
-        // `20-08`, adr/0088: inviting a second operator by name and email.
-        services.AddScoped<InviteOperatorHandler>();
 
         // `20-15`: the materialised slot view.
         services.AddScoped<GetWorkerSlotsHandler>();

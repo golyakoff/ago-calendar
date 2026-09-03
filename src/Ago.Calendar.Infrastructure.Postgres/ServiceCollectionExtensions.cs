@@ -91,6 +91,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPhoneVerificationCodeGenerator, PhoneVerificationCodeGenerator>();
         services.AddScoped<IPhoneVerificationProofTokenGenerator, PhoneVerificationProofTokenGenerator>();
 
+        // `22-04`: adr/0065's registry, this product's own consuming half - see
+        // ChatModuleRegistration's own remarks.
+        services.AddScoped<IChatModuleRegistrationRepository, ChatModuleRegistrationRepository>();
+
         // adr/0017: the platform's own generic outbox/inbox, bound to this product's context. The
         // tables exist from this migration onward; the first writer is `20-05`.
         services.AddOutboxInbox<AgoCalendarDbContext>();

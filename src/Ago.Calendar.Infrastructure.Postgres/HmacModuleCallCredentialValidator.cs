@@ -3,16 +3,16 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Domain;
 
 namespace Ago.Calendar.Infrastructure.Postgres;
 
 /// <summary>
-/// `22-02`: the receiving half of `Ago.Chat.Infrastructure.Modules.ModuleCallCredential` - the same
-/// wire shape, hand-kept in sync the way every other cross-repository contract in this project is (no
-/// shared package between `ago-chat` and `ago-calendar`, adr/0012 sets no precedent for one). If you are
-/// changing this file, the identical change belongs in `ago-faq`'s own
-/// <c>HmacModuleCallCredentialValidator</c> too - see this item's own report for the exact format both
-/// sides agree on.
+/// `22-02`/`22-04`: the receiving half of `Ago.Chat.Infrastructure.Modules.ModuleCallCredential` - the
+/// same wire shape, hand-kept in sync the way every other cross-repository contract in this project is
+/// (no shared package between `ago-chat` and `ago-calendar`, adr/0012 sets no precedent for one). If
+/// you are changing this file, the identical change belongs in `ago-faq`'s own
+/// <c>HmacModuleCallCredentialValidator</c> too.
 ///
 /// <list type="bullet">
 /// <item>Header: <c>X-Ago-Module-Credential</c>.</item>
@@ -22,6 +22,18 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 /// keep in sync.</item>
 /// <item>Payload: <c>{"siteId":"&lt;guid&gt;","iat":&lt;unix seconds&gt;,"exp":&lt;unix seconds&gt;}</c>.</item>
 /// </list>
+///
+/// <para><b>`22-04`: the secret is per tenant, not per deployment.</b> Before this item, one configured
+/// <c>ChatModule:SharedSecret</c> verified every call this deployment ever received, regardless of
+/// which site it claimed - adr/0094's own named limit ("whoever holds the raw secret can mint one for
+/// any site that deployment serves"). This class now reads the payload's claimed site id <b>before</b>
+/// it can know which secret to check the signature against - the payload itself is not trusted yet at
+/// that point, only used as a lookup key (the claimed id is treated as a <see cref="TenantId"/>, per
+/// <see cref="ChatModuleRegistration"/>'s own remarks on why the two are the same value) - and only a
+/// signature that verifies against that exact tenant's own
+/// <see cref="ChatModuleRegistration.Credential"/> is ever accepted. A token forged for tenant A by
+/// copying a genuine one and editing the site id to B fails here: the signature was computed with A's
+/// secret, and B's row (if one exists at all) holds a different one.</para>
 ///
 /// <para><b>Constant-time comparison</b> (<see cref="CryptographicOperations.FixedTimeEquals"/>) - a
 /// validator that returns "invalid" faster for a signature that differs in its first byte than one that
@@ -34,30 +46,21 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 /// clocks are never perfectly synchronized, and `docs/conventions/date-and-time.md`'s own UTC discipline
 /// does not by itself guarantee NTP agreement.</para>
 /// </summary>
-public sealed class HmacModuleCallCredentialValidator(ModuleCallCredentialOptions options)
+public sealed class HmacModuleCallCredentialValidator(IChatModuleRegistrationRepository registrations)
     : IModuleCallCredentialValidator
 {
     private static readonly TimeSpan ClockSkewAllowance = TimeSpan.FromSeconds(5);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public ModuleCallCredentialResult Validate(string? headerValue, DateTimeOffset now)
+    public async Task<ModuleCallCredentialResult> ValidateAsync(
+        string? headerValue, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        // `22-04`: no accepting-but-warning window left. Per-tenant resolution has no
+        // deployment-wide tenant to fall back to, so a call with nothing to authenticate has nothing
+        // to resolve into - see IModuleCallCredentialValidator's own remarks.
         if (string.IsNullOrEmpty(headerValue))
         {
-            // `22-02`'s own rollout affordance: while this deployment has not yet made a credential
-            // mandatory, an absent header is treated as pre-migration traffic, not a refusal. There is
-            // nothing to cross-check a site id against in that case (SiteId stays null) - see the
-            // interface's own remarks on why a caller must treat that as "skip the check", not "matched".
-            return new ModuleCallCredentialResult(!options.RequireCredential, SiteId: null);
-        }
-
-        if (string.IsNullOrEmpty(options.SharedSecret))
-        {
-            // Configured to require a credential (or one was presented anyway) but this deployment
-            // itself has no secret to check it against - a deployment fault, not a caller mistake, and
-            // refusing is the only honest answer: silently accepting would mean nothing this deployment
-            // ever answers is really checked.
             return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
         }
 
@@ -80,13 +83,6 @@ public sealed class HmacModuleCallCredentialValidator(ModuleCallCredentialOption
             return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
         }
 
-        var expectedSignature = HMACSHA256.HashData(
-            Encoding.UTF8.GetBytes(options.SharedSecret), Encoding.UTF8.GetBytes(encodedPayload));
-        if (!CryptographicOperations.FixedTimeEquals(presentedSignature, expectedSignature))
-        {
-            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
-        }
-
         Payload? payload;
         try
         {
@@ -98,6 +94,23 @@ public sealed class HmacModuleCallCredentialValidator(ModuleCallCredentialOption
         }
 
         if (payload is null)
+        {
+            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+        }
+
+        // The claimed site id, not yet trusted - only used to find which secret this signature must
+        // verify against. A tenant with no registration here has no secret to check anything
+        // against, which is exactly "the chat module is not enabled for this site": refused, not a
+        // deployment fault.
+        var registration = await registrations.GetByTenantIdAsync(new TenantId(payload.SiteId), cancellationToken);
+        if (registration is null)
+        {
+            return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
+        }
+
+        var expectedSignature = HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes(registration.Credential.Value), Encoding.UTF8.GetBytes(encodedPayload));
+        if (!CryptographicOperations.FixedTimeEquals(presentedSignature, expectedSignature))
         {
             return new ModuleCallCredentialResult(IsAuthenticated: false, SiteId: null);
         }

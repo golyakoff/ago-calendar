@@ -1,74 +1,80 @@
 ﻿using Ago.Calendar.Application.Abstractions;
-using Ago.Calendar.Application.UseCases.PublicBooking;
 using Ago.Calendar.Domain;
 using Ago.Platform.Kernel;
 
 namespace Ago.Calendar.Application.UseCases.ChatModuleTask;
 
 /// <summary>
-/// The chat entry point's first step: resolve this deployment's statically configured tenant and
-/// calendar, start a new <see cref="ChatBookingTask"/>, and offer the services it can book.
+/// The chat entry point's first step: resolve the calling site's own tenant and calendar, start a new
+/// <see cref="Domain.ChatBookingTask"/>, and offer the services it can book.
 ///
-/// <para><b>Reuses <see cref="GetBookingSurfaceHandler"/> rather than the read store directly.</b>
-/// That handler already resolves the tenant by public key and lists every published calendar with its
-/// services inlined - exactly the shape this handler needs to both find the configured calendar and
-/// read its services in one call, without re-deriving <c>EmbedScopeResolver</c>'s own preamble. The
-/// cost is one indexed tenant lookup this handler repeats afterwards for <see cref="TenantId"/> alone
-/// (that handler returns only a display name, not the id) - a second primary-key read on a path
-/// `adr/0065` itself frames as human-paced, not the hot path <c>BookEventHandler</c>'s own ordering
-/// discipline exists for.</para>
+/// <para><b>`22-04`: the tenant is resolved from <see cref="StartModuleTask.SiteId"/> directly, by
+/// id - not through <see cref="EmbedScopeResolver"/>/<see cref="GetBookingSurfaceHandler"/> the way
+/// the public widget resolves a tenant from its <see cref="TenantPublicKey"/>.</b> That resolver's
+/// preamble exists for an unauthenticated browser caller: resolve by a public, non-secret key, then
+/// check the request's <c>Origin</c> against that tenant's allow-list, because CORS is the only
+/// boundary a page in someone else's browser can be held to. This call has neither a public key nor a
+/// browser - it is server-to-server, and by the time this handler runs
+/// <c>ChatModuleTaskEndpoints.HandleStartAsync</c> has already proven, cryptographically, which tenant
+/// <see cref="StartModuleTask.SiteId"/> names (<c>IModuleCallCredentialValidator</c>'s own remarks).
+/// Routing that already-proven id through the public-key resolver would mean deriving a public key
+/// from an id just to immediately resolve the same id back out of it - the "fourth resolution path"
+/// this options-class-turned-registry replaces was the *unauthenticated static config* case, not this
+/// one; the identical caution does not transfer to a caller whose identity is already proven.</para>
 ///
-/// <para><b><c>Origin</c> is always <c>null</c> here.</b> This is a server-to-server call with no
-/// browser anywhere in the path, so there is no <c>Origin</c> header to read - the same legitimate
-/// "no origin at all" caller <c>OriginPolicy</c> already names `21-01`'s channel adapters as. Note
-/// what that leaves genuinely open, stated in this item's own report rather than papered over here:
-/// nothing authenticates that a caller hitting this endpoint actually is `Ago.Chat.*`'s server. That
-/// gap is real and named, not solved by this parameter.</para>
+/// <para><b>Which calendar answers is derived, not configured.</b> Before this item, a single
+/// <c>ChatModuleTaskOptions.CalendarId</c> named the one calendar every chat call acted on. A tenant
+/// may publish more than one calendar (<c>IBookingCalendarRepository.ListPublishedAsync</c>'s own
+/// remarks), and nothing in this item's own Done-when asks Chat's entry point to offer a choice of
+/// calendar before a service - so this handler requires the tenant to have <b>exactly one</b> published
+/// calendar and refuses (<see cref="ChatModuleTaskErrors.NotConfigured"/>) otherwise, rather than
+/// guessing which of several the visitor meant. A tenant with more than one published calendar wanting
+/// to answer chat calls is a real gap, named here rather than solved by picking one arbitrarily - see
+/// this item's own report.</para>
 /// </summary>
 public sealed class StartModuleTaskHandler(
-    GetBookingSurfaceHandler surfaceHandler,
     ITenantRepository tenants,
+    IBookingCalendarRepository calendars,
+    IBookingSurfaceReadStore surface,
     IChatBookingTaskStore tasks,
-    ChatModuleTaskOptions options,
     IIdGenerator idGenerator,
     IClock clock)
 {
     public async Task<Result<ModuleTaskStarted>> HandleAsync(
         StartModuleTask command, CancellationToken cancellationToken)
     {
-        var surface = await surfaceHandler.HandleAsync(
-            new GetBookingSurface(options.TenantPublicKey, Origin: null), cancellationToken);
-        if (!surface.IsSuccess)
-        {
-            // Whatever PublicBookingErrors said (deliberately vague, written for a stranger on the
-            // public internet) is the wrong message here: the caller supplied none of the coordinates
-            // that failed to resolve. This deployment's own configuration is what is wrong.
-            return ChatModuleTaskErrors.NotConfigured();
-        }
-
-        var configuredCalendarId = new CalendarId(options.CalendarId);
-        var calendar = surface.Value.Calendars.FirstOrDefault(c => c.CalendarId == configuredCalendarId);
-        if (calendar.CalendarId != configuredCalendarId)
-        {
-            return ChatModuleTaskErrors.NotConfigured();
-        }
-
-        var tenant = await tenants.FindByPublicKeyAsync(
-            new TenantPublicKey(options.TenantPublicKey), cancellationToken);
+        // `22-04`: the credential already proved this site id, so a Tenant row keyed by the identical
+        // id is the tenant this call is for - see this class's own remarks.
+        var tenant = await tenants.GetByIdAsync(new TenantId(command.SiteId), cancellationToken);
         if (tenant is null)
         {
+            // No tenant provisioned at this id: this site is not a real, provisioned calendar
+            // account, which is exactly "the module is not enabled for this site" - refused, not a
+            // deployment fault.
             return ChatModuleTaskErrors.NotConfigured();
         }
+
+        var published = await calendars.ListPublishedAsync(tenant.Id, cancellationToken);
+        if (published.Count != 1)
+        {
+            // Zero: nothing published yet to answer chat with. More than one: which calendar chat
+            // should offer is genuinely ambiguous and not this handler's decision to guess - see this
+            // class's own remarks.
+            return ChatModuleTaskErrors.NotConfigured();
+        }
+
+        var calendar = published[0];
+        var services = await surface.ListServicesAsync(calendar.Id, cancellationToken);
 
         var now = clock.UtcNow;
         var task = Domain.ChatBookingTask.Start(
-            new ChatBookingTaskId(idGenerator.NewId(now)), tenant.Id, configuredCalendarId, now);
+            new ChatBookingTaskId(idGenerator.NewId(now)), tenant.Id, calendar.Id, now);
         await tasks.AddAsync(task, cancellationToken);
 
         // Empty is a real, legitimate state (GetBookingSurfaceHandler's own remarks: a calendar
         // published with nobody performing anything yet), not special-cased into an error here for
         // the same reason it is not special-cased there.
-        var step = ModuleStepFactory.ServiceChoice(calendar.Services);
+        var step = ModuleStepFactory.ServiceChoice(services);
 
         return Result<ModuleTaskStarted>.Success(
             new ModuleTaskStarted(task.Id.Value.ToString(), step, Complete: false));

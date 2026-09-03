@@ -36,6 +36,10 @@ public sealed class AgoCalendarDbContext(DbContextOptions<AgoCalendarDbContext> 
     /// own database (adr/0027).</summary>
     public DbSet<PendingPhoneVerification> PendingPhoneVerifications => Set<PendingPhoneVerification>();
 
+    /// <summary>`22-04`: adr/0065's registry, this product's own consuming half - see
+    /// <see cref="ChatModuleRegistration"/>'s own remarks.</summary>
+    public DbSet<ChatModuleRegistration> ChatModuleRegistrations => Set<ChatModuleRegistration>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AgoCalendarDbContext).Assembly);

@@ -1,7 +1,6 @@
 ﻿using System.Security.Claims;
 using Ago.Calendar.Api.Auth;
 using Ago.Calendar.Api.Http;
-using Ago.Calendar.Application.UseCases.AccessControl;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
 using Ago.Calendar.Application.UseCases.Configuration;
 using Ago.Calendar.Application.UseCases.Contacts;
@@ -21,9 +20,10 @@ namespace Ago.Calendar.Api.Configuration;
 ///
 /// <para><b>The tenant is never in a route, a body or a query string - it comes from the token.</b>
 /// Every command below reads <c>tenant_id</c> off the principal that
-/// <c>OperatorIdentityClaimsTransformation</c> resolved from this product's own <c>operators</c>
-/// table. A caller-supplied tenant would be a value the caller chose, and the whole permission model
-/// (<c>PermissionChecker</c> filters roles by the tenant the *action* names) only holds because the
+/// <c>OperatorIdentityClaimsTransformation</c> resolved from the projection <c>RoleAssignmentsChanged</c>
+/// replicates (`22-05`/`adr/0093`: no local <c>operators</c> table any more). A caller-supplied tenant
+/// would be a value the caller chose, and the whole permission model
+/// (<c>PermissionChecker</c> filters permissions by the tenant the *action* names) only holds because the
 /// tenant on the principal came out of the database rather than off the wire.</para>
 ///
 /// <para><b>One policy on the group, not one per route.</b> A route that forgot it would be
@@ -72,16 +72,10 @@ public static class ConsoleEndpoints
         group.MapPost("/availability/day-off", HandleDayOffAsync).WithName("DeleteDayOff");
         group.MapPost("/availability/day-boundary", HandleDayBoundaryAsync).WithName("EditDayBoundary");
 
-        // `20-12`: the second role, moving an operator on/off it, and the tenant contacts report.
-        group.MapPost("/roles", HandleCreateRoleAsync).WithName("CreateRole");
-        group.MapGet("/roles", HandleListRolesAsync).WithName("ListRoles");
-        group.MapGet("/operators", HandleListOperatorsAsync).WithName("ListOperators");
-        // `20-08`, adr/0088: invite a colleague by name and email - the one real gap the ADR named.
-        group.MapPost("/operators", HandleInviteOperatorAsync).WithName("InviteOperator");
-        group.MapPost("/operators/{operatorId:guid}/roles/{roleId:guid}", HandleGrantRoleAsync)
-            .WithName("GrantOperatorRole");
-        group.MapDelete("/operators/{operatorId:guid}/roles/{roleId:guid}", HandleRevokeRoleAsync)
-            .WithName("RevokeOperatorRole");
+        // `22-05`/`adr/0093`: role/operator management (`CreateRole`/`ListRoles`/`ListOperators`/
+        // `InviteOperator`/`GrantOperatorRole`/`RevokeOperatorRole`) is gone from this product -
+        // there is no longer a calendar-owned `operators`/`roles` table to manage. The account side's
+        // own console is where a person is granted `calendar:configure` and friends now (`22-06`).
         group.MapGet("/contacts", HandleContactsAsync).WithName("GetContacts");
 
         // `20-15`: the materialised slot view - what the tenant's own schedule actually produced for
@@ -544,133 +538,6 @@ public static class ConsoleEndpoints
                 cancellationToken),
             httpContext);
     }
-
-    private static async Task<IResult> HandleCreateRoleAsync(
-        CreateRoleRequest request,
-        ClaimsPrincipal principal,
-        CreateRoleHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken)
-    {
-        if (request is null)
-        {
-            return Results.BadRequest();
-        }
-
-        Permission[] permissions;
-        try
-        {
-            permissions = [.. (request.Permissions ?? []).Select(value => new Permission(value))];
-        }
-        catch (ArgumentException exception)
-        {
-            return AccessControlErrors.Invalid(exception.Message).ToProblem(httpContext);
-        }
-
-        var result = await handler.HandleAsync(
-            new CreateRole(principal.GetOperatorId(), principal.GetTenantId(), request.Name, permissions),
-            cancellationToken);
-
-        return result.IsSuccess
-            ? Results.Created($"/api/v1/console/roles/{result.Value.Value}", new { roleId = result.Value.Value })
-            : result.Error!.Value.ToProblem(httpContext);
-    }
-
-    private static async Task<IResult> HandleListRolesAsync(
-        ClaimsPrincipal principal,
-        ListRolesForTenantHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken)
-    {
-        var result = await handler.HandleAsync(
-            new ListRolesForTenant(principal.GetOperatorId(), principal.GetTenantId()), cancellationToken);
-
-        if (!result.IsSuccess)
-        {
-            return result.Error!.Value.ToProblem(httpContext);
-        }
-
-        return Results.Ok(result.Value
-            .Select(role => new RoleResponse(
-                role.Id.Value, role.Name, [.. role.Permissions.Select(permission => permission.Value)]))
-            .ToArray());
-    }
-
-    private static async Task<IResult> HandleListOperatorsAsync(
-        ClaimsPrincipal principal,
-        ListOperatorsForTenantHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken)
-    {
-        var result = await handler.HandleAsync(
-            new ListOperatorsForTenant(principal.GetOperatorId(), principal.GetTenantId()), cancellationToken);
-
-        if (!result.IsSuccess)
-        {
-            return result.Error!.Value.ToProblem(httpContext);
-        }
-
-        return Results.Ok(result.Value
-            .Select(op => new OperatorResponse(
-                op.Id.Value,
-                op.DisplayName,
-                op.IsAccountOwner,
-                IsInvited: op.ExternalSubjectId is null,
-                op.InvitedEmail?.Value,
-                [.. op.Roles.Select(r => r.RoleId.Value)]))
-            .ToArray());
-    }
-
-    private static async Task<IResult> HandleInviteOperatorAsync(
-        InviteOperatorRequest request,
-        ClaimsPrincipal principal,
-        InviteOperatorHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken)
-    {
-        if (request is null)
-        {
-            return Results.BadRequest();
-        }
-
-        var result = await handler.HandleAsync(
-            new InviteOperator(principal.GetOperatorId(), principal.GetTenantId(), request.DisplayName, request.Email),
-            cancellationToken);
-
-        return result.IsSuccess
-            ? Results.Created($"/api/v1/console/operators/{result.Value.Value}", new { operatorId = result.Value.Value })
-            : result.Error!.Value.ToProblem(httpContext);
-    }
-
-    private static async Task<IResult> HandleGrantRoleAsync(
-        Guid operatorId,
-        Guid roleId,
-        ClaimsPrincipal principal,
-        GrantOperatorRoleHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken) =>
-        Complete(
-            await handler.HandleAsync(
-                new GrantOperatorRole(
-                    principal.GetOperatorId(), principal.GetTenantId(),
-                    new OperatorId(operatorId), new RoleId(roleId)),
-                cancellationToken),
-            httpContext);
-
-    private static async Task<IResult> HandleRevokeRoleAsync(
-        Guid operatorId,
-        Guid roleId,
-        ClaimsPrincipal principal,
-        RevokeOperatorRoleHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken) =>
-        Complete(
-            await handler.HandleAsync(
-                new RevokeOperatorRole(
-                    principal.GetOperatorId(), principal.GetTenantId(),
-                    new OperatorId(operatorId), new RoleId(roleId)),
-                cancellationToken),
-            httpContext);
 
     private static async Task<IResult> HandleContactsAsync(
         ClaimsPrincipal principal,

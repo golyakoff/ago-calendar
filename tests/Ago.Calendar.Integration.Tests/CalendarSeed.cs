@@ -1,26 +1,39 @@
 ﻿using Ago.Calendar.Domain;
+using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Postgres.Persistence;
 
 namespace Ago.Calendar.Integration.Tests;
 
 /// <summary>One tenant with everything a booking needs, written through the real mappings. Every
 /// test seeds its own, so no test depends on another having run first.</summary>
-/// <param name="Operator">`20-06`: the seed grew an operator holding the v1
-/// <see cref="Role.OperatorRoleName"/> role, because every operator-facing use case now goes through
-/// a real <c>PermissionChecker</c> against real <c>roles</c>/<c>operator_roles</c> rows. A fake
-/// permission checker here would have proved that the fake says yes.</param>
+/// <param name="OperatorId">`22-05`/`adr/0093`: derived, not a row - see
+/// <see cref="OperatorId.FromExternalSubjectId"/>. Every operator-facing use case now goes through a
+/// real <c>PermissionChecker</c> against a real <c>role_assignment_projections</c> row this seed
+/// writes directly, through the same public <c>RoleAssignmentProjectionStore</c> adapter production
+/// code uses - not a fake permission checker, which would only prove that the fake says yes.</param>
 internal sealed record SeededTenant(
     Tenant Tenant,
     BookingCalendar Calendar,
     Worker Worker,
     Service Service,
     Customer Customer,
-    Operator Operator,
-    Role Role);
+    OperatorId OperatorId,
+    string ExternalSubjectId);
 
 internal static class CalendarSeed
 {
     public static readonly DateTimeOffset Now = new(2026, 3, 2, 9, 0, 0, TimeSpan.Zero);
+
+    /// <summary>The v1 permission set - `Ago.Calendar.Domain.Permission`'s own catalogue, unchanged
+    /// by `22-05` (only where it is granted moved). Every seeded operator holds all seven, the same
+    /// "one seeded role, everything a small business's one person needs" shape the removed
+    /// <c>Role.SeedOperatorRole</c> used to establish.</summary>
+    internal static readonly string[] AllPermissions =
+    [
+        Permission.BookingConfirm.Value, Permission.BookingReject.Value, Permission.BookingCancel.Value,
+        Permission.BookingMarkNoShow.Value, Permission.CustomerRead.Value, Permission.CustomerEdit.Value,
+        Permission.CalendarConfigure.Value,
+    ];
 
     /// <param name="publicKey">`20-06`. Unique per seeded tenant by default, because
     /// <c>ux_tenants_public_key</c> is real and two tests seeding "barbershop" in the same container
@@ -47,13 +60,12 @@ internal static class CalendarSeed
         var customer = Customer.Register(
             new CustomerId(NewId()), tenant.Id, new PhoneNumber("+79991234567"), Now);
 
-        var role = Role.SeedOperatorRole(new RoleId(NewId()), tenant.Id);
-        // `20-12`: the seed's own operator plays the same role RegisterTenantHandler's first operator
-        // does - it is the only operator this tenant has, so it is the account owner - which is what
-        // lets a test seeded through here exercise Operator.IsAccountOwner's invariant meaningfully.
-        var @operator = Operator.Create(
-            new OperatorId(NewId()), tenant.Id, "Sam", externalSubjectId ?? $"kc-{NewId():N}", isAccountOwner: true);
-        @operator.Grant(role);
+        // `22-05`/`adr/0093`: no `Operator`/`Role` to create or grant any more - a projection row is
+        // the whole fact. Written through the real adapter, not a fake, so a test seeded through here
+        // exercises the identical `PermissionChecker` path a real `RoleAssignmentsChanged` delivery
+        // would have populated.
+        var subject = externalSubjectId ?? $"kc-{NewId():N}";
+        var operatorId = OperatorId.FromExternalSubjectId(subject);
 
         calendar.Publish();
         worker.JoinCalendar(calendar);
@@ -65,11 +77,13 @@ internal static class CalendarSeed
         db.Services.Add(service);
         db.Workers.Add(worker);
         db.Customers.Add(customer);
-        db.Roles.Add(role);
-        db.Operators.Add(@operator);
+
+        var projections = new RoleAssignmentProjectionStore(db);
+        await projections.StageAsync(operatorId, tenant.Id, subject, AllPermissions, Now, CancellationToken.None);
+
         await db.SaveChangesAsync();
 
-        return new SeededTenant(tenant, calendar, worker, service, customer, @operator, role);
+        return new SeededTenant(tenant, calendar, worker, service, customer, operatorId, subject);
     }
 
     /// <summary>Gives the seeded worker the same wall-clock window on every named day. Wall clock,

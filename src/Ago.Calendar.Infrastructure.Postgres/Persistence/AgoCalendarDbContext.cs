@@ -11,8 +11,12 @@ namespace Ago.Calendar.Infrastructure.Postgres.Persistence;
 public sealed class AgoCalendarDbContext(DbContextOptions<AgoCalendarDbContext> options) : DbContext(options)
 {
     public DbSet<Tenant> Tenants => Set<Tenant>();
-    public DbSet<Operator> Operators => Set<Operator>();
-    public DbSet<Role> Roles => Set<Role>();
+
+    // `22-05`/`adr/0093`: Operators/Roles are gone - there is no local `operators`/`roles` table any
+    // more. RoleAssignmentProjectionRecord replaces both, reached through `Set<...>()` rather than a
+    // named property here because it is an internal persistence record with no Domain equivalent
+    // (its own remarks), the same reason `Ago.Chat`'s `RoleRecord`/`OperatorRoleRecord` are never
+    // exposed as a public DbSet either.
     public DbSet<Worker> Workers => Set<Worker>();
     public DbSet<Service> Services => Set<Service>();
     public DbSet<BookingCalendar> Calendars => Set<BookingCalendar>();

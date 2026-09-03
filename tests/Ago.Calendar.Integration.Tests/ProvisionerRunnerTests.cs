@@ -1,7 +1,4 @@
-﻿using System.Net;
-using System.Net.Http.Json;
-using Ago.Calendar.Application.UseCases.Provisioning;
-using Ago.Calendar.Contracts;
+﻿using Ago.Calendar.Application.UseCases.Provisioning;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Provisioner;
 using Microsoft.EntityFrameworkCore;
@@ -10,45 +7,25 @@ namespace Ago.Calendar.Integration.Tests;
 
 /// <summary>
 /// `ago-root#363`: <see cref="ProvisionerRunner"/> against a real Postgres - the one-shot admin path
-/// chosen for AGO Calendar's first tenant, in front of exactly the mechanism `ChatOperatorBookingAuthorityTests`
-/// already proved for <c>InviteOperatorHandler</c>'s rows (adr/0088). That file's own header explains
-/// why the proof matters at this level rather than only at the Domain/Application one: what this item's
-/// Done-when actually asks is "the owner signs in and reaches a screen with their own data", and the
-/// closest honest proof of that without touching the live node is a real HTTP request against the real
-/// console API, the real claims transformation and a real Postgres - so that is what these tests do.
+/// for AGO Calendar's first tenant.
+///
+/// <para><b>`22-05`/`adr/0093`: no owner-identity coverage left to carry here.</b> This file used to
+/// prove the whole invite-a-colleague-shaped account-owner flow (adr/0088's mechanism, reused a
+/// caller earlier) end to end over real HTTP - a Keycloak subject nobody had seen before, resolving
+/// to its own tenant through the email fallback. That mechanism is gone (see
+/// <c>OperatorIdentityClaimsTransformation</c>'s own remarks for what replaced it: nothing
+/// calendar-specific, because there is only one invite now, on the account side). What remains here
+/// is `22-03`'s own tenant-id-provenance coverage, unchanged in substance, plus the collision
+/// refusals every provisioning tool needs regardless of what identity model sits above it.</para>
 /// </summary>
 [Collection(PostgresCollection.Name)]
-public sealed class ProvisionerRunnerTests(PostgresFixture fixture) : IAsyncLifetime
+public sealed class ProvisionerRunnerTests(PostgresFixture fixture)
 {
-    private ConsoleApiFactory _factory = null!;
-    private HttpClient _client = null!;
-
-    public Task InitializeAsync()
-    {
-        _factory = new ConsoleApiFactory(fixture);
-        _client = _factory.CreateClient();
-        return Task.CompletedTask;
-    }
-
-    public async Task DisposeAsync()
-    {
-        _client.Dispose();
-        await _factory.DisposeAsync();
-    }
-
-    /// <summary>
-    /// The end-to-end proof: <see cref="ProvisionerRunner"/> writes a tenant knowing only the owner's
-    /// email, and that owner's very first authenticated request - a new Keycloak subject the database
-    /// has never seen, carrying only that email - reaches their own tenant's console data. Before this
-    /// item, there was no way to reach this state at all (`ago-root#363`'s own gap: "authentication
-    /// succeeds and lands on an account that does not exist").
-    /// </summary>
     [Fact]
-    public async Task ProvisionedTenant_TheOwnersFirstSignIn_ReachesTheirOwnTenantsConsoleData()
+    public async Task Provisioned_WritesExactlyOneTenant_ReadableBackFromAFreshContext()
     {
         var publicKey = $"shop-{Guid.NewGuid():N}"[..24];
-        var command = new RegisterTenant(
-            "Barbershop On Main", publicKey, "Dana Owner", ExternalSubjectId: null, [], "dana@example.com");
+        var command = new RegisterTenant("Barbershop On Main", publicKey, []);
 
         await using var report = new StringWriter();
         var exitCode = await ProvisionerRunner.RunAsync(
@@ -57,64 +34,12 @@ public sealed class ProvisionerRunnerTests(PostgresFixture fixture) : IAsyncLife
         Assert.Equal(ProvisionerRunner.Success, exitCode);
         Assert.Contains("Registered tenant", report.ToString(), StringComparison.Ordinal);
 
-        // Written invited and unlinked - exactly the shape InviteOperatorHandler gives a colleague,
-        // proven directly against the row before any HTTP request touches it.
-        await using (var before = fixture.CreateDbContext())
-        {
-            var tenant = await before.Tenants.SingleAsync(t => t.PublicKey == new TenantPublicKey(publicKey));
-            // .Include("_roles"): the same string-named navigation OperatorRepository's own queries
-            // use throughout this product - Operator.Roles is a read-only projection over a private
-            // backing field, so EF has no public property to include by lambda.
-            var written = await before.Operators.Include("_roles").SingleAsync(o => o.TenantId == tenant.Id);
-            Assert.True(written.IsAccountOwner);
-            Assert.Null(written.ExternalSubjectId);
-            Assert.Equal("dana@example.com", written.InvitedEmail!.Value.Value);
-            Assert.Single(written.Roles);
-        }
-
-        // The owner's first sign-in: a subject the database has never seen, carrying only the email
-        // the tool was given. No invite step ran for this row - it was created this way directly.
-        var ownerSubject = $"kc-dana-{Guid.NewGuid():N}";
-        using var firstSignIn = new HttpRequestMessage(HttpMethod.Get, "/api/v1/console/operators");
-        firstSignIn.Headers.Add(ConsoleApiFactory.SubjectHeader, ownerSubject);
-        firstSignIn.Headers.Add(HeaderSubjectAuthenticationHandler.EmailHeader, "dana@example.com");
-        var response = await _client.SendAsync(firstSignIn);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var operators = await response.Content.ReadFromJsonAsync<OperatorResponse[]>();
-        var owner = Assert.Single(operators!);
-        Assert.True(owner.IsAccountOwner);
-        Assert.False(owner.IsInvited);
-        Assert.Equal("dana@example.com", owner.InvitedEmail);
-        Assert.Single(owner.RoleIds);
-
-        // And the link is real, not merely displayed: the row's own ExternalSubjectId now holds this
-        // request's subject.
-        await using var after = fixture.CreateDbContext();
-        var linked = await after.Operators.SingleAsync(o => o.Id == new OperatorId(owner.OperatorId));
-        Assert.Equal(ownerSubject, linked.ExternalSubjectId);
-    }
-
-    /// <summary>Before the owner ever signs in, a stranger presenting an unrelated email is refused -
-    /// the same "refuse rather than guess" property `ChatOperatorBookingAuthorityTests` proves for an
-    /// invited colleague, now checked for an invited owner.</summary>
-    [Fact]
-    public async Task ProvisionedTenant_AStrangerWithAnUnrelatedEmail_IsRefused()
-    {
-        var publicKey = $"shop-{Guid.NewGuid():N}"[..24];
-        var command = new RegisterTenant(
-            "Barbershop On Elm", publicKey, "Sam Owner", ExternalSubjectId: null, [], "sam@example.com");
-        await using var report = new StringWriter();
-        Assert.Equal(
-            ProvisionerRunner.Success,
-            await ProvisionerRunner.RunAsync(fixture.ConnectionString, command, report, CancellationToken.None));
-
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/console/operators");
-        request.Headers.Add(ConsoleApiFactory.SubjectHeader, $"kc-stranger-{Guid.NewGuid():N}");
-        request.Headers.Add(HeaderSubjectAuthenticationHandler.EmailHeader, "nobody-provisioned-this@example.com");
-        var response = await _client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        // A fresh context, not the one the run itself used - so this reads back what Postgres
+        // actually holds rather than an EF change-tracker entity the run happened to still have in
+        // memory.
+        await using var db = fixture.CreateDbContext();
+        var tenant = await db.Tenants.SingleAsync(t => t.PublicKey == new TenantPublicKey(publicKey));
+        Assert.Equal("Barbershop On Main", tenant.Name);
     }
 
     /// <summary>A second run against the same public key writes nothing a second time - the tool
@@ -123,8 +48,7 @@ public sealed class ProvisionerRunnerTests(PostgresFixture fixture) : IAsyncLife
     public async Task RunningItTwiceWithTheSamePublicKey_TheSecondRunWritesNothing()
     {
         var publicKey = $"shop-{Guid.NewGuid():N}"[..24];
-        var command = new RegisterTenant(
-            "Barbershop On Oak", publicKey, "Robin Owner", ExternalSubjectId: null, [], "robin@example.com");
+        var command = new RegisterTenant("Barbershop On Oak", publicKey, []);
 
         await using var first = new StringWriter();
         Assert.Equal(
@@ -147,14 +71,13 @@ public sealed class ProvisionerRunnerTests(PostgresFixture fixture) : IAsyncLife
         Assert.Equal(1, countAfterSecond);
     }
 
-    /// <summary>A malformed owner email is refused before anything is written - the validation
-    /// RegisterTenantHandler runs, surfaced through this tool's own report rather than an exception.</summary>
+    /// <summary>A malformed public key is refused before anything is written - the validation
+    /// RegisterTenantHandler runs, surfaced through this tool's own report rather than an
+    /// exception.</summary>
     [Fact]
-    public async Task AMalformedOwnerEmail_IsRefusedAndWritesNothing()
+    public async Task AMalformedPublicKey_IsRefusedAndWritesNothing()
     {
-        var publicKey = $"shop-{Guid.NewGuid():N}"[..24];
-        var command = new RegisterTenant(
-            "Barbershop On Pine", publicKey, "Alex Owner", ExternalSubjectId: null, [], "not-an-email");
+        var command = new RegisterTenant("Barbershop On Pine", string.Empty, []);
 
         await using var report = new StringWriter();
         var exitCode = await ProvisionerRunner.RunAsync(
@@ -162,26 +85,20 @@ public sealed class ProvisionerRunnerTests(PostgresFixture fixture) : IAsyncLife
 
         Assert.Equal(ProvisionerRunner.Failure, exitCode);
         Assert.Contains("REFUSED", report.ToString(), StringComparison.Ordinal);
-
-        await using var db = fixture.CreateDbContext();
-        Assert.False(await db.Tenants.AnyAsync(t => t.PublicKey == new TenantPublicKey(publicKey)));
     }
 
     /// <summary>
     /// `22-03`/adr/0093, the end-to-end proof this item asks for: a tenant provisioned with a
     /// caller-supplied id - standing in for the account id AGO Chat calls <c>SiteId</c> - is read back
-    /// from a fresh <see cref="AgoCalendarDbContext"/> as that exact value, not merely returned by the
-    /// handler in-process. This is what a hoped-for "the id round-trips" assumption looks like proven
-    /// rather than assumed.
+    /// from a fresh <see cref="Ago.Calendar.Infrastructure.Postgres.Persistence.AgoCalendarDbContext"/>
+    /// as that exact value, not merely returned by the handler in-process.
     /// </summary>
     [Fact]
     public async Task ProvisionedWithASuppliedTenantId_TheTenantRowReadsBackAsThatExactId()
     {
         var publicKey = $"shop-{Guid.NewGuid():N}"[..24];
         var accountId = new TenantId(Guid.NewGuid());
-        var command = new RegisterTenant(
-            "Barbershop On Birch", publicKey, "Jamie Owner", ExternalSubjectId: null, [], "jamie@example.com",
-            accountId);
+        var command = new RegisterTenant("Barbershop On Birch", publicKey, [], accountId);
 
         await using var report = new StringWriter();
         var exitCode = await ProvisionerRunner.RunAsync(
@@ -190,14 +107,9 @@ public sealed class ProvisionerRunnerTests(PostgresFixture fixture) : IAsyncLife
         Assert.Equal(ProvisionerRunner.Success, exitCode);
         Assert.Contains(accountId.Value.ToString(), report.ToString(), StringComparison.Ordinal);
 
-        // A fresh context, not the one the run itself used - so this reads back what Postgres actually
-        // holds rather than an EF change-tracker entity the run happened to still have in memory.
         await using var db = fixture.CreateDbContext();
         var tenant = await db.Tenants.SingleAsync(t => t.PublicKey == new TenantPublicKey(publicKey));
         Assert.Equal(accountId, tenant.Id);
-
-        var owner = await db.Operators.SingleAsync(o => o.TenantId == accountId);
-        Assert.True(owner.IsAccountOwner);
     }
 
     /// <summary>
@@ -211,20 +123,16 @@ public sealed class ProvisionerRunnerTests(PostgresFixture fixture) : IAsyncLife
     {
         var accountId = new TenantId(Guid.NewGuid());
         var firstPublicKey = $"shop-{Guid.NewGuid():N}"[..24];
-        var firstCommand = new RegisterTenant(
-            "Barbershop On Cedar", firstPublicKey, "Robin Owner", ExternalSubjectId: null, [], "robin2@example.com",
-            accountId);
+        var firstCommand = new RegisterTenant("Barbershop On Cedar", firstPublicKey, [], accountId);
 
         await using var first = new StringWriter();
         Assert.Equal(
             ProvisionerRunner.Success,
             await ProvisionerRunner.RunAsync(fixture.ConnectionString, firstCommand, first, CancellationToken.None));
 
-        // A different public key, a different email, the same account id - the id is what collides.
+        // A different public key, the same account id - the id is what collides.
         var secondPublicKey = $"shop-{Guid.NewGuid():N}"[..24];
-        var secondCommand = new RegisterTenant(
-            "Barbershop On Cedar Annex", secondPublicKey, "Robin Owner", ExternalSubjectId: null, [],
-            "robin2-annex@example.com", accountId);
+        var secondCommand = new RegisterTenant("Barbershop On Cedar Annex", secondPublicKey, [], accountId);
 
         await using var second = new StringWriter();
         var secondExitCode = await ProvisionerRunner.RunAsync(

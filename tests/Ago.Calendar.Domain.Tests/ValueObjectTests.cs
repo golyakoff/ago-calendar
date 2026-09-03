@@ -149,37 +149,6 @@ public class CustomerTests
     }
 }
 
-public class RoleTests
-{
-    [Fact]
-    public void SeedOperatorRole_GrantsTheWholeV1Catalogue()
-    {
-        var tenant = CalendarFixtures.Tenant();
-
-        var role = Role.SeedOperatorRole(new RoleId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id);
-
-        // Stated once in Role, asserted once here, so "what does v1 grant" has an answer that fails
-        // loudly if somebody widens the catalogue without deciding what the seeded role does with it.
-        Assert.Equal("Operator", role.Name);
-        Assert.Equal(
-            new[]
-            {
-                "booking:confirm", "booking:reject", "booking:cancel", "booking:mark_no_show",
-                "customer:read", "customer:edit", "calendar:configure",
-            },
-            role.Permissions.Select(permission => permission.Value));
-    }
-
-    [Fact]
-    public void Grant_WhenTheRoleBelongsToAnotherTenant_Throws()
-    {
-        var mine = CalendarFixtures.Tenant("Mine");
-        var theirs = CalendarFixtures.Tenant("Theirs");
-        var @operator = Operator.Create(
-            new OperatorId(Guid.CreateVersion7(CalendarFixtures.Now)), mine.Id, "Anna");
-        var foreignRole = Role.SeedOperatorRole(
-            new RoleId(Guid.CreateVersion7(CalendarFixtures.Now)), theirs.Id);
-
-        Assert.Throws<TenantMismatchException>(() => @operator.Grant(foreignRole));
-    }
-}
+// `22-05`/`adr/0093`: RoleTests removed - Role and Operator are gone along with the `roles`/
+// `operators` tables they used to back. OperatorIdTests (this directory) covers what replaced them:
+// OperatorId.FromExternalSubjectId's own determinism.

@@ -5,7 +5,8 @@ using Ago.Calendar.Contracts;
 namespace Ago.Calendar.Api.Provisioning;
 
 /// <summary>
-/// Creates a tenant, its seeded role and its first operator - <b>outside Production only</b>.
+/// Creates a tenant - <b>outside Production only</b>. `22-05`/`adr/0093`: no seeded role and no first
+/// operator any more - there is no local identity table left to put either in.
 ///
 /// <para><b>Why this exists.</b> `20-01` said the provisioning transaction "belongs to `20-06`", and
 /// `20-06`'s own Done-when needs a tenant that exists before a console can configure it. Without this
@@ -46,12 +47,7 @@ public static class DevProvisioningEndpoints
         }
 
         var result = await handler.HandleAsync(
-            new RegisterTenant(
-                request.Name,
-                request.PublicKey,
-                request.OperatorDisplayName,
-                request.ExternalSubjectId,
-                request.AllowedOrigins ?? []),
+            new RegisterTenant(request.Name, request.PublicKey, request.AllowedOrigins ?? []),
             cancellationToken);
 
         if (!result.IsSuccess)
@@ -60,7 +56,6 @@ public static class DevProvisioningEndpoints
         }
 
         var registered = result.Value;
-        return Results.Ok(new RegisterTenantResponse(
-            registered.TenantId.Value, registered.OperatorId.Value, registered.PublicKey.Value));
+        return Results.Ok(new RegisterTenantResponse(registered.TenantId.Value, registered.PublicKey.Value));
     }
 }

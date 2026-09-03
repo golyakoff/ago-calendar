@@ -59,7 +59,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var result = await new RejectBookingHandler(
-                new EventRepository(db), new PermissionChecker(db), new FixedClock(Now))
+                new EventRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(Now))
             .HandleAsync(
                 new RejectBooking(world.FirstOperator, world.TenantId, onTheOtherCalendar.BookingId),
                 CancellationToken.None);
@@ -91,7 +91,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var result = await new GetPendingBookingsForTenantHandler(
-                new PendingBookingReadStore(fixture.DataSource), new PermissionChecker(db), new FixedClock(Now))
+                new PendingBookingReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(Now))
             .HandleAsync(new GetPendingBookingsForTenant(stranger, world.TenantId, 100), CancellationToken.None);
 
         Assert.True(result.IsFailure);
@@ -134,20 +134,21 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         Assert.Equal(withAccess.Select(r => r.BookingId), withoutAccess.Select(r => r.BookingId));
     }
 
+    /// <summary>`22-05`/`adr/0093`: a second operator, narrower than <see cref="CalendarSeed"/>'s own
+    /// seed - a projection row written directly, the same way the seed itself writes one, rather than
+    /// a `Role`/`Operator` pair that no longer exists.</summary>
     private async Task<OperatorId> AnOperatorWithoutCustomerReadAsync(TenantId tenantId)
     {
-        var role = Role.Create(
-            new RoleId(CalendarSeed.NewId()), tenantId, "Dispatcher-only",
-            [Permission.BookingReject, Permission.BookingCancel]);
-        var @operator = Operator.Create(new OperatorId(CalendarSeed.NewId()), tenantId, "Casey");
-        @operator.Grant(role);
+        var subject = $"kc-{CalendarSeed.NewId():N}";
+        var operatorId = OperatorId.FromExternalSubjectId(subject);
+        string[] permissions = [Permission.BookingReject.Value, Permission.BookingCancel.Value];
 
         await using var db = fixture.CreateDbContext();
-        db.Roles.Add(role);
-        db.Operators.Add(@operator);
+        var projections = new RoleAssignmentProjectionStore(db);
+        await projections.StageAsync(operatorId, tenantId, subject, permissions, CalendarSeed.Now, CancellationToken.None);
         await db.SaveChangesAsync();
 
-        return @operator.Id;
+        return operatorId;
     }
 
     [Fact]
@@ -182,7 +183,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
             seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id, seed.Service.Id,
             "+79998000099", Now.AddMinutes(15), Now.AddDays(3));
 
-        var rows = await QueueAsync(seed.Operator.Id, seed.Tenant.Id);
+        var rows = await QueueAsync(seed.OperatorId, seed.Tenant.Id);
 
         var row = Assert.Single(rows);
         Assert.Equal(run[0].Id, row.BookingId);
@@ -230,7 +231,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         await using var db = fixture.CreateDbContext();
         var result = await new GetPendingBookingsForTenantHandler(
                 new PendingBookingReadStore(fixture.DataSource),
-                new PermissionChecker(db),
+                new PermissionChecker(new RoleAssignmentProjectionStore(db)),
                 new FixedClock(at ?? Now))
             .HandleAsync(new GetPendingBookingsForTenant(operatorId, tenantId, 100), CancellationToken.None);
 
@@ -240,18 +241,16 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
 
     private async Task<OperatorId> AnOperatorWithoutRejectAsync(TenantId tenantId)
     {
-        var role = Role.Create(
-            new RoleId(CalendarSeed.NewId()), tenantId, "Receptionist",
-            [Permission.CustomerRead, Permission.CustomerEdit]);
-        var @operator = Operator.Create(new OperatorId(CalendarSeed.NewId()), tenantId, "Sam");
-        @operator.Grant(role);
+        var subject = $"kc-{CalendarSeed.NewId():N}";
+        var operatorId = OperatorId.FromExternalSubjectId(subject);
+        string[] permissions = [Permission.CustomerRead.Value, Permission.CustomerEdit.Value];
 
         await using var db = fixture.CreateDbContext();
-        db.Roles.Add(role);
-        db.Operators.Add(@operator);
+        var projections = new RoleAssignmentProjectionStore(db);
+        await projections.StageAsync(operatorId, tenantId, subject, permissions, CalendarSeed.Now, CancellationToken.None);
         await db.SaveChangesAsync();
 
-        return @operator.Id;
+        return operatorId;
     }
 
     /// <summary>One tenant, two calendars each with its own worker, two operators both holding the
@@ -271,21 +270,26 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         secondWorker.JoinCalendar(secondCalendar);
         secondWorker.Offer(first.Service);
 
-        // `20-06`: the seed writes the v1 role itself now, and `ux_roles_tenant_name` allows one per
-        // tenant - so both operators here are granted the seeded role rather than a second copy of
-        // it. What this fixture proves (two operators, one shared queue) is unchanged.
-        var role = first.Role;
-        var operatorOne = Operator.Create(new OperatorId(CalendarSeed.NewId()), first.Tenant.Id, "Ann");
-        var operatorTwo = Operator.Create(new OperatorId(CalendarSeed.NewId()), first.Tenant.Id, "Ben");
-        operatorOne.Grant(role);
-        operatorTwo.Grant(role);
+        // `22-05`/`adr/0093`: two operators, both projected with the seed's own v1 permission set -
+        // what this fixture proves (two operators, one shared queue) is unchanged.
+        var annSubject = $"kc-{CalendarSeed.NewId():N}";
+        var benSubject = $"kc-{CalendarSeed.NewId():N}";
+        var operatorOneId = OperatorId.FromExternalSubjectId(annSubject);
+        var operatorTwoId = OperatorId.FromExternalSubjectId(benSubject);
 
         await using (var db = fixture.CreateDbContext())
         {
             db.Calendars.Add(secondCalendar);
             db.Workers.Add(secondWorker);
-            db.Operators.Add(operatorOne);
-            db.Operators.Add(operatorTwo);
+
+            var projections = new RoleAssignmentProjectionStore(db);
+            await projections.StageAsync(
+                operatorOneId, first.Tenant.Id, annSubject, CalendarSeed.AllPermissions, CalendarSeed.Now,
+                CancellationToken.None);
+            await projections.StageAsync(
+                operatorTwoId, first.Tenant.Id, benSubject, CalendarSeed.AllPermissions, CalendarSeed.Now,
+                CancellationToken.None);
+
             await db.SaveChangesAsync();
         }
 
@@ -295,7 +299,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
             "+79998000002", Now.AddMinutes(25), Now.AddDays(3).AddHours(2));
 
         return new SeededQueue(
-            first.Tenant.Id, first.Calendar.Id, secondCalendar.Id, operatorOne.Id, operatorTwo.Id);
+            first.Tenant.Id, first.Calendar.Id, secondCalendar.Id, operatorOneId, operatorTwoId);
     }
 
     private async Task APendingBookingAsync(

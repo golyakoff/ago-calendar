@@ -42,7 +42,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
             await db.SaveChangesAsync();
         }
 
-        var rows = await SlotsAsync(seed.Operator.Id, seed.Tenant.Id, seed.Worker.Id);
+        var rows = await SlotsAsync(seed.OperatorId, seed.Tenant.Id, seed.Worker.Id);
 
         Assert.Equal(2, rows.Count);
         var availableRow = rows.Single(row => row.EventId == available.Id);
@@ -62,7 +62,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
         var seed = await CalendarSeed.WriteAsync(fixture);
         var booking = await ABookedSlotAsync(seed, new DateTimeOffset(2026, 5, 12, 9, 0, 0, TimeSpan.Zero));
 
-        var rows = await SlotsAsync(seed.Operator.Id, seed.Tenant.Id, seed.Worker.Id);
+        var rows = await SlotsAsync(seed.OperatorId, seed.Tenant.Id, seed.Worker.Id);
 
         var row = Assert.Single(rows);
         Assert.Equal(booking.Id, row.EventId);
@@ -125,7 +125,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
             await db.SaveChangesAsync();
         }
 
-        var rows = await SlotsAsync(seed.Operator.Id, seed.Tenant.Id, seed.Worker.Id);
+        var rows = await SlotsAsync(seed.OperatorId, seed.Tenant.Id, seed.Worker.Id);
 
         Assert.Equal(new[] { inside.Id }, rows.Select(row => row.EventId));
     }
@@ -138,9 +138,9 @@ public class WorkerSlotsTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var result = await new GetWorkerSlotsHandler(
-                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(db))
+                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)))
             .HandleAsync(
-                new GetWorkerSlots(mine.Operator.Id, mine.Tenant.Id, theirs.Worker.Id, From, To),
+                new GetWorkerSlots(mine.OperatorId, mine.Tenant.Id, theirs.Worker.Id, From, To),
                 CancellationToken.None);
 
         Assert.True(result.IsFailure);
@@ -155,7 +155,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var result = await new GetWorkerSlotsHandler(
-                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(db))
+                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)))
             .HandleAsync(
                 new GetWorkerSlots(stranger, seed.Tenant.Id, seed.Worker.Id, From, To), CancellationToken.None);
 
@@ -263,35 +263,28 @@ public class WorkerSlotsTests(PostgresFixture fixture)
         return slot;
     }
 
-    private async Task<OperatorId> AnOperatorWithConfigureButNotCustomerReadAsync(TenantId tenantId)
+    private Task<OperatorId> AnOperatorWithConfigureButNotCustomerReadAsync(TenantId tenantId) =>
+        AnOperatorWithPermissionsAsync(tenantId, [Permission.CalendarConfigure]);
+
+    private Task<OperatorId> AnOperatorWithoutCalendarConfigureAsync(TenantId tenantId) =>
+        AnOperatorWithPermissionsAsync(tenantId, [Permission.BookingReject, Permission.CustomerRead]);
+
+    /// <summary>`22-05`/`adr/0093`: a second operator, narrower than <see cref="CalendarSeed"/>'s own
+    /// seed - a projection row written directly, the same way the seed itself writes one, rather than
+    /// a `Role`/`Operator` pair that no longer exists.</summary>
+    private async Task<OperatorId> AnOperatorWithPermissionsAsync(TenantId tenantId, IReadOnlyList<Permission> permissions)
     {
-        var role = Role.Create(
-            new RoleId(CalendarSeed.NewId()), tenantId, "Scheduler-only", [Permission.CalendarConfigure]);
-        var @operator = Operator.Create(new OperatorId(CalendarSeed.NewId()), tenantId, "Casey");
-        @operator.Grant(role);
+        var subject = $"kc-{CalendarSeed.NewId():N}";
+        var operatorId = OperatorId.FromExternalSubjectId(subject);
 
         await using var db = fixture.CreateDbContext();
-        db.Roles.Add(role);
-        db.Operators.Add(@operator);
+        var projections = new RoleAssignmentProjectionStore(db);
+        await projections.StageAsync(
+            operatorId, tenantId, subject, [.. permissions.Select(p => p.Value)], CalendarSeed.Now,
+            CancellationToken.None);
         await db.SaveChangesAsync();
 
-        return @operator.Id;
-    }
-
-    private async Task<OperatorId> AnOperatorWithoutCalendarConfigureAsync(TenantId tenantId)
-    {
-        var role = Role.Create(
-            new RoleId(CalendarSeed.NewId()), tenantId, "Dispatcher-only",
-            [Permission.BookingReject, Permission.CustomerRead]);
-        var @operator = Operator.Create(new OperatorId(CalendarSeed.NewId()), tenantId, "Sam");
-        @operator.Grant(role);
-
-        await using var db = fixture.CreateDbContext();
-        db.Roles.Add(role);
-        db.Operators.Add(@operator);
-        await db.SaveChangesAsync();
-
-        return @operator.Id;
+        return operatorId;
     }
 
     private async Task<IReadOnlyList<WorkerSlotRow>> SlotsAsync(
@@ -299,7 +292,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
     {
         await using var db = fixture.CreateDbContext();
         var result = await new GetWorkerSlotsHandler(
-                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(db))
+                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)))
             .HandleAsync(
                 new GetWorkerSlots(operatorId, tenantId, workerId, from ?? From, to ?? To), CancellationToken.None);
 

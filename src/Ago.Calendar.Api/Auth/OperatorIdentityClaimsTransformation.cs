@@ -6,43 +6,46 @@ using Microsoft.AspNetCore.Authentication;
 namespace Ago.Calendar.Api.Auth;
 
 /// <summary>
-/// Turns "who this person is to Keycloak" into "which operator of which tenant this is here".
+/// Turns "who this person is to Keycloak" into "which tenant this is here, and what may they do".
 ///
-/// <para><b>adr/0022's mechanism, copied rather than shared - and this is the first time that copy
-/// actually exists.</b> The 2026-08-26 boundary review recorded, as something it could not establish,
-/// that "the duplication adr/0027 explicitly accepted - a copied
-/// <c>OperatorIdentityClaimsTransformation</c> - has not happened yet", so the ADR's central cost was
-/// still theoretical. It is not any more. What is genuinely copied is the *shape*: a validated
-/// principal's <c>sub</c>, one indexed lookup, two claims added. What is not copied is anything the
-/// lookup touches - a different table, in a different database, with a different id type and no
-/// concept of a site.</para>
+/// <para><b>`22-05`/`adr/0093`: no `operators` table left to resolve against.</b> Before this item, a
+/// validated `sub` was looked up in this product's own <c>operators</c> row to learn its
+/// <c>OperatorId</c> and <c>TenantId</c>. There is no such row any more - <c>OperatorId</c> is now a
+/// deterministic function of the subject itself (<see cref="OperatorId.FromExternalSubjectId"/>), and
+/// the tenant is whatever <see cref="IRoleAssignmentProjectionStore.FindTenantIdAsync"/> says that
+/// derived id resolves to in the projection <c>RoleAssignmentsChanged</c> replicates from the account
+/// side. Same shape adr/0022 established - one lookup, two claims added, before authorization runs -
+/// against a different fact than before.</para>
 ///
-/// <para><b>Why a claims transformation rather than reading <c>sub</c> at each call site.</b> The
-/// alternative would spread "and here is how you turn a subject into an operator" across every
-/// endpoint, and the first one to forget the tenant half is a cross-tenant bug. Doing it once, before
-/// authorization runs, is also what lets <see cref="CalendarClaims.OperatorPolicy"/> refuse an
-/// unknown subject cleanly instead of letting it reach a handler.</para>
+/// <para><b>What replaces `adr/0088`'s email-invite linking: nothing calendar-specific, because there
+/// is only one invite now.</b> That ADR existed to answer "how does a person become a Calendar
+/// operator" when Calendar held its own identity - invited by email, linked on first sign-in. Under
+/// `adr/0093` a person's calendar access is just one more permission grant on the account side
+/// (`ago-chat`'s own `OperatorInvite`); there is nothing left for a second, calendar-owned invite
+/// mechanism to do. A colleague is invited once, on the account side, and if that grant includes
+/// `calendar:configure` (or any other calendar permission) the projection carries it here
+/// automatically the moment the account side's outbox delivers it - no separate "sign into the
+/// calendar console once to link" step, and no `InvitedEmail`/`IsAccountOwner` concept survives this
+/// item at all.</para>
+///
+/// <para><b>Refused, not auto-provisioned - unchanged.</b> A `sub` the projection has never heard of,
+/// or one whose projection rows name more than one tenant (a newly representable shape -
+/// <see cref="IRoleAssignmentProjectionStore.FindTenantIdAsync"/>'s own remarks), adds no claim.
+/// <see cref="CalendarClaims.OperatorPolicy"/> then refuses the request with a <c>403</c>, the
+/// identical shape `authorization.md`'s own "an action from a subject with no authorization is
+/// refused, never auto-provisioned" names as the property this projection has to preserve.</para>
 ///
 /// <para><b>Cost, stated the same way adr/0022 stated it:</b> one database read per authenticated
-/// request. Not cached - <c>PermissionChecker</c> already pays a lookup on the same request path, so
-/// this is not a new order of magnitude, and caching an identity mapping before <c>nfr.md</c> has a
-/// number would be optimising a guess.</para>
+/// request - the same one query <c>PermissionChecker</c> would otherwise pay a moment later anyway,
+/// not a new order of magnitude. Not cached, for the same rule-8 reason the projection itself
+/// exists: a cached tenant resolution is a cached authorization fact.</para>
 ///
-/// <para><b>Idempotent, because it is not.</b> ASP.NET Core runs an <see cref="IClaimsTransformation"/>
-/// on every authentication, and on some paths more than once per request - a documented sharp edge.
-/// The guard below is what stops a principal accumulating three copies of the same claim; the
-/// transformation is otherwise a pure function of <c>sub</c> (and, on the one fallback path below, of
-/// <c>sub</c> and the token's own <c>email</c> claim together).</para>
-///
-/// <para><b>`adr/0088`'s email fallback lives here, not as a second call site.</b> When no operator
-/// resolves by <c>sub</c>, this method tries once more against invited rows by email before giving up -
-/// <see cref="TryLinkInvitedOperatorByEmailAsync"/>. This is deliberately the only place that
-/// mutates an operator as a side effect of an incoming request: `20-08`'s own Done-when draws the line
-/// at booking actions creating or mutating a row, not at this transformation completing a deliberate
-/// invite the tenant already made. See that method's own remarks for the collision cases it refuses to
-/// guess through.</para>
+/// <para><b>Idempotent, because it is not.</b> ASP.NET Core can run an <see cref="IClaimsTransformation"/>
+/// more than once per request - a documented sharp edge. The guard below stops a principal
+/// accumulating repeated claims.</para>
 /// </summary>
-public sealed class OperatorIdentityClaimsTransformation(IOperatorRepository operators) : IClaimsTransformation
+public sealed class OperatorIdentityClaimsTransformation(IRoleAssignmentProjectionStore projections)
+    : IClaimsTransformation
 {
     public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)
     {
@@ -63,22 +66,20 @@ public sealed class OperatorIdentityClaimsTransformation(IOperatorRepository ope
             return principal;
         }
 
-        var @operator = await operators.FindByExternalSubjectIdAsync(subject, CancellationToken.None)
-            ?? await TryLinkInvitedOperatorByEmailAsync(subject, principal);
-
-        if (@operator is null)
+        var operatorId = OperatorId.FromExternalSubjectId(subject);
+        var tenantId = await projections.FindTenantIdAsync(operatorId, CancellationToken.None);
+        if (tenantId is null)
         {
-            // No match, no claim, and no exception: a real Keycloak user who is not an operator here -
-            // invited or otherwise - is refused by the policy, which is a 403 rather than a 500.
-            // adr/0022 chose this explicitly over letting a downstream accessor throw on a missing
-            // claim; `20-08`'s own Done-when is the same call made a second time, for a chat-originated
-            // action arriving from a subject with no operator row at all.
+            // No match, no claim, and no exception: a real Keycloak user this product's own
+            // projection carries no row for - never granted a calendar permission, or granted one on
+            // more than one tenant with no way to say which was meant here - is refused by the
+            // policy, a 403 rather than a 500.
             return principal;
         }
 
         var identity = new ClaimsIdentity();
-        identity.AddClaim(new Claim(CalendarClaims.OperatorId, @operator.Id.Value.ToString()));
-        identity.AddClaim(new Claim(CalendarClaims.TenantId, @operator.TenantId.Value.ToString()));
+        identity.AddClaim(new Claim(CalendarClaims.OperatorId, operatorId.Value.ToString()));
+        identity.AddClaim(new Claim(CalendarClaims.TenantId, tenantId.Value.Value.ToString()));
 
         // A clone, not a mutation of the incoming identity. The principal the authentication handler
         // produced may be cached by the handler itself; adding to it in place would leak this
@@ -86,54 +87,5 @@ public sealed class OperatorIdentityClaimsTransformation(IOperatorRepository ope
         var transformed = principal.Clone();
         transformed.AddIdentity(identity);
         return transformed;
-    }
-
-    /// <summary>
-    /// `adr/0088`'s invite-a-colleague flow, completed. Called only when <c>sub</c> resolved nothing -
-    /// a person who already has an operator row never reaches here, so a subject once bound can never
-    /// be re-bound to a different row by an email collision: the direct <c>sub</c> lookup always wins
-    /// first, every time, for every request.
-    ///
-    /// <para><b>The two collisions this deliberately refuses rather than resolves cleverly:</b> two
-    /// invited rows sharing an address - <c>FindInvitedByEmailAsync</c> itself returns null for more
-    /// than one candidate, so this method never even sees which one to pick; and an invited email that
-    /// happens to equal an already-active operator's own (stale) <c>InvitedEmail</c> - impossible to
-    /// match here by construction, because the repository query filters to
-    /// <c>ExternalSubjectId == null</c>, and an active operator's is never null. Both leave the request
-    /// unresolved rather than guessing, exactly as adr/0088's consequence section chose.</para>
-    /// </summary>
-    private async Task<Operator?> TryLinkInvitedOperatorByEmailAsync(string subject, ClaimsPrincipal principal)
-    {
-        var emailClaim = principal.FindFirstValue("email") ?? principal.FindFirstValue(ClaimTypes.Email);
-        if (string.IsNullOrWhiteSpace(emailClaim))
-        {
-            return null;
-        }
-
-        InvitedEmail email;
-        try
-        {
-            email = new InvitedEmail(emailClaim);
-        }
-        catch (ArgumentException)
-        {
-            // A token whose `email` claim is not shaped like an address at all - no fallback is
-            // possible, and rejecting the token outright is not this transformation's call to make.
-            return null;
-        }
-
-        var invited = await operators.FindInvitedByEmailAsync(email, CancellationToken.None);
-        if (invited is null)
-        {
-            return null;
-        }
-
-        // The one deliberate write in this class - see the type's own remarks on why this is not the
-        // "acting on a booking creates a row" failure mode `20-08`'s Done-when forbids: the row already
-        // existed, created by a deliberate invite, and this only ever attaches a subject to an
-        // already-invited row - never creates one.
-        invited.LinkExternalIdentity(subject);
-        await operators.SaveAsync(invited, CancellationToken.None);
-        return invited;
     }
 }

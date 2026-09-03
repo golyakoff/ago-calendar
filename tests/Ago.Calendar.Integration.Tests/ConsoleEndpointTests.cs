@@ -249,7 +249,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 
         using var getRequest = new HttpRequestMessage(
             HttpMethod.Get, $"/api/v1/console/workers/{seed.Worker.Id.Value}/schedule");
-        getRequest.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.Operator.ExternalSubjectId);
+        getRequest.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.ExternalSubjectId);
         var getResponse = await _client.SendAsync(getRequest);
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
         var fetched = await getResponse.Content.ReadFromJsonAsync<WorkerScheduleResponse>();
@@ -304,22 +304,16 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     /// not <see cref="Permission.CalendarConfigure"/>.</summary>
     private async Task<SeededTenant> ADispatcherAsync(SeededTenant seed)
     {
-        var role = Role.Create(
-            new RoleId(CalendarSeed.NewId()),
-            seed.Tenant.Id,
-            "Dispatcher",
-            [Permission.BookingReject, Permission.BookingCancel]);
-
-        var dispatcher = Operator.Create(
-            new OperatorId(CalendarSeed.NewId()), seed.Tenant.Id, "Dana", $"kc-{CalendarSeed.NewId():N}");
-        dispatcher.Grant(role);
+        var subject = $"kc-{CalendarSeed.NewId():N}";
+        var operatorId = OperatorId.FromExternalSubjectId(subject);
+        string[] permissions = [Permission.BookingReject.Value, Permission.BookingCancel.Value];
 
         await using var db = fixture.CreateDbContext();
-        db.Roles.Add(role);
-        db.Operators.Add(dispatcher);
+        var projections = new RoleAssignmentProjectionStore(db);
+        await projections.StageAsync(operatorId, seed.Tenant.Id, subject, permissions, CalendarSeed.Now, CancellationToken.None);
         await db.SaveChangesAsync();
 
-        return seed with { Operator = dispatcher, Role = role };
+        return seed with { OperatorId = operatorId, ExternalSubjectId = subject };
     }
 
     private async Task<Event> APendingBookingAsync(SeededTenant seed, CalendarId calendarId, WorkerId workerId)
@@ -346,7 +340,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     private async Task<TenantConfigurationResponse> GetConfigurationAsync(SeededTenant seed)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/console/configuration");
-        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.Operator.ExternalSubjectId);
+        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.ExternalSubjectId);
 
         var response = await _client.SendAsync(request);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -356,7 +350,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     private async Task<PendingBookingResponse[]> GetQueueAsync(SeededTenant seed)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/console/pending-bookings");
-        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.Operator.ExternalSubjectId);
+        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.ExternalSubjectId);
 
         var response = await _client.SendAsync(request);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -393,7 +387,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         HttpMethod method, string url, object? content, SeededTenant seed)
     {
         using var request = new HttpRequestMessage(method, url);
-        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.Operator.ExternalSubjectId);
+        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.ExternalSubjectId);
         if (content is not null)
         {
             request.Content = JsonContent.Create(content, content.GetType());

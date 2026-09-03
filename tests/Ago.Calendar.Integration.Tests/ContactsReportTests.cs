@@ -53,8 +53,8 @@ public class ContactsReportTests(PostgresFixture fixture)
         customer!.Describe("Anna", "Prefers afternoons");
         await db.SaveChangesAsync();
 
-        var result = await new GetTenantContactsHandler(new ContactsReadStore(fixture.DataSource), new PermissionChecker(db))
-            .HandleAsync(new GetTenantContacts(seed.Operator.Id, seed.Tenant.Id), CancellationToken.None);
+        var result = await new GetTenantContactsHandler(new ContactsReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(db)))
+            .HandleAsync(new GetTenantContacts(seed.OperatorId, seed.Tenant.Id), CancellationToken.None);
 
         Assert.True(result.IsSuccess, result.Error?.Message);
         var row = Assert.Single(result.Value);
@@ -68,23 +68,22 @@ public class ContactsReportTests(PostgresFixture fixture)
     public async Task TheHandler_WithoutCustomerRead_IsRefused()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
-        var role = Role.Create(
-            new RoleId(CalendarSeed.NewId()), seed.Tenant.Id, "No contacts",
-            [Permission.BookingReject, Permission.BookingCancel]);
-        var stranger = Operator.Create(new OperatorId(CalendarSeed.NewId()), seed.Tenant.Id, "Casey");
-        stranger.Grant(role);
+        var strangerSubject = $"kc-{CalendarSeed.NewId():N}";
+        var strangerId = OperatorId.FromExternalSubjectId(strangerSubject);
+        string[] strangerPermissions = [Permission.BookingReject.Value, Permission.BookingCancel.Value];
 
         await using (var db = fixture.CreateDbContext())
         {
-            db.Roles.Add(role);
-            db.Operators.Add(stranger);
+            var projections = new RoleAssignmentProjectionStore(db);
+            await projections.StageAsync(
+                strangerId, seed.Tenant.Id, strangerSubject, strangerPermissions, CalendarSeed.Now, CancellationToken.None);
             await db.SaveChangesAsync();
         }
 
         await using var reader = fixture.CreateDbContext();
         var result = await new GetTenantContactsHandler(
-                new ContactsReadStore(fixture.DataSource), new PermissionChecker(reader))
-            .HandleAsync(new GetTenantContacts(stranger.Id, seed.Tenant.Id), CancellationToken.None);
+                new ContactsReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(reader)))
+            .HandleAsync(new GetTenantContacts(strangerId, seed.Tenant.Id), CancellationToken.None);
 
         Assert.True(result.IsFailure);
         Assert.Equal("contacts.forbidden", result.Error!.Value.Code);
@@ -98,7 +97,7 @@ public class ContactsReportTests(PostgresFixture fixture)
         var seed = await CalendarSeed.WriteAsync(fixture);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/console/contacts");
-        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.Operator.ExternalSubjectId);
+        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.ExternalSubjectId);
 
         var response = await client.SendAsync(request);
 

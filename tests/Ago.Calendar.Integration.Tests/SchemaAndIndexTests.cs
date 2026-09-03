@@ -123,13 +123,6 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         var rule = WorkingHoursRule.For(
             new WorkingHoursRuleId(CalendarSeed.NewId()), seed.Worker, seed.Calendar,
             DayOfWeek.Tuesday, new TimeOnly(9, 30), new TimeOnly(18, 0));
-        // `20-06`: the seed now writes the v1 role itself, and `ux_roles_tenant_name` means one
-        // tenant cannot hold two roles called "Operator" - so this test grants the seeded role rather
-        // than a second copy of it. The mapping it round-trips is unchanged.
-        var role = seed.Role;
-        var @operator = Operator.Create(
-            new OperatorId(CalendarSeed.NewId()), seed.Tenant.Id, "Anna", "keycloak-subject-1");
-        @operator.Grant(role);
 
         // `20-14`: a cycle schedule, chosen over a weekly one here specifically because it is the
         // half of the mapping with the most columns (five nullable ones) to round-trip.
@@ -143,7 +136,6 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         await using (var db = fixture.CreateDbContext())
         {
             db.WorkingHoursRules.Add(rule);
-            db.Operators.Add(@operator);
             db.WorkerSchedules.Add(schedule);
             await db.SaveChangesAsync();
         }
@@ -175,15 +167,13 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         Assert.Equal(10, storedSchedule.BufferMinutes);
         Assert.Equal(60, storedSchedule.HorizonDays);
 
-        // text[] round-trips through the value converter, and the operator's roles come back with it.
-        var storedOperator = await new OperatorRepository(reader)
-            .FindByExternalSubjectIdAsync("keycloak-subject-1", CancellationToken.None);
-        Assert.Equal(@operator.Id, storedOperator!.Id);
-        Assert.Equal(role.Id, Assert.Single(storedOperator.Roles).RoleId);
-
-        var storedRole = await reader.Roles.FirstAsync(r => r.Id == role.Id);
-        Assert.Contains(Permission.BookingConfirm, storedRole.Permissions);
-        Assert.Equal(Role.OperatorPermissions.Count, storedRole.Permissions.Count);
+        // `22-05`/`adr/0093`: the seed's own projection row - a plain `text[]`, not the value
+        // converter the removed `roles.permissions` column used to need, and CalendarSeed's own
+        // remarks explain why it grants the whole v1 catalogue.
+        var storedPermissions = await new RoleAssignmentProjectionStore(reader)
+            .GetPermissionsAsync(seed.OperatorId, seed.Tenant.Id, CancellationToken.None);
+        Assert.Contains(Permission.BookingConfirm.Value, storedPermissions);
+        Assert.Equal(7, storedPermissions.Count);
 
         // The worker's own two joins come back loaded, which is what makes WorksIn/Offers safe to
         // ask after a load.

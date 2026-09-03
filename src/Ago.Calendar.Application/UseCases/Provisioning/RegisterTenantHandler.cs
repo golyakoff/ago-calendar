@@ -6,15 +6,26 @@ namespace Ago.Calendar.Application.UseCases.Provisioning;
 
 /// <param name="PublicKey">Chosen by whoever provisions the tenant, not generated - see
 /// <see cref="TenantPublicKey"/>.</param>
-/// <param name="ExternalSubjectId">The Keycloak <c>sub</c> the first operator signs in as. Supplied,
-/// never invented: this product does not talk to Keycloak's admin API, and adr/0022's own consequence
-/// section says the realm is provisioned by import so the id is deterministic.</param>
+/// <param name="ExternalSubjectId">The Keycloak <c>sub</c> the first operator signs in as, when it is
+/// already known - true for dev/test seeding, where the realm is provisioned by import so the id is
+/// deterministic. <see langword="null"/> for a real tenant (`ago-root#363`), whose owner has not
+/// signed in yet: exactly one of this and <see cref="OwnerEmail"/> must be supplied.</param>
+/// <param name="OwnerEmail">`ago-root#363`/adr/0088: the account owner's real address, for a
+/// provisioning caller that does not know their Keycloak <c>sub</c> in advance - the normal case for
+/// a real client. Reuses adr/0088's own invite-by-email mechanism one caller earlier than that ADR
+/// itself needed it: the operator row is created invited (<see cref="Operator.InvitedEmail"/> set,
+/// <see cref="Operator.ExternalSubjectId"/> null), and <c>OperatorIdentityClaimsTransformation</c>'s
+/// existing email fallback links it on the owner's first sign-in, exactly as it already does for a
+/// colleague <c>InviteOperatorHandler</c> invites. No second linking mechanism, no Keycloak admin
+/// call - see this item's own report for why that was the deciding argument over a service-account
+/// shape.</param>
 public readonly record struct RegisterTenant(
     string Name,
     string PublicKey,
     string OperatorDisplayName,
-    string ExternalSubjectId,
-    IReadOnlyList<string> AllowedOrigins);
+    string? ExternalSubjectId,
+    IReadOnlyList<string> AllowedOrigins,
+    string? OwnerEmail = null);
 
 /// <summary>
 /// Creates a tenant, the v1 <see cref="Role.OperatorRoleName"/> role and its first operator, in one
@@ -40,6 +51,23 @@ public sealed class RegisterTenantHandler(
     public async Task<Result<RegisteredTenant>> HandleAsync(
         RegisterTenant command, CancellationToken cancellationToken)
     {
+        // `ago-root#363`: the two ways this handler now learns who the account owner is are mutually
+        // exclusive by construction, not by convention - Operator.Create would happily accept both or
+        // neither (its own remarks say so explicitly), so the refusal has to live here, before either
+        // branch runs, or a caller passing both would silently get whichever branch the code happened
+        // to check first.
+        var hasSubject = !string.IsNullOrWhiteSpace(command.ExternalSubjectId);
+        var hasOwnerEmail = !string.IsNullOrWhiteSpace(command.OwnerEmail);
+        if (hasSubject == hasOwnerEmail)
+        {
+            return new Error(
+                "provisioning.invalid",
+                "Exactly one of ExternalSubjectId or OwnerEmail must be supplied - the former for a "
+                + "subject already known (dev/test seeding), the latter for a real tenant whose owner "
+                + "signs in later and links by email (adr/0088's mechanism, reused for the account "
+                + "owner).");
+        }
+
         var now = clock.UtcNow;
 
         Tenant tenant;
@@ -60,12 +88,25 @@ public sealed class RegisterTenantHandler(
             // codebase that passes isAccountOwner: true, matching Operator.IsAccountOwner's own
             // remarks on why that is a fact about how the row came to exist, not a state anything
             // else should set.
-            @operator = Operator.Create(
-                new OperatorId(idGenerator.NewId(now)),
-                tenant.Id,
-                command.OperatorDisplayName,
-                command.ExternalSubjectId,
-                isAccountOwner: true);
+            //
+            // `ago-root#363`: when only OwnerEmail is known, the owner is created exactly the way
+            // InviteOperatorHandler creates a colleague - invited, unlinked - so the same claims-
+            // transformation fallback that links a colleague on their first sign-in links the owner
+            // too. Nothing downstream needs to know which path provisioned this row.
+            @operator = hasSubject
+                ? Operator.Create(
+                    new OperatorId(idGenerator.NewId(now)),
+                    tenant.Id,
+                    command.OperatorDisplayName,
+                    command.ExternalSubjectId,
+                    isAccountOwner: true)
+                : Operator.Create(
+                    new OperatorId(idGenerator.NewId(now)),
+                    tenant.Id,
+                    command.OperatorDisplayName,
+                    externalSubjectId: null,
+                    isAccountOwner: true,
+                    invitedEmail: new InvitedEmail(command.OwnerEmail!));
 
             // Takes the whole Role, not a RoleId: an id cannot answer "does this role belong to my
             // tenant", so the check would have to move to this caller - which is exactly what

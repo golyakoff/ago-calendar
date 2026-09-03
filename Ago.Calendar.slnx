@@ -9,6 +9,7 @@
     <Project Path="src/Ago.Calendar.Infrastructure.Time/Ago.Calendar.Infrastructure.Time.csproj" />
     <Project Path="src/Ago.Calendar.Migrator/Ago.Calendar.Migrator.csproj" />
     <Project Path="src/Ago.Calendar.Module/Ago.Calendar.Module.csproj" />
+    <Project Path="src/Ago.Calendar.Provisioner/Ago.Calendar.Provisioner.csproj" />
     <Project Path="src/Ago.Calendar.Worker/Ago.Calendar.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">

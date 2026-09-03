@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <!-- `ago-root#363`: the one-shot admin path chosen over a public signup endpoint and over a
+       Keycloak-admin-API service account (see this item's own report for the argument). Same shape
+       as Ago.Calendar.Migrator on purpose - "no dependency-injection container at all... a process
+       [that] opens a connection, does one thing and stops" (MigratorRunner's own remarks) - except
+       what it does is RegisterTenantHandler's transaction rather than a schema migration, so it
+       references Application too, which Migrator deliberately does not. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
+    <ProjectReference Include="..\Ago.Calendar.Infrastructure.Postgres\Ago.Calendar.Infrastructure.Postgres.csproj" />
+  </ItemGroup>
+
+  <!-- SystemClock (IClock's real implementation) is the one piece this process needs that Kernel
+       does not already carry transitively through Application - see Program.cs's own remarks on why
+       a second IClock is not written here instead. Not Ago.Calendar.Module: that wires Redis and
+       validates options this process has no use for, the identical reason Migrator's own csproj
+       gives for staying off it. -->
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' != 'true'">
+    <PackageReference Include="Ago.Platform.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(AgoCalendarDevOverride)' == 'true'">
+    <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Hosting\Ago.Platform.Hosting.csproj" />
+  </ItemGroup>
+
+  <!-- Microsoft.NET.Sdk, not Microsoft.NET.Sdk.Web like Ago.Calendar.Api: this one serves nothing and
+       has no port - the whole point, restated in Program.cs and in this item's own report: an
+       anonymous caller on the public internet has no route to this process at all. -->
+
+</Project>

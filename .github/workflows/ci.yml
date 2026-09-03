@@ -139,12 +139,15 @@ jobs:
       # built by CI and one built locally come out of the same command. --build-context is the reason
       # BuildKit is required at all (the Ago.Platform.* feed is a folder outside the build context,
       # per the Dockerfile's header).
-      - name: Build the three host images
+      # `ago-root#363`: Ago.Calendar.Provisioner joins the loop below - it never listens on a port
+      # and is never routed to (see that project's own remarks), so publishing its image costs
+      # nothing this pipeline was not already paying for the other one-shot host, Migrator.
+      - name: Build the four host images
         env:
           DOCKER_BUILDKIT: "1"
         run: |
           set -euo pipefail
-          for project in Ago.Calendar.Api Ago.Calendar.Worker Ago.Calendar.Migrator; do
+          for project in Ago.Calendar.Api Ago.Calendar.Worker Ago.Calendar.Migrator Ago.Calendar.Provisioner; do
             name="ago-calendar-$(echo "${project#Ago.Calendar.}" | tr '[:upper:]' '[:lower:]')"
             repo="ghcr.io/${{ github.repository_owner }}/${name}"
             echo "::group::${repo}"
@@ -175,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          for project in Ago.Calendar.Api Ago.Calendar.Worker Ago.Calendar.Migrator; do
+          for project in Ago.Calendar.Api Ago.Calendar.Worker Ago.Calendar.Migrator Ago.Calendar.Provisioner; do
             name="ago-calendar-$(echo "${project#Ago.Calendar.}" | tr '[:upper:]' '[:lower:]')"
             repo="ghcr.io/${{ github.repository_owner }}/${name}"
             echo "::group::${repo}"
@@ -190,10 +193,10 @@ jobs:
             exit 1
           fi
 
-      - name: Push the three host images
+      - name: Push the four host images
         run: |
           set -euo pipefail
-          for n in api worker migrator; do
+          for n in api worker migrator provisioner; do
             repo="ghcr.io/${{ github.repository_owner }}/ago-calendar-${n}"
             docker push "${repo}:${{ github.sha }}"
             docker push "${repo}:main"
@@ -204,7 +207,7 @@ jobs:
           {
             echo "### Images published"
             echo
-            for n in api worker migrator; do
+            for n in api worker migrator provisioner; do
               echo "- \`ghcr.io/${{ github.repository_owner }}/ago-calendar-${n}:${{ github.sha }}\`"
             done
           } >> "$GITHUB_STEP_SUMMARY"

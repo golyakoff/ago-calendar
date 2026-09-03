@@ -43,9 +43,12 @@ dotnet build Ago.Calendar.slnx --no-restore -c Release
 dotnet test Ago.Calendar.slnx --no-build -c Release
 ```
 
-`nuget.config` restores `Ago.Platform.*` from the local file feed
-(`../ago-root/docs/runbooks/workspace.md`); pack `ago-platform` into it first if it is empty. CI
-uses `nuget.ci.config` and the real GitHub Packages feed instead (`../ago-root/docs/adr/0018-*`).
+`nuget.config` declares `nuget.org` only; `Ago.Platform.*` resolves through a workspace-level
+`NuGet.Config` one directory above every sibling checkout (`C:\git\ago\NuGet.Config`,
+`../ago-root/docs/runbooks/workspace.md`) that names the local file feed - pack `ago-platform` into
+it first if it is empty. CI uses `nuget.ci.config` and the real GitHub Packages feed instead
+(`../ago-root/docs/adr/0018-*`); so does Dependabot, via `dependabot.yml`'s own `registries:` block
+(`17-11`, `golyakoff/ago-root#396`).
 
 ## Database
 

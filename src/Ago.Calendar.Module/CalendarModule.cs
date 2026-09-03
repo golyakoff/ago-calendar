@@ -15,6 +15,7 @@ using Ago.Calendar.Application.UseCases.PublicBooking;
 using Ago.Calendar.Application.UseCases.RecutSchedule;
 using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Infrastructure.Postgres;
+using Ago.Calendar.Infrastructure.Postgres.Schema;
 using Ago.Calendar.Infrastructure.Redis;
 using Ago.Calendar.Infrastructure.Time;
 using Ago.Calendar.Module.PhoneVerification;
@@ -60,6 +61,16 @@ public sealed class CalendarModule : IProductModule
                 "docker-compose Postgres from local-dev.md.");
 
         services.AddCalendarPostgresPersistence(connectionString);
+
+        // `20-21`: bound here, alongside the connection string above, so that every host loading this
+        // module - Api and Worker alike - carries the option SchemaGuardHostExtensions reads. Both
+        // hosts call EnsureSchemaIsCurrentAsync in their own Program.cs; Ago.Calendar.Migrator does not
+        // load this module at all, and does not need this - it is the thing the guard waits for.
+        services
+            .AddOptions<SchemaGuardOptions>()
+            .Bind(configuration.GetSection(SchemaGuardOptions.SectionName))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
 
         // The single wall-clock-to-instant bridge (adr/0049). Registered for every host, not only
         // the Worker: the manual-edit handlers convert too, and they are the API's business.

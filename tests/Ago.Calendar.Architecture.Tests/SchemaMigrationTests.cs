@@ -3,17 +3,16 @@
 namespace Ago.Calendar.Architecture.Tests;
 
 /// <summary>
-/// `20-20`: only <c>Ago.Calendar.Migrator</c> may apply a schema migration, ported from
+/// `20-20`/`20-21` (`ago-root#339`): only <c>Ago.Calendar.Migrator</c> may apply a schema migration,
+/// and every serving host must run the guard - ported from
 /// <c>Ago.Chat.Architecture.Tests.SchemaMigrationTests</c> (`8-08`) - the same argument, the same
 /// mechanical enforcement, one product later.
 ///
-/// <para>Deliberately narrower than the file it is ported from: ago-chat's version also asserts
-/// <c>EveryServingHost_RunsTheSchemaGuard</c>, which requires a
-/// <c>SchemaGuardHostExtensions.EnsureSchemaIsCurrentAsync</c> call in every serving host. This
-/// repository has no such guard yet - `20-20`'s own brief says explicitly not to build one, since a
-/// host refusing to start against a stale schema is a second decision this build-and-migrate change
-/// should not smuggle in. That gap is real and is called out in this item's report, not hidden by
-/// pretending the guard exists.</para>
+/// <para>`20-20` left this file deliberately narrower than the one it is ported from, missing exactly
+/// <see cref="EveryServingHost_RunsTheSchemaGuard"/> - its own brief said explicitly not to build a
+/// guard yet, since a host refusing to start against a stale schema was a second decision that
+/// build-and-migrate change should not smuggle in. `20-21` is that second decision, made
+/// deliberately, and this file now matches the one it was ported from in full.</para>
 /// </summary>
 public class SchemaMigrationTests
 {
@@ -107,5 +106,31 @@ public class SchemaMigrationTests
         Assert.True(offenders.Count == 0,
             $"Ago.Calendar.Migrator references {string.Join(", ", offenders)} - adr/0056 confines it "
             + "to Ago.Calendar.Infrastructure.Postgres and below.");
+    }
+
+    /// <summary>
+    /// `20-21` (`ago-root#339`): every serving host must actually run the guard. The rules above stop
+    /// a host from *applying* a migration; this one stops the opposite failure - a host that neither
+    /// applies nor checks, which is the same quiet failure `8-08` closed for AGO Chat: a host rolled
+    /// forward against a database still on the previous migration does not crash, it runs, and fails
+    /// later on whichever column it happens to touch first.
+    ///
+    /// <para>A new host added later starts out failing this, which is the intended cost: a host that
+    /// serves traffic against Postgres has to say what it does about the schema.</para>
+    /// </summary>
+    [Fact]
+    public void EveryServingHost_RunsTheSchemaGuard()
+    {
+        foreach (var host in TestAssemblies.ServingHosts)
+        {
+            var callers = IlMemberScanner.FindCallers(
+                host.Cecil,
+                "Ago.Calendar.Infrastructure.Postgres.Schema.SchemaGuardHostExtensions",
+                "EnsureSchemaIsCurrentAsync");
+
+            Assert.True(callers.Count > 0,
+                $"{host.Name} never calls EnsureSchemaIsCurrentAsync - it would start and serve traffic "
+                + "against a schema older than the migrations it was compiled with (20-21).");
+        }
     }
 }

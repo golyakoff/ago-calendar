@@ -1,4 +1,5 @@
-﻿using Ago.Calendar.Module;
+﻿using Ago.Calendar.Infrastructure.Postgres.Schema;
+using Ago.Calendar.Module;
 using Ago.Calendar.Worker;
 using Ago.Platform.Hosting;
 
@@ -30,4 +31,13 @@ builder.Services
 builder.Services.AddHostedService<PendingBookingSweepJob>();
 
 var host = builder.Build();
+
+// `20-21`/`adr/0056`: the same guard Ago.Calendar.Api runs, in the same place - before anything can
+// run, and deliberately not as an IHostedService, for the identical ordering reason that host's own
+// Program.cs records. This host has no listening socket, but it does have AvailabilityMaterializationJob
+// and PendingBookingSweepJob, both registered as hosted services above and both about to run against
+// this database; a job racing a schema it does not match is the same "quiet until a query touches the
+// wrong column" failure as a request would be.
+await host.Services.EnsureSchemaIsCurrentAsync();
+
 host.Run();

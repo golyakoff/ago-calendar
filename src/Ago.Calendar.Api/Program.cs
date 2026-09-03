@@ -6,6 +6,7 @@ using Ago.Calendar.Api.Cors;
 using Ago.Calendar.Api.PhoneVerification;
 using Ago.Calendar.Api.Provisioning;
 using Ago.Calendar.Api.PublicBookingApi;
+using Ago.Calendar.Infrastructure.Postgres.Schema;
 using Ago.Calendar.Module;
 using Ago.Platform.Hosting;
 using Microsoft.AspNetCore.Cors.Infrastructure;
@@ -46,6 +47,15 @@ builder.Services.AddOptions<PublicBookingApiOptions>()
 builder.Services.AddSingleton(provider => provider.GetRequiredService<IOptions<PublicBookingApiOptions>>().Value);
 
 var app = builder.Build();
+
+// `20-21`/`adr/0056`: run before anything can listen, and deliberately not as an IHostedService -
+// GenericWebHostService opens the socket before any service registered after it, so a hosted service
+// that threw would do so with requests already arriving. A host whose database is behind the
+// migrations its own build carries refuses to start rather than serving 200s for pages whose queries
+// fail. It is also the whole of this system's deploy ordering once `#312` runs it for real: nothing
+// orchestrates "migrator Job first", the hosts simply do not come up until it has run. See
+// SchemaVersionGuard for why this beats an init container and where the expected version comes from.
+await app.Services.EnsureSchemaIsCurrentAsync();
 
 // Before authentication, and that ordering is load-bearing: a preflight is an unauthenticated
 // OPTIONS request that carries no token, so a CORS middleware sitting behind authentication would

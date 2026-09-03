@@ -1,6 +1,10 @@
 ﻿using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
@@ -29,6 +33,12 @@ namespace Ago.Calendar.Integration.Tests;
 [Collection(PostgresCollection.Name)]
 public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 {
+    /// <summary>`22-02`: this suite's own shared secret, matching what <see cref="ChatModuleApiFactory"/>
+    /// configures as <c>ChatModule:SharedSecret</c> - the same "the two sides are configured with the
+    /// identical string" manual pairing a real deployment's operator would do between this host and its
+    /// `ago-chat` registration (<c>Ago.Chat.Domain.ModuleCredential</c>'s own remarks).</summary>
+    private const string TestSharedSecret = "integration-test-shared-secret-of-sufficient-length";
+
     private ChatModuleApiFactory _factory = null!;
     private HttpClient _client = null!;
     private SeededTenant _seed = null!;
@@ -52,7 +62,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
             await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
         }
 
-        _factory = new ChatModuleApiFactory(fixture, _seed.Tenant.PublicKey.Value, _seed.Calendar.Id.Value);
+        _factory = new ChatModuleApiFactory(fixture, _seed.Tenant.PublicKey.Value, _seed.Calendar.Id.Value, TestSharedSecret);
         _client = _factory.CreateClient();
     }
 
@@ -65,9 +75,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task AFullWalkthrough_AllFiveSteps_EndsInACompleteConfirmation_WithARealBookedEvent()
     {
-        var startResponse = await _client.PostAsJsonAsync(
-            "/api/v1/module-tasks",
-            new ModuleTaskStartRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking"));
+        var startResponse = await StartAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking");
         Assert.Equal(HttpStatusCode.OK, startResponse.StatusCode);
 
         var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
@@ -115,9 +123,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
             await new EventRepository(db).AddRangeAsync([secondSlot], CancellationToken.None);
         }
 
-        var started = (await (await _client.PostAsJsonAsync(
-                "/api/v1/module-tasks",
-                new ModuleTaskStartRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking")))
+        var started = (await (await StartAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking"))
             .Content.ReadFromJsonAsync<ModuleTaskStartResponse>())!;
 
         var afterService = await ReplyAsync(
@@ -179,9 +185,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task APhoneStepReply_WithNoVerificationAssertion_NeverClaimsTheSlot()
     {
-        var started = (await (await _client.PostAsJsonAsync(
-                "/api/v1/module-tasks",
-                new ModuleTaskStartRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking")))
+        var started = (await (await StartAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking"))
             .Content.ReadFromJsonAsync<ModuleTaskStartResponse>())!;
 
         var afterService = await ReplyAsync(
@@ -207,9 +211,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task TheStartResponse_UsesExactCamelCaseFieldNamesOnTheWire()
     {
-        var response = await _client.PostAsJsonAsync(
-            "/api/v1/module-tasks",
-            new ModuleTaskStartRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking"));
+        var response = await StartAsync(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking");
 
         var body = await response.Content.ReadAsStringAsync();
         using var document = JsonDocument.Parse(body);
@@ -235,37 +237,141 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task AReplyForAnUnknownTask_Returns404()
     {
-        var response = await _client.PostAsJsonAsync(
-            $"/api/v1/module-tasks/{Guid.NewGuid()}/replies",
-            new ModuleTaskReplyRequest(Guid.NewGuid(), ModuleStepKinds.ChoiceList, Guid.NewGuid().ToString()));
+        var response = await PostReplyAsync(Guid.NewGuid().ToString(), ModuleStepKinds.ChoiceList, Guid.NewGuid().ToString());
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Contains("chat_module_task.not_found", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task TheEndpointsRequireNoAuthentication()
-    {
-        // Stated as a test because it is a deliberate, named gap rather than an omission - see
-        // ChatModuleTaskEndpoints's own remarks: no service-to-service auth exists in either
-        // direction yet.
-        Assert.DoesNotContain(_client.DefaultRequestHeaders, header => header.Key == "Authorization");
+    // ------------------------------------------------------------------------------------------
+    // `22-02`'s own three-directional security claim, over the real host, a real Postgres and a
+    // real signature check - not the fake gateway `RouteConversationToModuleHandlerTests` (in
+    // `ago-chat`) proves the *sending* half with. The distinguishable-401-vs-404 control this
+    // suite's own "unknown route" test provides is `AReplyForAnUnknownTask_Returns404` above (a
+    // known route, an unknown *resource*) plus `AnUnmappedSiblingRoute_Returns404` below (an
+    // unknown route entirely) - `20-24`'s own lesson about the two never being conflated.
+    // ------------------------------------------------------------------------------------------
 
-        var response = await _client.PostAsJsonAsync(
-            "/api/v1/module-tasks",
-            new ModuleTaskStartRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking"));
+    [Fact]
+    public async Task StartWithNoCredentialHeader_IsRefused()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/module-tasks")
+        {
+            Content = JsonContent.Create(new ModuleTaskStartRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "/booking")),
+        };
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task StartWithAWrongCredential_IsRefused()
+    {
+        var siteId = Guid.NewGuid();
+        var response = await StartAsync(
+            Guid.NewGuid(), siteId, Guid.NewGuid(), "/booking", MintCredentialHeader(siteId, "a-completely-different-secret-value"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    /// <summary>The sharpest claim: a credential that is genuinely valid - signed with this
+    /// deployment's own real secret - still cannot act for a site other than the one it names. This
+    /// is the property that stops a body's own <c>siteId</c> from becoming the tenant selector
+    /// `22-04` would otherwise hand the internet, the exact gap `docs/backlog/22-02-*` names.</summary>
+    [Fact]
+    public async Task StartWithACredentialForAnotherSite_IsRefused()
+    {
+        var credentialedSiteId = Guid.NewGuid();
+        var differentBodySiteId = Guid.NewGuid();
+
+        var response = await StartAsync(
+            Guid.NewGuid(), differentBodySiteId, Guid.NewGuid(), "/booking",
+            MintCredentialHeader(credentialedSiteId, TestSharedSecret));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task StartWithTheMatchingCredential_Succeeds()
+    {
+        var siteId = Guid.NewGuid();
+        var response = await StartAsync(Guid.NewGuid(), siteId, Guid.NewGuid(), "/booking", MintCredentialHeader(siteId, TestSharedSecret));
+
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AnUnmappedSiblingRoute_Returns404()
+    {
+        // `20-24`'s own lesson, restated as a control: a refusal that *looks like* a missing route
+        // makes 401 indistinguishable from "this was never mapped". This nonsense sibling path
+        // proves the real route is genuinely refused (401 above), not merely unreachable (404 here).
+        var response = await _client.GetAsync("/api/v1/module-tasks-nonexistent-sibling-route");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    private async Task<HttpResponseMessage> StartAsync(
+        Guid chatTaskId, Guid siteId, Guid conversationId, string triggerText, string? credentialHeader = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/module-tasks")
+        {
+            Content = JsonContent.Create(new ModuleTaskStartRequest(chatTaskId, siteId, conversationId, triggerText)),
+        };
+        request.Headers.Add("X-Ago-Module-Credential", credentialHeader ?? MintCredentialHeader(siteId, TestSharedSecret));
+        // Awaited here, not returned as a bare Task - `request` is disposed by this method's own
+        // `using` the moment it returns, and disposing it before SendAsync has finished reading its
+        // content throws ObjectDisposedException from inside the TestServer pipeline (found by this
+        // item's own fails-before run, not by inspection).
+        return await _client.SendAsync(request);
     }
 
     private async Task<ModuleTaskReplyResponse> ReplyAsync(
         string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null)
     {
-        var response = await _client.PostAsJsonAsync(
-            $"/api/v1/module-tasks/{externalTaskId}/replies",
-            new ModuleTaskReplyRequest(Guid.NewGuid(), kind, value, phoneVerifiedAt));
+        var response = await PostReplyAsync(externalTaskId, kind, value, phoneVerifiedAt);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return (await response.Content.ReadFromJsonAsync<ModuleTaskReplyResponse>())!;
     }
+
+    private async Task<HttpResponseMessage> PostReplyAsync(
+        string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/module-tasks/{externalTaskId}/replies")
+        {
+            Content = JsonContent.Create(new ModuleTaskReplyRequest(Guid.NewGuid(), kind, value, phoneVerifiedAt)),
+        };
+        // The reply route never cross-checks a site id (ChatModuleTaskEndpoints's own remarks), so
+        // any site claim in a genuinely valid credential authenticates every reply in this suite.
+        request.Headers.Add("X-Ago-Module-Credential", MintCredentialHeader(Guid.NewGuid(), TestSharedSecret));
+        return await _client.SendAsync(request);
+    }
+
+    /// <summary>`22-02`: this suite's own independent re-derivation of the wire format
+    /// <c>HmacModuleCallCredentialValidator</c> checks - written from the contract's own description
+    /// (see that class's remarks), not by calling production code, so this test would catch the
+    /// validator disagreeing with its own documented contract rather than merely agreeing with
+    /// itself.</summary>
+    private static string MintCredentialHeader(Guid siteId, string secret, TimeSpan? expiresIn = null)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var exp = now.Add(expiresIn ?? TimeSpan.FromSeconds(60));
+        var payloadJson = JsonSerializer.Serialize(
+            new TestPayload(siteId, now.ToUnixTimeSeconds(), exp.ToUnixTimeSeconds()),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        var encodedPayload = Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson));
+        var signature = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(encodedPayload));
+        return $"{encodedPayload}.{Base64UrlEncode(signature)}";
+    }
+
+    private static string Base64UrlEncode(byte[] bytes) =>
+        Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private sealed record TestPayload(
+        [property: JsonPropertyName("siteId")] Guid SiteId,
+        [property: JsonPropertyName("iat")] long Iat,
+        [property: JsonPropertyName("exp")] long Exp);
 }
 
 /// <summary>
@@ -273,7 +379,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
 /// tenant and calendar - the static-wiring config this item's own backlog entry names, supplied per
 /// test the same way <c>BookingApiFactory</c> supplies a tuned rate limit.
 /// </summary>
-internal sealed class ChatModuleApiFactory(PostgresFixture fixture, string tenantPublicKey, Guid calendarId)
+internal sealed class ChatModuleApiFactory(PostgresFixture fixture, string tenantPublicKey, Guid calendarId, string sharedSecret)
     : CalendarApiFactory(fixture)
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -282,5 +388,10 @@ internal sealed class ChatModuleApiFactory(PostgresFixture fixture, string tenan
 
         builder.UseSetting("ChatModule:TenantPublicKey", tenantPublicKey);
         builder.UseSetting("ChatModule:CalendarId", calendarId.ToString());
+
+        // `22-02`: the matching half of ChatModuleTaskEndpointTests's own TestSharedSecret -
+        // RequireCredential is left at its own default (true), matching what this host actually
+        // ships with.
+        builder.UseSetting("ChatModule:SharedSecret", sharedSecret);
     }
 }

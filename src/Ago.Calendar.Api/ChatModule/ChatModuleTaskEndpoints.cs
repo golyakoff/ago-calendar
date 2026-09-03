@@ -1,6 +1,8 @@
 ﻿using Ago.Calendar.Api.Http;
+using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.UseCases.ChatModuleTask;
 using Ago.Calendar.Contracts;
+using Ago.Platform.Kernel;
 
 namespace Ago.Calendar.Api.ChatModule;
 
@@ -17,10 +19,21 @@ namespace Ago.Calendar.Api.ChatModule;
 /// directly, and since CORS is a browser-side reading restriction rather than an authorization
 /// mechanism (api-design.md), that would not let a page read a cross-origin response anyway - so
 /// leaving them outside the tenant-origin policy costs nothing and adding one would answer a question
-/// nobody is asking. What is genuinely missing, and named here rather than solved: <b>no
-/// service-to-service authentication exists in either direction yet</b>. Neither this repository nor
-/// `ago-chat` has a precedent for one, and inventing an ad hoc scheme for this item alone was
-/// explicitly out of scope - see this item's own report.</para>
+/// nobody is asking.</para>
+///
+/// <para><b>`22-02`: every request now carries a signed <c>X-Ago-Module-Credential</c> header</b>,
+/// checked by <see cref="IModuleCallCredentialValidator"/> before either handler ever runs - the gap
+/// this class's own remarks used to name as genuinely missing. A missing-or-wrong credential is refused
+/// with <c>401</c> (still not ASP.NET Core's own authentication pipeline - <c>AllowAnonymous()</c>
+/// below is accurate: there is no cookie or bearer-JWT user identity here, only this route's own
+/// hand-rolled service-to-service check). <see cref="HandleStartAsync"/> additionally cross-checks the
+/// credential's own site id against <see cref="ModuleTaskStartRequest.SiteId"/> - the exact value
+/// `docs/backlog/22-02-*` named as "the moment `22-04` makes resolution per-site, the body becomes the
+/// tenant selector." <see cref="HandleReplyAsync"/> only authenticates the caller; it does not (yet)
+/// cross-check the credential's site id against the task being replied to, because
+/// <c>Domain.ChatBookingTask</c> carries no site id of its own to check it against - this deployment's
+/// single pinned tenant (<see cref="ChatModuleTaskOptions"/>) is what a reply implicitly acts on today,
+/// and giving that task a real per-site identity is `22-04`'s job, not this item's.</para>
 ///
 /// <para><b>200, not 201, on the <c>POST</c> that starts a task.</b> api-design.md's default is
 /// <c>201</c> with a <c>Location</c> for a creating <c>POST</c>. This route deviates on purpose, the
@@ -44,15 +57,35 @@ public static class ChatModuleTaskEndpoints
         return app;
     }
 
+    private const string CredentialHeaderName = "X-Ago-Module-Credential";
+
     private static async Task<IResult> HandleStartAsync(
         ModuleTaskStartRequest request,
         StartModuleTaskHandler handler,
+        IModuleCallCredentialValidator credentialValidator,
+        IClock clock,
         HttpContext httpContext,
         CancellationToken cancellationToken)
     {
         if (request is null)
         {
             return Results.BadRequest();
+        }
+
+        var auth = credentialValidator.Validate(httpContext.Request.Headers[CredentialHeaderName], clock.UtcNow);
+        if (!auth.IsAuthenticated)
+        {
+            return Results.Unauthorized();
+        }
+
+        // The one place this item's own Done-when bites: a credential valid for one site cannot name
+        // another in the body. `auth.SiteId` is only ever null in the accepting-but-warning rollout
+        // window (no header sent, not yet required) - see IModuleCallCredentialValidator's own remarks -
+        // in which case there is nothing to check yet and this call is let through exactly as it was
+        // before this item.
+        if (auth.SiteId is { } authenticatedSiteId && authenticatedSiteId != request.SiteId)
+        {
+            return Results.Unauthorized();
         }
 
         var result = await handler.HandleAsync(
@@ -73,12 +106,22 @@ public static class ChatModuleTaskEndpoints
         string externalTaskId,
         ModuleTaskReplyRequest request,
         ReplyToModuleTaskHandler handler,
+        IModuleCallCredentialValidator credentialValidator,
+        IClock clock,
         HttpContext httpContext,
         CancellationToken cancellationToken)
     {
         if (request is null)
         {
             return Results.BadRequest();
+        }
+
+        // Authentication only, deliberately not a site cross-check - see this class's own remarks on
+        // why ChatBookingTask has no site id of its own to check yet.
+        var auth = credentialValidator.Validate(httpContext.Request.Headers[CredentialHeaderName], clock.UtcNow);
+        if (!auth.IsAuthenticated)
+        {
+            return Results.Unauthorized();
         }
 
         var result = await handler.HandleAsync(

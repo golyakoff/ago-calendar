@@ -160,6 +160,16 @@ public sealed class CalendarModule : IProductModule
             .ValidateOnStart();
         services.AddSingleton(provider => provider.GetRequiredService<IOptions<ChatModuleTaskOptions>>().Value);
 
+        // `22-02`: the same `ChatModule:*` section as ChatModuleTaskOptions above - see
+        // ModuleCallCredentialOptions's own remarks. Bound the same way, for the same reason: an
+        // unconfigured secret disables the feature (every credential is refused) rather than stopping
+        // this host from booting, matching ChatModuleTaskOptions's own no-hard-validation call.
+        services.AddOptions<ModuleCallCredentialOptions>()
+            .Bind(configuration.GetSection(ModuleCallCredentialOptions.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton(provider => provider.GetRequiredService<IOptions<ModuleCallCredentialOptions>>().Value);
+        services.AddSingleton<IModuleCallCredentialValidator, HmacModuleCallCredentialValidator>();
+
         services.AddScoped<StartModuleTaskHandler>();
         services.AddScoped<ReplyToModuleTaskHandler>();
 

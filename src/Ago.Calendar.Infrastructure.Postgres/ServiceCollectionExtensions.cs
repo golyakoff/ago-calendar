@@ -1,5 +1,6 @@
 ﻿using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Infrastructure.Postgres.Persistence;
+using Ago.Calendar.Infrastructure.Postgres.Schema;
 using Ago.Platform.Persistence.Postgres;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -23,6 +24,13 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services, string connectionString)
     {
         services.AddDbContext<AgoCalendarDbContext>(options => options.UseNpgsql(connectionString));
+
+        // `20-21`: the read half every serving host needs to run SchemaVersionGuard - the apply half
+        // (SchemaMigrationApplier) is deliberately not registered here, the same way `8-08` keeps it
+        // out of Ago.Chat's own DI graph: only Ago.Calendar.Migrator constructs it, by hand, and
+        // SchemaMigrationTests is what makes "no host may apply a migration" a fact rather than a
+        // convention.
+        services.AddScoped<SchemaVersionCheck>();
 
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IOperatorRepository, OperatorRepository>();

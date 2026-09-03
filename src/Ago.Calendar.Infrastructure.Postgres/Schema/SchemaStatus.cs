@@ -31,10 +31,10 @@ public sealed record SchemaStatus(
     /// <para><b>Reported, never fatal</b> - the same third open question `adr/0056` answers for
     /// AGO Chat. A pod rolled back to an older image against a newer schema is the expand/contract
     /// window that ADR adopts on purpose: the old code selects columns that still exist, because an
-    /// expand migration only added. This type has no host-side guard consuming it yet (`20-20`
-    /// deliberately does not build one - see that item's report), so today nothing reads this field at
-    /// runtime; it exists because <see cref="SchemaVersionCheck"/> is the one place "ahead" can be
-    /// computed at all, and a future guard should not have to re-derive it.</para>
+    /// expand migration only added. `20-20` left this field unread at runtime - it existed only
+    /// because <see cref="SchemaVersionCheck"/> is the one place "ahead" can be computed at all.
+    /// `20-21`'s <see cref="SchemaVersionGuard"/> is the consumer that was missing: it logs this list
+    /// rather than refusing on it, for the identical rollback-safety reason.</para>
     /// </summary>
     public IReadOnlyList<string> AheadOfThisBuild =>
         [.. Applied.Where(id => !Known.Contains(id))];

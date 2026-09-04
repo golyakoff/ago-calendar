@@ -11,6 +11,17 @@
     <PackageReference Include="Ago.Platform.Abstractions" />
   </ItemGroup>
 
+  <!--
+    `22-17`: RegisterChatModuleHandler's own audit line for tenant auto-provisioning - the identical
+    dependency-free logging abstraction `ago-chat`'s own Ago.Chat.Application already references for
+    the same reason (e.g. DeleteAttachmentHandler). Not hand-rolled: this is the one cross-cutting
+    logging port .NET itself defines, adding no concrete framework dependency and nothing this
+    project would otherwise have to invent.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(AgoCalendarDevOverride)' == 'true'">
     <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Kernel\Ago.Platform.Kernel.csproj" />
     <ProjectReference Include="..\..\..\ago-platform\src\Ago.Platform.Abstractions\Ago.Platform.Abstractions.csproj" />

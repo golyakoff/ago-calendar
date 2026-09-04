@@ -41,22 +41,22 @@
          **Not optional maintenance.** `redeploy.sh` packs only the current platform version into the
          node's local feed and the Docker build resolves `Ago.Platform.*` from that feed alone, so a
          consumer left on an older pin cannot be built on the node at all. -->
-    <PackageVersion Include="Ago.Platform.Kernel" Version="0.19.0" />
-    <PackageVersion Include="Ago.Platform.Abstractions" Version="0.19.0" />
-    <PackageVersion Include="Ago.Platform.Persistence.Postgres" Version="0.19.0" />
-    <PackageVersion Include="Ago.Platform.Hosting" Version="0.19.0" />
+    <PackageVersion Include="Ago.Platform.Kernel" Version="0.20.0" />
+    <PackageVersion Include="Ago.Platform.Abstractions" Version="0.20.0" />
+    <PackageVersion Include="Ago.Platform.Persistence.Postgres" Version="0.20.0" />
+    <PackageVersion Include="Ago.Platform.Hosting" Version="0.20.0" />
     <!-- `20-03`: IRateLimiter's own adapter. The booking endpoint is unauthenticated and creates
          rows on request from the public internet, so it needs a real distributed limiter, not a
          per-process one - two Api replicas sharing one bucket is the whole point.
          Ago.Platform.Resilience arrives with it because RedisRateLimiter takes a Polly pipeline the
          caller builds; see Ago.Calendar.Infrastructure.Redis for why this repository wires those
          pieces itself instead of calling AddRedisCaching. -->
-    <PackageVersion Include="Ago.Platform.Caching.Redis" Version="0.19.0" />
-    <PackageVersion Include="Ago.Platform.Resilience" Version="0.19.0" />
+    <PackageVersion Include="Ago.Platform.Caching.Redis" Version="0.20.0" />
+    <PackageVersion Include="Ago.Platform.Resilience" Version="0.20.0" />
     <!-- `22-05`/`adr/0093`: RoleAssignmentsChangedConsumer's own adapter - this product's first
          broker connection, consuming a topic `ago-chat` publishes rather than one this product
          produces. Same pinned version as every other Ago.Platform.* package here. -->
-    <PackageVersion Include="Ago.Platform.Messaging.RabbitMq" Version="0.19.0" />
+    <PackageVersion Include="Ago.Platform.Messaging.RabbitMq" Version="0.20.0" />
   </ItemGroup>
 
   <ItemGroup Label="Hosting">

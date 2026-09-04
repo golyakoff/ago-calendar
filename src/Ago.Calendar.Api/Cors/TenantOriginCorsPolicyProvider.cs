@@ -1,4 +1,5 @@
-﻿using Ago.Calendar.Application.UseCases.Cors;
+﻿using Ago.Calendar.Api.Auth;
+using Ago.Calendar.Application.UseCases.Cors;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 
 namespace Ago.Calendar.Api.Cors;
@@ -54,10 +55,15 @@ public sealed class TenantOriginCorsPolicyProvider(
             return new CorsPolicyBuilder()
                 .WithOrigins(origin)
                 .WithMethods("GET", "POST", "PUT", "OPTIONS")
-                // The console sends adr/0022's bearer token. Note what is still absent:
-                // AllowCredentials, because a bearer header is not a credential in CORS's sense and
-                // nothing here uses a cookie - so the browser never attaches ambient authority.
-                .WithHeaders("Content-Type", "Authorization")
+                // The console sends adr/0022's bearer token and, since `22-14`/`adr/0100`, the
+                // tenant it chose. A custom request header is not on the CORS safelist, so a browser
+                // will not send it at all unless the preflight names it - and this deployment really
+                // is cross-origin (`console.reserve-me.ru` against `calendar-api.reserve-me.ru`), so
+                // omitting it would have left the switcher working in every test and in no browser.
+                // Note what is still absent: AllowCredentials, because a bearer header is not a
+                // credential in CORS's sense and nothing here uses a cookie - so the browser never
+                // attaches ambient authority.
+                .WithHeaders("Content-Type", "Authorization", OperatorIdentityClaimsTransformation.ActiveSiteHeaderName)
                 .SetPreflightMaxAge(PreflightMaxAge)
                 .Build();
         }

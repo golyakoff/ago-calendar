@@ -29,16 +29,35 @@ public interface IRoleAssignmentProjectionStore
         OperatorId operatorId, TenantId tenantId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Which tenant this operator id resolves to - <c>OperatorIdentityClaimsTransformation</c>'s own
-    /// question, now that there is no local <c>operators</c> row to read a <c>TenantId</c> column off
-    /// of. <see langword="null"/> both when this subject projects to no tenant at all and when it
-    /// projects to more than one - the latter is a real, newly-possible shape this item's own report
-    /// names (a person can now hold `calendar:configure` on two different accounts, something the old
-    /// one-operator-row-per-subject model could not represent), and resolving it by guessing which one
-    /// the caller meant would be exactly the cleverness `adr/0088`'s own ambiguous-email refusal already
-    /// rejected once for a different ambiguity.
+    /// Which tenant this request acts in - <c>OperatorIdentityClaimsTransformation</c>'s own question,
+    /// now that there is no local <c>operators</c> row to read a <c>TenantId</c> column off of.
+    ///
+    /// <para><b>`22-14`/`adr/0100`: <paramref name="requestedTenantId"/> is the caller's own choice,
+    /// and this method is the only thing that makes it safe.</b> Before this item the signature took
+    /// an operator id alone and answered <see langword="null"/> whenever the projection named more
+    /// than one tenant - honest, but it meant a person granted calendar permissions on two accounts
+    /// got no <c>tenant_id</c> claim, so <c>CalendarClaims.OperatorPolicy</c> refused them and every
+    /// calendar screen was simply absent. `22-14` let the console name the tenant instead
+    /// (<c>X-Ago-Active-Site</c>, `adr/0068`'s existing header, the same id).</para>
+    ///
+    /// <list type="bullet">
+    /// <item><b>Requested, and this operator holds a projection row in it</b> -&gt; that tenant. The
+    /// row's existence <i>is</i> the authorization: the implementation's <c>WHERE</c> clause carries
+    /// both the operator id and the requested tenant id, so there is no separate check a later
+    /// refactor can drop and no window between "verified" and "used".</item>
+    /// <item><b>Requested, and this operator holds nothing in it</b> -&gt; <see langword="null"/>,
+    /// <b>never a fallback to one of their real tenancies.</b> A caller-supplied value may only ever
+    /// <i>select among</i> rows the query itself proved belong to this operator; falling back would
+    /// answer "you asked for A, here is B", which is worse than refusing.</item>
+    /// <item><b>Not requested, exactly one row</b> -&gt; that tenant. Byte-for-byte the pre-`22-14`
+    /// answer, which is what keeps the one-tenant operator unaffected.</item>
+    /// <item><b>Not requested, zero or several rows</b> -&gt; <see langword="null"/>. Unchanged, and
+    /// still the refusal `adr/0088`'s ambiguous-email case established: guessing which of two tenants
+    /// a request meant is exactly the cleverness this product has already rejected once.</item>
+    /// </list>
     /// </summary>
-    Task<TenantId?> FindTenantIdAsync(OperatorId operatorId, CancellationToken cancellationToken);
+    Task<TenantId?> ResolveTenantAsync(
+        OperatorId operatorId, TenantId? requestedTenantId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Stages the projection row this operator+tenant pair should now read as - a full replace, not a

@@ -83,6 +83,12 @@ public class TenantOriginCorsPolicyProviderTests(PostgresFixture fixture)
 
         Assert.NotNull(policy);
         Assert.Contains("Authorization", policy.Headers);
+
+        // `22-14`/`adr/0100`: a custom request header a preflight does not name is a header the
+        // browser refuses to send, so this line is the difference between the tenant switcher working
+        // and every calendar call failing with a CORS error that names nothing.
+        Assert.Contains(
+            Ago.Calendar.Api.Auth.OperatorIdentityClaimsTransformation.ActiveSiteHeaderName, policy.Headers);
     }
 
     [Fact]
@@ -96,6 +102,11 @@ public class TenantOriginCorsPolicyProviderTests(PostgresFixture fixture)
 
         Assert.NotNull(policy);
         Assert.DoesNotContain("Authorization", policy.Headers);
+
+        // And it cannot name a tenant either: the public policy carries neither header, so a tenant
+        // that listed the console's origin gains no way to send `22-14`'s active-tenant signal.
+        Assert.DoesNotContain(
+            Ago.Calendar.Api.Auth.OperatorIdentityClaimsTransformation.ActiveSiteHeaderName, policy.Headers);
     }
 
     /// <summary>

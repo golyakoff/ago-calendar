@@ -74,6 +74,11 @@ public static class ServiceCollectionExtensions
         // connection pool for a second read store.
         services.AddScoped<IContactsReadStore, ContactsReadStore>();
 
+        // `22-14`/`adr/0100`: "which tenants may I act in here" - the switcher's own read, and the one
+        // operator-reachable query in this product that takes no TenantId. Same shared data source
+        // again, same reason.
+        services.AddScoped<ITenancyReadStore, TenancyReadStore>();
+
         // `20-15`: the materialised slot view's own read side - the same shared NpgsqlDataSource
         // singleton, for the identical reason ContactsReadStore's own remark gives.
         services.AddScoped<IWorkerSlotReadStore, WorkerSlotReadStore>();

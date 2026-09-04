@@ -278,3 +278,19 @@ public sealed record RecutConfirmResponse(
 public sealed record RegisterTenantRequest(string Name, string PublicKey, IReadOnlyList<string>? AllowedOrigins);
 
 public sealed record RegisterTenantResponse(Guid TenantId, string PublicKey);
+
+/// <summary>
+/// `23-23`: one entry per calendar the tenant has created, plus the placeholder entry
+/// <c>GetBookingReadinessHandler</c> returns for a tenant with none - <see cref="CalendarId"/> is
+/// null exactly then, the only null this field ever carries.
+/// </summary>
+public sealed record CalendarReadinessResponse(
+    Guid? CalendarId,
+    string? CalendarName,
+    bool IsBookable,
+    IReadOnlyList<PreconditionStateResponse> Preconditions);
+
+/// <param name="Precondition">The domain enum's wire name verbatim - <c>"CalendarPublished"</c>,
+/// <c>"WorkerOnCalendar"</c>, <c>"ServiceOffered"</c>, <c>"WorkingHoursConfigured"</c>,
+/// <c>"ScheduleSaved"</c> or <c>"SlotsMaterialized"</c>, in that stable order.</param>
+public sealed record PreconditionStateResponse(string Precondition, bool IsMet);

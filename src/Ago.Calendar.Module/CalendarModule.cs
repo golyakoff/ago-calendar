@@ -188,6 +188,7 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<Application.UseCases.ChatModuleRegistration.GetChatModuleRegistrationStatusHandler>();
 
         services.AddScoped<GetTenantConfigurationHandler>();
+        services.AddScoped<GetBookingReadinessHandler>();
         services.AddScoped<CreateCalendarHandler>();
         services.AddScoped<UpdateCalendarHandler>();
         services.AddScoped<CreateServiceHandler>();

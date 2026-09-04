@@ -83,6 +83,10 @@ public static class ServiceCollectionExtensions
         // singleton, for the identical reason ContactsReadStore's own remark gives.
         services.AddScoped<IWorkerSlotReadStore, WorkerSlotReadStore>();
 
+        // `23-23`: "can this tenant take a booking right now, and if not, which precondition is
+        // unmet" - the same shared NpgsqlDataSource singleton again, for the identical reason.
+        services.AddScoped<IBookingReadinessReadStore, BookingReadinessReadStore>();
+
         // `20-06`: the public booking surface's own read side, and the multi-aggregate provisioning
         // write ITenantRepository's remarks predicted would be the first use case to need one.
         services.AddScoped<IBookingSurfaceReadStore, BookingSurfaceReadStore>();

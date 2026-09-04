@@ -49,6 +49,11 @@ public static class ConsoleEndpoints
         group.MapGet("/configuration", HandleGetConfigurationAsync).WithName("GetTenantConfiguration");
         group.MapPut("/configuration/allowed-origins", HandleSetAllowedOriginsAsync).WithName("SetAllowedOrigins");
 
+        // `23-23`: "can this tenant take a booking right now, and if not, which precondition is
+        // unmet" - the setup and workers screens both render this, each linking its own unmet facts
+        // back to the form that fixes them.
+        group.MapGet("/booking-readiness", HandleGetBookingReadinessAsync).WithName("GetBookingReadiness");
+
         group.MapPost("/calendars", HandleCreateCalendarAsync).WithName("CreateCalendar");
         group.MapPut("/calendars/{calendarId:guid}", HandleUpdateCalendarAsync).WithName("UpdateCalendar");
         group.MapPost("/services", HandleCreateServiceAsync).WithName("CreateService");
@@ -131,6 +136,33 @@ public static class ConsoleEndpoints
                 .. configuration.Services.Select(service => new ConfiguredServiceResponse(
                     service.ServiceId.Value, service.Name, service.DurationMinutes)),
             ]));
+    }
+
+    private static async Task<IResult> HandleGetBookingReadinessAsync(
+        ClaimsPrincipal principal,
+        GetBookingReadinessHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetBookingReadiness(principal.GetOperatorId(), principal.GetTenantId()), cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok<IReadOnlyList<CalendarReadinessResponse>>(
+        [
+            .. result.Value.Select(calendar => new CalendarReadinessResponse(
+                calendar.CalendarId?.Value,
+                calendar.CalendarName,
+                calendar.IsBookable,
+                [
+                    .. calendar.Preconditions.Select(state =>
+                        new PreconditionStateResponse(state.Precondition.ToString(), state.IsMet)),
+                ])),
+        ]);
     }
 
     private static async Task<IResult> HandleSetAllowedOriginsAsync(

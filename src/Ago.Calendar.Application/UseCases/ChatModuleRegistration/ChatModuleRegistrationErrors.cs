@@ -29,4 +29,15 @@ public static class ChatModuleRegistrationErrors
 
     public static Error InvalidCredential(string reason) => new(
         "chat_module_registration.invalid_credential", reason);
+
+    /// <summary>`22-17`: this handler now provisions a missing <see cref="Ago.Calendar.Domain.Tenant"/> rather than
+    /// refusing with <see cref="TenantNotFound"/> - see <see cref="RegisterChatModuleHandler"/>'s own
+    /// remarks. This is that provisioning step's own failure, kept distinct from
+    /// <see cref="InvalidCredential"/> (a different fact was rejected) even though both are
+    /// caller-input problems, so a reader of a failure log is not left guessing which value was bad.
+    /// Not expected to fire in ordinary operation - <see cref="RegisterChatModule.TenantId"/> is always
+    /// a real <c>Guid</c> by construction and a display name has no real validation beyond
+    /// non-blank.</summary>
+    public static Error TenantProvisioningFailed(string reason) => new(
+        "chat_module_registration.tenant_provisioning_failed", reason);
 }

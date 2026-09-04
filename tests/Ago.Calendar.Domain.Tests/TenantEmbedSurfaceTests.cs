@@ -124,4 +124,37 @@ public class TenantEmbedSurfaceTests
         Assert.False(tenant.Allows(string.Empty));
         Assert.False(tenant.Allows("   "));
     }
+
+    // ------------------------------------------------------------------------------------------
+    // `22-17`: the provenance marker - a human-registered tenant (Register, every path above this
+    // point) is never auto-provisioned, and the one path that is auto-provisioned
+    // (AutoProvisionForChatModule) never produces anything else.
+    // ------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void ATenantRegisteredTheOrdinaryWay_IsNeverAutoProvisioned()
+    {
+        var tenant = CalendarFixtures.Tenant();
+
+        Assert.False(tenant.AutoProvisioned);
+    }
+
+    [Fact]
+    public void AutoProvisionForChatModule_ProducesATenant_MarkedAutoProvisioned()
+    {
+        var id = new TenantId(Guid.NewGuid());
+        var now = new DateTimeOffset(2026, 9, 4, 12, 0, 0, TimeSpan.Zero);
+
+        var tenant = Tenant.AutoProvisionForChatModule(id, "A Brand New Prospect", new TenantPublicKey("chat-abc123"), now);
+
+        Assert.True(tenant.AutoProvisioned);
+        Assert.Equal("A Brand New Prospect", tenant.Name);
+        Assert.Equal(id, tenant.Id);
+        Assert.Empty(tenant.AllowedOrigins);
+    }
+
+    [Fact]
+    public void AutoProvisionForChatModule_WithABlankName_Throws() =>
+        Assert.ThrowsAny<ArgumentException>(() => Tenant.AutoProvisionForChatModule(
+            new TenantId(Guid.NewGuid()), "   ", new TenantPublicKey("chat-abc123"), DateTimeOffset.UtcNow));
 }

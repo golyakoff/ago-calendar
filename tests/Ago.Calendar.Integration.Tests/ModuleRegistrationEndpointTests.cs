@@ -69,13 +69,63 @@ public class ModuleRegistrationEndpointTests(PostgresFixture fixture) : IAsyncLi
         Assert.Equal(HttpStatusCode.OK, after.StatusCode);
     }
 
+    /// <summary>
+    /// `22-17`: this item's own opening scenario, proven end to end against a real Postgres - the
+    /// platform owner (or a first-time self-service enable) grants a module to a tenant this product
+    /// has never heard of, and the module call that failed before now succeeds through the same real
+    /// path, with no row inserted by hand on either side. Before this item this test named the
+    /// opposite behaviour (<c>Returns404_AndWritesNothing</c>) - see this item's own report for the
+    /// captured pre-change 404 and its "tenant_not_found" body, which is exactly what made a first
+    /// grant to any new tenant impossible in Production (<c>DevProvisioningEndpoints</c> is not
+    /// mapped there).
+    ///
+    /// <para><b>"Succeeds" here means the credential now authenticates and reaches real business
+    /// logic - not that a booking can complete.</b> A freshly auto-provisioned tenant has no published
+    /// calendar yet (a separate, later step this product's own console does - see
+    /// <c>CalendarSeed.WriteAsync</c>'s own seeding for what a fully configured tenant additionally
+    /// needs), so <c>StartModuleTaskHandler</c> correctly answers <c>chat_module_task.not_configured</c>
+    /// (404) rather than starting a task. The proof this test makes is narrower and sharper: before
+    /// registration the call is refused at the credential-verification layer
+    /// (<see cref="HttpStatusCode.Unauthorized"/> - the module never even looks at whether a
+    /// calendar exists); after registration the identical call is <b>authenticated</b> and reaches
+    /// the tenant-configuration check instead, which is the boundary this item actually
+    /// owns.</para>
+    /// </summary>
     [Fact]
-    public async Task Register_ForATenantThatDoesNotExist_Returns404_AndWritesNothing()
+    public async Task Register_ForATenantThatDoesNotExist_ProvisionsTheTenant_AndTheCredentialStartsAuthenticating()
     {
-        var response = await RegisterAsync(Guid.NewGuid(), "a-secret-for-a-tenant-that-does-not-exist");
+        var newTenantId = Guid.NewGuid();
+        const string credential = "a-secret-for-a-tenant-that-did-not-exist-yet";
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        Assert.Contains("chat_module_registration.tenant_not_found", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        // Before: no Tenant row and no ChatModuleRegistration row - refused at authentication, before
+        // any business rule about calendars is ever consulted.
+        var before = await StartModuleTaskAsync(newTenantId, credential);
+        Assert.Equal(HttpStatusCode.Unauthorized, before.StatusCode);
+
+        var response = await RegisterAsync(newTenantId, credential, displayName: "A Brand New Prospect");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // After: the identical call, against a tenant that did not exist a moment ago, is no longer
+        // refused for lacking a valid credential - it reaches StartModuleTaskHandler and is refused
+        // for the real, separate, and expected reason a brand-new tenant has: no calendar published
+        // yet.
+        var after = await StartModuleTaskAsync(newTenantId, credential);
+        Assert.Equal(HttpStatusCode.NotFound, after.StatusCode);
+        Assert.Contains("chat_module_task.not_configured", await after.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    /// <summary>A second register for the same never-seen-before tenant id is a real conflict
+    /// (`AlreadyRegistered`), not a repeat provisioning - the auto-provisioned tenant is not exempt
+    /// from the ordinary "register is create-only" rule.</summary>
+    [Fact]
+    public async Task Register_TwiceForATenantThatDidNotExist_Returns409OnTheSecondCall()
+    {
+        var newTenantId = Guid.NewGuid();
+        await RegisterAsync(newTenantId, "the-first-registration-secret-of-enough-length");
+
+        var second = await RegisterAsync(newTenantId, "a-different-secret-nobody-should-accept-x");
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     }
 
     [Fact]
@@ -259,11 +309,11 @@ public class ModuleRegistrationEndpointTests(PostgresFixture fixture) : IAsyncLi
 
     // ------------------------------------------------------------------------------------------
 
-    private async Task<HttpResponseMessage> RegisterAsync(Guid tenantId, string credential)
+    private async Task<HttpResponseMessage> RegisterAsync(Guid tenantId, string credential, string? displayName = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/module-registrations/{tenantId}")
         {
-            Content = JsonContent.Create(new { credential }),
+            Content = JsonContent.Create(new { credential, displayName }),
         };
         request.Headers.Add(ProvisioningSecretHeaderName, TestProvisioningSecret);
         return await _client.SendAsync(request);

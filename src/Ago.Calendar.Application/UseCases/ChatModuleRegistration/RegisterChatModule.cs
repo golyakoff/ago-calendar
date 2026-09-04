@@ -8,4 +8,9 @@
 /// itself and the one business rule that write has: a tenant gets at most one row this way (see
 /// <see cref="RegisterChatModuleHandler"/>).
 /// </summary>
-public sealed record RegisterChatModule(Guid TenantId, string Credential);
+/// <param name="DisplayName">`22-17`: an opaque, human-readable label for the account being
+/// registered - `Ago.Chat.*`'s own <c>Site.Name</c>, carried unopened over the identical generic
+/// contract this whole call already rides (<c>IModuleRegistrationGateway.RegisterAsync</c>'s own
+/// remarks). Used only when this handler has to provision <see cref="Domain.Tenant"/> itself - see
+/// <see cref="RegisterChatModuleHandler"/>'s own remarks for when and why.</param>
+public sealed record RegisterChatModule(Guid TenantId, string Credential, string? DisplayName = null);

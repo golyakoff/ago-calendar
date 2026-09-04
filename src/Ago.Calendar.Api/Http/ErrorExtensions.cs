@@ -115,7 +115,10 @@ public static class ErrorExtensions
             // for an already-registered tenant is a caller mistake with its own remedy (rotate), the
             // same "the world moved" reasoning booking.invalid_state's own comment gives.
             "chat_module_registration.already_registered" => StatusCodes.Status409Conflict,
-            "chat_module_registration.invalid_credential" => StatusCodes.Status400BadRequest,
+            "chat_module_registration.invalid_credential"
+                // `22-17`: RegisterChatModuleHandler's own tenant-auto-provisioning step failed on
+                // its input - the same caller-mistake shape as invalid_credential right above.
+                or "chat_module_registration.tenant_provisioning_failed" => StatusCodes.Status400BadRequest,
             // Anything unmapped is a bug in this switch, not a client error - a 500 says so honestly
             // instead of inventing a 400 that would make a caller retry something that cannot work.
             _ => StatusCodes.Status500InternalServerError,

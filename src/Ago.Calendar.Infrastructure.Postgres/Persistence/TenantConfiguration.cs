@@ -55,5 +55,8 @@ internal sealed class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         // Npgsql maps DateTimeOffset to timestamptz by default; stated here because the mapping is
         // the guarantee, not a convention anyone should have to look up.
         builder.Property(t => t.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
+
+        // `22-17`: the provenance marker - see Tenant.AutoProvisioned's own remarks.
+        builder.Property(t => t.AutoProvisioned).HasColumnName("auto_provisioned").HasDefaultValue(false);
     }
 }

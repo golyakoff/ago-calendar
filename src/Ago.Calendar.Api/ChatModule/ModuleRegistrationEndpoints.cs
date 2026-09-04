@@ -65,7 +65,8 @@ public static class ModuleRegistrationEndpoints
             return Results.Unauthorized();
         }
 
-        var result = await handler.HandleAsync(new RegisterChatModule(tenantId, request.Credential), cancellationToken);
+        var result = await handler.HandleAsync(
+            new RegisterChatModule(tenantId, request.Credential, request.DisplayName), cancellationToken);
         return result.IsSuccess ? Results.Ok() : result.Error!.Value.ToProblem(httpContext);
     }
 
@@ -128,7 +129,11 @@ public static class ModuleRegistrationEndpoints
     /// <param name="Credential">Never echoed back - the same "a secret is accepted, never returned"
     /// hygiene <c>Ago.Chat.Api.Modules.ModuleEndpoints.EnableModuleRequest.Credential</c>'s own remarks
     /// describe for its sibling.</param>
-    public sealed record RegisterChatModuleRequest(string Credential);
+    /// <param name="DisplayName">`22-17`: an opaque label for the account, used only when this
+    /// handler has to provision <see cref="Ago.Calendar.Domain.Tenant"/> itself because no row exists
+    /// yet for <paramref name="Credential"/>'s own tenant id - see <c>RegisterChatModuleHandler</c>'s
+    /// own remarks.</param>
+    public sealed record RegisterChatModuleRequest(string Credential, string? DisplayName = null);
 
     public sealed record RotateChatModuleCredentialRequest(string NewCredential);
 

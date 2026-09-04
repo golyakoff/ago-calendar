@@ -38,13 +38,29 @@ public sealed class Tenant
 
     public DateTimeOffset CreatedAt { get; }
 
+    /// <summary>
+    /// `22-17`: <see langword="true"/> only for a row <see cref="AutoProvisionForChatModule"/> wrote -
+    /// never set by <see cref="Register"/>, and never changed after construction. Answers a question
+    /// this row's own <see cref="Name"/>/<see cref="PublicKey"/> cannot: both are ordinary,
+    /// caller-supplied values on <em>every</em> path, including this one, so nothing about their shape
+    /// distinguishes a tenant a human registered (the provisioner, `20-27`, or the dev-only route)
+    /// from one <c>RegisterChatModuleHandler</c> minted on the strength of the deployment-wide
+    /// provisioning secret alone. See that handler's own remarks for why this distinction exists at
+    /// all - it is this item's own answer to "a secret that can create rows in a production database
+    /// is a different thing from one that can only act on rows that already exist," named rather than
+    /// left unauditable.
+    /// </summary>
+    public bool AutoProvisioned { get; }
+
     private Tenant(
-        TenantId id, string name, TenantPublicKey publicKey, IEnumerable<string> allowedOrigins, DateTimeOffset now)
+        TenantId id, string name, TenantPublicKey publicKey, IEnumerable<string> allowedOrigins, DateTimeOffset now,
+        bool autoProvisioned)
     {
         Id = id;
         Name = name;
         PublicKey = publicKey;
         CreatedAt = now;
+        AutoProvisioned = autoProvisioned;
         _allowedOrigins.AddRange(allowedOrigins);
     }
 
@@ -62,7 +78,25 @@ public sealed class Tenant
         // constructible in a state the aggregate itself calls illegal, which is the whole failure
         // mode this rule exists to prevent.
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        return new Tenant(id, name.Trim(), publicKey, Normalize(allowedOrigins ?? []), now);
+        return new Tenant(id, name.Trim(), publicKey, Normalize(allowedOrigins ?? []), now, autoProvisioned: false);
+    }
+
+    /// <summary>
+    /// `22-17`: the one caller this exists for - <c>RegisterChatModuleHandler</c>, provisioning a row
+    /// for a tenant id `Ago.Chat.*` named but this product had never seen, on the strength of the
+    /// deployment-wide provisioning secret alone (`adr/0095`) rather than a human registering a real
+    /// account. A separate factory rather than an optional parameter on <see cref="Register"/>: every
+    /// other caller of <see cref="Register"/> is a human-initiated write (the provisioner, the dev-only
+    /// route) and must never be able to produce an auto-provisioned row by omission - the identical
+    /// "a flag nobody else passes is a flag someone eventually passes by accident" reasoning this
+    /// project's own owner-handler split (<c>EnableModuleForSiteAsOwnerHandler</c> vs
+    /// <c>EnableModuleForSiteHandler</c>, `ago-chat`) already applies to a provenance distinction of
+    /// this same shape.
+    /// </summary>
+    public static Tenant AutoProvisionForChatModule(TenantId id, string name, TenantPublicKey publicKey, DateTimeOffset now)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return new Tenant(id, name.Trim(), publicKey, [], now, autoProvisioned: true);
     }
 
     public void Rename(string name)

@@ -3,6 +3,7 @@ using Ago.Calendar.Api.Booking;
 using Ago.Calendar.Api.ChatModule;
 using Ago.Calendar.Api.Configuration;
 using Ago.Calendar.Api.Cors;
+using Ago.Calendar.Api.Me;
 using Ago.Calendar.Api.PhoneVerification;
 using Ago.Calendar.Api.Provisioning;
 using Ago.Calendar.Api.PublicBookingApi;
@@ -92,6 +93,12 @@ app.MapPhoneVerificationEndpoints();
 // `20-06`: the unauthenticated reads an embed makes, and the authenticated console behind adr/0022.
 app.MapPublicBookingEndpoints();
 app.MapConsoleEndpoints();
+
+// `22-14`/`adr/0100`: the one route about the calling identity rather than about a resolved tenant -
+// which tenants this person may act in here, so the console can offer the choice. Deliberately not
+// part of MapConsoleEndpoints's group: that group carries CalendarClaims.OperatorPolicy, which this
+// caller cannot yet satisfy.
+app.MapMeEndpoints();
 
 // `20-07`: the wire contract Ago.Chat.* drives a chat-originated booking through. Server-to-server,
 // outside TenantOriginCorsPolicyProvider's two layers - see ChatModuleTaskEndpoints's own remarks.

@@ -214,6 +214,11 @@ public sealed class CalendarModule : IProductModule
         // report stays; it reads `customers`, not identity.
         services.AddScoped<GetTenantContactsHandler>();
 
+        // `22-14`/`adr/0100`: the switcher's own read - "which tenants may I act in here". Not an
+        // identity-management endpoint of the kind `22-05` deleted above: it manages nothing and
+        // grants nothing, it reports what the projection `ago-chat` replicates already says.
+        services.AddScoped<Application.UseCases.Tenancies.ListMyTenanciesHandler>();
+
         // `20-15`: the materialised slot view.
         services.AddScoped<GetWorkerSlotsHandler>();
 

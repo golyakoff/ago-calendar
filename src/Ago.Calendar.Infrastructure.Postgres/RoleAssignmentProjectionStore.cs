@@ -27,8 +27,25 @@ public sealed class RoleAssignmentProjectionStore(AgoCalendarDbContext db) : IRo
         return row?.Permissions ?? [];
     }
 
-    public async Task<TenantId?> FindTenantIdAsync(OperatorId operatorId, CancellationToken cancellationToken)
+    public async Task<TenantId?> ResolveTenantAsync(
+        OperatorId operatorId, TenantId? requestedTenantId, CancellationToken cancellationToken)
     {
+        if (requestedTenantId is { } requested)
+        {
+            // `22-14`/`adr/0100`. THE line: a tenant the caller named is returned only when this
+            // operator's own projection carries a row for that exact pair, and the pair is the query's
+            // own WHERE clause - the verification is the read, not a check beside it. Nothing between
+            // here and the `tenant_id` claim can widen it, because the only value that can ever come
+            // out of this branch is one the database just proved belongs to this operator.
+            var granted = await db.Set<RoleAssignmentProjectionRecord>()
+                .AsNoTracking()
+                .AnyAsync(r => r.OperatorId == operatorId && r.TenantId == requested, cancellationToken);
+
+            // Null, never a fallback to a tenancy they do hold - IRoleAssignmentProjectionStore's own
+            // remarks on why "you asked for A, here is B" is the worse answer.
+            return granted ? requested : null;
+        }
+
         var tenantIds = await db.Set<RoleAssignmentProjectionRecord>()
             .AsNoTracking()
             .Where(r => r.OperatorId == operatorId)
@@ -36,7 +53,9 @@ public sealed class RoleAssignmentProjectionStore(AgoCalendarDbContext db) : IRo
             .ToListAsync(cancellationToken);
 
         // Refused, not guessed, on either zero or more than one match - IRoleAssignmentProjectionStore's
-        // own remarks on why "which tenant" only has one honest answer when there is exactly one row.
+        // own remarks on why "which tenant" only has one honest answer when there is exactly one row
+        // and nobody said which. Unchanged by `22-14`: this is the branch every one-tenant operator
+        // and every caller that names no tenant still takes.
         return tenantIds.Count == 1 ? tenantIds[0] : null;
     }
 

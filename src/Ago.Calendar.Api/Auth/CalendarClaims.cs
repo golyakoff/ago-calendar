@@ -27,4 +27,21 @@ public static class CalendarClaims
     /// added - a <c>NullReferenceException</c> dressed as a 500 instead of a 403.</para>
     /// </summary>
     public const string OperatorPolicy = "calendar-operator";
+
+    /// <summary>
+    /// `22-14`/`adr/0100`: authenticated by Keycloak, and nothing more.
+    ///
+    /// <para>Every operator-facing route carries <see cref="OperatorPolicy"/> and must keep doing so.
+    /// This one exists for the single route that has to be answerable <i>before</i> a tenant is
+    /// resolved - <c>GET /api/v1/me/tenancies</c>, which tells the console which tenants there are to
+    /// choose between. A person with calendar grants on two accounts fails
+    /// <see cref="OperatorPolicy"/> by construction until they name one
+    /// (<c>OperatorIdentityClaimsTransformation</c>), so gating that read behind it would be a
+    /// chicken-and-egg refusal: you may not ask what you can act in until you can already act.</para>
+    ///
+    /// <para><b>Weaker is not unguarded.</b> The handler behind it never takes a tenant from the
+    /// caller at all - it reads the validated token's own <c>sub</c> and answers only about that
+    /// subject's own projection rows, so there is no tenant here for a caller to name wrongly.</para>
+    /// </summary>
+    public const string IdentityPolicy = "calendar-identity";
 }

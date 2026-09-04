@@ -83,9 +83,27 @@ public static class AuthenticationSetup
             });
 
         services.AddAuthorization(options =>
+        {
             options.AddPolicy(
                 CalendarClaims.OperatorPolicy,
-                policy => policy.RequireClaim(CalendarClaims.OperatorId).RequireClaim(CalendarClaims.TenantId)));
+                policy => policy.RequireClaim(CalendarClaims.OperatorId).RequireClaim(CalendarClaims.TenantId));
+
+            // `22-14`: deliberately weaker, and there is exactly one route on it - `GET
+            // /api/v1/me/tenancies`, the read that answers "which tenants may I act in". It cannot
+            // carry OperatorPolicy: an identity with several calendar tenancies has no resolved
+            // `tenant_id` claim until it names one, so the stricter policy would refuse the very call
+            // meant to find out what there is to name. Same shape, same reason, as `ago-chat`'s own
+            // `RequireKeycloakIdentity` on its `/api/v1/me/tenancies`.
+            options.AddPolicy(
+                CalendarClaims.IdentityPolicy,
+                policy => policy.RequireAuthenticatedUser());
+        });
+
+        // `22-14`/`adr/0100`: OperatorIdentityClaimsTransformation reads the request's own
+        // `X-Ago-Active-Site` header, and an IClaimsTransformation is handed a principal and nothing
+        // else. Registered here rather than in CalendarModule because it is this host's concern -
+        // Ago.Calendar.Worker loads the same module and serves no requests at all.
+        services.AddHttpContextAccessor();
 
         // Registered once, runs after validation on every authenticated request. Singleton is safe
         // because it holds no state; its dependency is resolved per call through the request scope's

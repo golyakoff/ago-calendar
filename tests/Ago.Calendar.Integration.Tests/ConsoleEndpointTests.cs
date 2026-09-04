@@ -229,6 +229,47 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RecutPreview_WithoutTheConfigurePermission_Returns403NotAServerError()
+    {
+        // `22-20`'s own first Done-when, proven over real HTTP rather than at the switch: an
+        // operator who holds no `Permission.CalendarConfigure` asking to preview a re-cut is an
+        // ordinary permission refusal - before this item, `ErrorExtensions` had no arm for
+        // `recut.forbidden` at all, so this same request reached the operator as a 500.
+        var seed = await ProvisionAsync();
+        var dispatcher = await ADispatcherAsync(seed);
+
+        var response = await PostAsync(
+            $"/api/v1/console/workers/{seed.Worker.Id.Value}/schedule/recut/preview",
+            new RecutPreviewRequest(new DateOnly(2026, 5, 5)),
+            dispatcher);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        // The code, not just the status - the same reasoning `ADayOff_RequiresTheConfigurePermission`'s
+        // own comment gives: a status alone cannot distinguish this from a handler that refuses for a
+        // different, wrongly-mapped reason.
+        Assert.Contains(
+            "recut.forbidden", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RecutPreview_ForAWorkerThatDoesNotExist_Returns404NotAServerError()
+    {
+        // `22-20`'s own second Done-when, over real HTTP: a worker id that resolves to nothing in
+        // this tenant is reported as absent, not as a crash - `recut.worker_not_found` had no arm
+        // before this item either.
+        var seed = await ProvisionAsync();
+
+        var response = await PostAsync(
+            $"/api/v1/console/workers/{Guid.NewGuid()}/schedule/recut/preview",
+            new RecutPreviewRequest(new DateOnly(2026, 5, 5)),
+            seed);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains(
+            "recut.worker_not_found", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ATenant_CanSaveAndReadBackAWorkersSchedule()
     {
         // `20-14`'s own console-level Done-when, over real HTTP: create-or-replace, then read the

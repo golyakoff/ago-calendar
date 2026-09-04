@@ -89,17 +89,14 @@ public static class ErrorExtensions
             "chat_module_task.already_complete" => StatusCodes.Status409Conflict,
             "chat_module_task.kind_mismatch" or "chat_module_task.invalid_reply_value" =>
                 StatusCodes.Status400BadRequest,
-            // `20-12`'s own access-control and contacts-report codes, the same 403/404/400 shape as
-            // configuration.* above - these are operator-facing failures an authenticated caller is
-            // entitled to see the reason for, not faults.
-            "access.forbidden" or "contacts.forbidden" => StatusCodes.Status403Forbidden,
-            "access.not_found" => StatusCodes.Status404NotFound,
-            "access.invalid" => StatusCodes.Status400BadRequest,
-            // 409, not 403: the caller *is* allowed to revoke roles in general (they already hold
-            // calendar:configure) - what refuses this particular request is a state the aggregate
-            // itself protects, the same "the world moved" reasoning booking.invalid_state's own
-            // comment gives, not a permission the caller lacks.
-            "access.account_owner_requires_contact_access" => StatusCodes.Status409Conflict,
+            // `20-12`'s own contacts-report code, the same 403 shape as configuration.* above - an
+            // operator-facing failure an authenticated caller is entitled to see the reason for, not
+            // a fault. This arm used to also carry `access.forbidden`/`access.not_found`/
+            // `access.invalid`/`access.account_owner_requires_contact_access` from
+            // `AccessControlErrors`; `22-05` deleted that producer along with the rest of this
+            // product's identity model, and `22-15` removed the now-unreachable arms rather than
+            // leave a mapping that reads as evidence something still produces them.
+            "contacts.forbidden" => StatusCodes.Status403Forbidden,
             // 2026-09-01: PublicBookingApiGate's own kill switch. 403, not the 404 that
             // booking.surface_not_found/booking.origin_not_allowed use two cases above - those hide a
             // caller-specific fact (whether a tenant/origin exists); this refusal is identical for

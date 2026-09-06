@@ -63,7 +63,8 @@ public sealed record TenantConfigurationResponse(
     IReadOnlyList<string> AllowedOrigins,
     IReadOnlyList<ConfiguredCalendarResponse> Calendars,
     IReadOnlyList<ConfiguredWorkerResponse> Workers,
-    IReadOnlyList<ConfiguredServiceResponse> Services);
+    IReadOnlyList<ConfiguredServiceResponse> Services,
+    int WorkerQuota);
 
 public sealed record ConfiguredCalendarResponse(
     Guid CalendarId,

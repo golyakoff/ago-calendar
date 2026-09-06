@@ -61,6 +61,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRoleAssignmentProjectionStore, RoleAssignmentProjectionStore>();
         services.AddScoped<IPermissionChecker, PermissionChecker>();
 
+        // `22-07`/`adr/0093`: applies `ago-chat`'s own granted worker quota - the outbox consumer's
+        // one write. Scoped like every other adapter here, for the identical reason: it holds the
+        // DbContext its own transaction runs on.
+        services.AddScoped<IWorkerQuotaGrantStore, WorkerQuotaGrantStore>();
+
         // adr/0004's read side. Its own NpgsqlDataSource rather than the DbContext's connection: a
         // read model that shared a write context would inherit its change tracker and any ambient
         // transaction, and a queue screen has no business inside a write transaction. Singleton

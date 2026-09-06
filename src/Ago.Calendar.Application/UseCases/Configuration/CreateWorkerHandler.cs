@@ -84,7 +84,15 @@ public sealed class CreateWorkerHandler(
             return ConfigurationErrors.Invalid(exception.Message);
         }
 
-        await workers.AddAsync(worker, cancellationToken);
+        // `22-07`: the (N+1)-th worker is refused here, inside the repository's own transaction -
+        // see IWorkerRepository.TryAddWithinQuotaAsync's own remarks. Nothing above this line has
+        // written anything, so a refusal leaves the tenant's configuration exactly as it was.
+        var accepted = await workers.TryAddWithinQuotaAsync(worker, cancellationToken);
+        if (!accepted)
+        {
+            return ConfigurationErrors.WorkerQuotaExceeded(command.TenantId);
+        }
+
         return Result<WorkerId>.Success(worker.Id);
     }
 }

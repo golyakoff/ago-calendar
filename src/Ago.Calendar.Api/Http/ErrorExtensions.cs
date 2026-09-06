@@ -136,6 +136,11 @@ public static class ErrorExtensions
             // booking.invalid_state's own comment gives), and deactivation is the alternative action
             // this response's own message points the caller at.
             "configuration.worker_has_booking_history" => StatusCodes.Status409Conflict,
+            // `22-07`. The request was well-formed and the tenant exists - what refuses it is the
+            // tenant's own granted quota, a state the calendar add-on itself protects, the same
+            // "the world (here, an entitlement) says no" reasoning the line above gives for a
+            // worker's booking history.
+            "configuration.worker_quota_exceeded" => StatusCodes.Status409Conflict,
             // `20-07`/`22-04`. Before per-site resolution this was a single deployment-wide fault
             // (mapped to 500); now it is per call - this site's own tenant is not provisioned, or is
             // not configured with exactly one published calendar - the same "does not confirm what

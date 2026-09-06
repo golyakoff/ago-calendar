@@ -58,5 +58,10 @@ internal sealed class TenantConfiguration : IEntityTypeConfiguration<Tenant>
 
         // `22-17`: the provenance marker - see Tenant.AutoProvisioned's own remarks.
         builder.Property(t => t.AutoProvisioned).HasColumnName("auto_provisioned").HasDefaultValue(false);
+
+        // `22-07`: the calendar add-on's granted number - see Tenant.WorkerQuota's own remarks. Zero
+        // by default, matching the domain constructor's own default for every existing row and every
+        // freshly-registered one that has not yet been granted the add-on.
+        builder.Property(t => t.WorkerQuota).HasColumnName("worker_quota").HasDefaultValue(0);
     }
 }

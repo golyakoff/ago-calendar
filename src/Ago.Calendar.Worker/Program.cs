@@ -38,6 +38,14 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<RoleAssignmentsChangedConsumer>();
 
+// `22-07`/`adr/0093`: this product's second broker consumer - applies `ago-chat`'s own granted
+// worker quota (`ModuleQuantityGranted`) to the local tenancy row, same shape as the consumer above.
+builder.Services
+    .AddOptions<ModuleQuantityGrantedConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(ModuleQuantityGrantedConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<ModuleQuantityGrantedConsumer>();
+
 var host = builder.Build();
 
 // `20-21`/`adr/0056`: the same guard Ago.Calendar.Api runs, in the same place - before anything can

@@ -183,7 +183,7 @@ internal sealed class WorkerLookup(Worker? worker) : IWorkerRepository
     public Task<IReadOnlyList<Worker>> ListForTenantAsync(TenantId tenantId, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by GetWorkerSlotsHandler.");
 
-    public Task AddAsync(Worker worker, CancellationToken cancellationToken) =>
+    public Task<bool> TryAddWithinQuotaAsync(Worker worker, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by GetWorkerSlotsHandler.");
 
     public Task SaveAsync(Worker worker, CancellationToken cancellationToken) =>

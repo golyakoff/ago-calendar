@@ -111,6 +111,49 @@ public class ConfigurationHandlerTests
         Assert.Empty(world.Workers.Added);
     }
 
+    /// <summary>`22-07`'s own Done-when: "the (N+1)-th worker is refused... proven by trying." N
+    /// itself is created without incident here - see the next test for the refusal.</summary>
+    [Fact]
+    public async Task CreatingAWorker_UpToTheGrantedQuota_Succeeds()
+    {
+        var world = new World { Workers = { Quota = 2 } };
+
+        var first = await world.CreateWorkerAsync(lastName: "One", firstName: "A");
+        var second = await world.CreateWorkerAsync(lastName: "Two", firstName: "B");
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.Equal(2, world.Workers.Added.Count);
+    }
+
+    [Fact]
+    public async Task CreatingTheNPlusFirstWorker_IsRefused_AndWritesNothing()
+    {
+        var world = new World { Workers = { Quota = 1 } };
+        Assert.True((await world.CreateWorkerAsync(lastName: "One", firstName: "A")).IsSuccess);
+
+        var result = await world.CreateWorkerAsync(lastName: "Two", firstName: "B");
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.worker_quota_exceeded", result.Error!.Value.Code);
+        Assert.Single(world.Workers.Added);
+    }
+
+    [Fact]
+    public async Task CreatingAWorker_WithNoGrantAtAll_IsRefused()
+    {
+        // `22-07`: zero is Tenant.Register's own default - a tenant who has not bought the add-on
+        // (or whose grant has not yet arrived over the outbox) cannot create a first worker, and
+        // that is the intended refusal, not a bug in this fake.
+        var world = new World { Workers = { Quota = 0 } };
+
+        var result = await world.CreateWorkerAsync();
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.worker_quota_exceeded", result.Error!.Value.Code);
+        Assert.Empty(world.Workers.Added);
+    }
+
     [Fact]
     public async Task CreatingAWorker_WithAnExplicitDisplayName_MarksItCustomFromTheStart()
     {
@@ -397,6 +440,10 @@ internal sealed class RecordingCalendarRepository(BookingCalendar? existing) : I
 
 internal sealed class RecordingWorkerRepository : IWorkerRepository
 {
+    /// <summary>`22-07`: unlimited unless a test says otherwise - existing tests seed no grant at
+    /// all, and the fake must not start refusing calls nobody asked it to gate.</summary>
+    public int Quota { get; set; } = int.MaxValue;
+
     public List<Worker> Added { get; } = [];
 
     /// <summary>Workers this fake refuses to delete - the handler-level stand-in for "has booking
@@ -417,10 +464,16 @@ internal sealed class RecordingWorkerRepository : IWorkerRepository
         TenantId tenantId, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<Worker>>([.. Added.Where(worker => worker.TenantId == tenantId)]);
 
-    public Task AddAsync(Worker worker, CancellationToken cancellationToken)
+    public Task<bool> TryAddWithinQuotaAsync(Worker worker, CancellationToken cancellationToken)
     {
+        var activeCount = Added.Count(w => w.TenantId == worker.TenantId && w.IsActive);
+        if (activeCount >= Quota)
+        {
+            return Task.FromResult(false);
+        }
+
         Added.Add(worker);
-        return Task.CompletedTask;
+        return Task.FromResult(true);
     }
 
     public Task SaveAsync(Worker worker, CancellationToken cancellationToken) => Task.CompletedTask;

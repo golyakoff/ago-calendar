@@ -52,6 +52,22 @@ public sealed class Tenant
     /// </summary>
     public bool AutoProvisioned { get; }
 
+    /// <summary>
+    /// `22-07`/`adr/0093`: the calendar add-on's own granted number, on the calendar's own tenancy
+    /// row - rule 8's answer to "the calendar is sold in chat, enforced in the calendar". Never read
+    /// from a cache and never asked of `ago-chat` at write time: <see cref="IWorkerRepository"/>'s
+    /// own quota check reads this column inside the same transaction as the worker it may refuse, and
+    /// <see cref="GrantWorkerQuota"/> is the only writer, called by the outbox consumer that projects
+    /// `ago-chat`'s own grant - never by a request this product serves directly.
+    ///
+    /// <para><b>Zero until granted</b>, the same "the calendar is an add-on, not a default" default
+    /// every tenant row already carries before anyone has ticked the checkbox and paid - a tenant with
+    /// no grant yet can configure calendars and services (this column gates only
+    /// <see cref="Worker"/> creation) but cannot create the first worker until the grant lands, a
+    /// bounded wait rather than a manual step (this item's own report states the bound).</para>
+    /// </summary>
+    public int WorkerQuota { get; private set; }
+
     private Tenant(
         TenantId id, string name, TenantPublicKey publicKey, IEnumerable<string> allowedOrigins, DateTimeOffset now,
         bool autoProvisioned)
@@ -61,6 +77,7 @@ public sealed class Tenant
         PublicKey = publicKey;
         CreatedAt = now;
         AutoProvisioned = autoProvisioned;
+        WorkerQuota = 0;
         _allowedOrigins.AddRange(allowedOrigins);
     }
 
@@ -103,6 +120,27 @@ public sealed class Tenant
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         Name = name.Trim();
+    }
+
+    /// <summary>
+    /// `22-07`: sets the granted number directly - never incremented/decremented, because
+    /// `ModuleQuantityGranted` (`ago-chat`'s own contract) carries the *current* number, not a delta,
+    /// the identical "a snapshot, not a diff" shape `22-05`'s own `RoleAssignmentsChanged` chose for
+    /// the same reason: ordering is only guaranteed per tenant (rule 6), so a consumer that applied
+    /// "+2"/"-1" facts out of order could land on the wrong number forever with no way to notice. A
+    /// snapshot re-applied twice (an at-least-once redelivery) sets the identical value both times.
+    ///
+    /// <para>Deactivating whichever workers become the excess is <b>not this method's job</b> - it
+    /// spans <see cref="Worker"/>, a different aggregate, so it is the caller's transaction to
+    /// coordinate (<see cref="Application.Abstractions.IWorkerQuotaGrantStore"/>), the same
+    /// "an aggregate cannot commit another aggregate's own change" boundary
+    /// <see cref="CreateWorkerHandler"/>'s own callers already respect for
+    /// <see cref="Worker.JoinCalendar"/>.</para>
+    /// </summary>
+    public void GrantWorkerQuota(int quota)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(quota);
+        WorkerQuota = quota;
     }
 
     /// <summary>Replaces the whole list rather than adding one entry, because that is what an editor

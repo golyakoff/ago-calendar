@@ -135,7 +135,8 @@ public static class ConsoleEndpoints
             [
                 .. configuration.Services.Select(service => new ConfiguredServiceResponse(
                     service.ServiceId.Value, service.Name, service.DurationMinutes)),
-            ]));
+            ],
+            configuration.WorkerQuota));
     }
 
     private static async Task<IResult> HandleGetBookingReadinessAsync(

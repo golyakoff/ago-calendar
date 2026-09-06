@@ -217,7 +217,7 @@ internal sealed class FakeWorkerRepository(Worker? worker) : IWorkerRepository
         Task.FromResult<IReadOnlyList<Worker>>(
             worker is not null && worker.TenantId == tenantId ? [worker] : []);
 
-    public Task AddAsync(Worker worker, CancellationToken cancellationToken) =>
+    public Task<bool> TryAddWithinQuotaAsync(Worker worker, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");
 
     public Task SaveAsync(Worker worker, CancellationToken cancellationToken) =>

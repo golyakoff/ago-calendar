@@ -26,13 +26,18 @@ public readonly record struct ConfiguredWorkingHoursRule(
 /// <param name="PublicKey">What the shop pastes into its own page. The console is the only place this
 /// is ever shown, and it is why the screen exists at all: without it nobody can write the script tag
 /// `20-06`'s Done-when asks a stranger's page to carry.</param>
+/// <param name="WorkerQuota">`22-07`: the calendar add-on's own granted number of masters - zero
+/// until `ago-chat`'s own grant has been propagated. Shown here, not only enforced silently, so the
+/// setup screen can say "N of Q masters" rather than leave a refusal at worker-creation time as the
+/// tenant's only way to discover the ceiling.</param>
 public readonly record struct TenantConfiguration(
     string TenantName,
     string PublicKey,
     IReadOnlyList<string> AllowedOrigins,
     IReadOnlyList<ConfiguredCalendar> Calendars,
     IReadOnlyList<ConfiguredWorker> Workers,
-    IReadOnlyList<ConfiguredService> Services);
+    IReadOnlyList<ConfiguredService> Services,
+    int WorkerQuota);
 
 /// <summary>
 /// Everything the setup screen draws, in one call.
@@ -109,6 +114,7 @@ public sealed class GetTenantConfigurationHandler(
             [
                 .. tenantServices.Select(service => new ConfiguredService(
                     service.Id, service.Name, (int)service.Duration.TotalMinutes)),
-            ]));
+            ],
+            tenant.WorkerQuota));
     }
 }

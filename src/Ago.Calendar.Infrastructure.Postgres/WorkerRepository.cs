@@ -2,6 +2,7 @@
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 
 namespace Ago.Calendar.Infrastructure.Postgres;
@@ -35,10 +36,62 @@ public sealed class WorkerRepository(AgoCalendarDbContext db) : IWorkerRepositor
             .OrderBy(worker => worker.DisplayName)
             .ToListAsync(cancellationToken);
 
-    public async Task AddAsync(Worker worker, CancellationToken cancellationToken)
+    /// <summary>See <see cref="IWorkerRepository.TryAddWithinQuotaAsync"/> for the reasoning behind
+    /// a lock-and-count rather than a denormalized counter. This method opens and commits (or rolls
+    /// back) its own transaction - <see cref="CreateWorkerHandler"/> has no ambient one of its own to
+    /// join, and refusing here must leave nothing written, matching
+    /// <c>OperatorInviteRedemptionRepository.RedeemAsync</c>'s identical shape one repository
+    /// over.</summary>
+    public async Task<bool> TryAddWithinQuotaAsync(Worker worker, CancellationToken cancellationToken)
     {
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+        var quota = await LockTenantAndReadWorkerQuotaAsync(worker.TenantId, cancellationToken);
+        var activeWorkerCount = await db.Workers.CountAsync(
+            w => w.TenantId == worker.TenantId && w.IsActive, cancellationToken);
+
+        if (activeWorkerCount >= quota)
+        {
+            // Rolled back, nothing committed - the identical "a capacity-rejected attempt leaves
+            // nothing behind" guarantee OperatorInviteRedemptionRepository's own seat-limit check
+            // makes, restated for this product's own quota.
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
         db.Workers.Add(worker);
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    /// <summary>Raw SQL through this <see cref="AgoCalendarDbContext"/>'s own open connection/
+    /// transaction, the same reason <c>OperatorInviteRedemptionRepository.LockSiteAndReadSeatLimitAsync</c>
+    /// gives for its own identical shape: the lock only means anything if the count read and the
+    /// eventual insert happen on the same Postgres connection and transaction as the lock itself, and
+    /// EF has no LINQ shape for <c>FOR UPDATE</c> on a scalar read.</summary>
+    private async Task<int> LockTenantAndReadWorkerQuotaAsync(TenantId tenantId, CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var pgTransaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+
+        await using var command = new NpgsqlCommand(
+            "SELECT worker_quota FROM tenants WHERE id = @tenantId FOR UPDATE", connection, pgTransaction);
+        command.Parameters.AddWithValue("tenantId", tenantId.Value);
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        if (result is null)
+        {
+            // A foreign key (WorkerConfiguration.HasOne<Tenant>) should make this unreachable - a
+            // worker cannot be created for a tenant row that does not exist, and this product has no
+            // tenant-deletion path at all. The identical reasoning
+            // OperatorInviteRedemptionRepository's own missing-site case gives for throwing rather
+            // than returning a case a caller has legal recourse for.
+            throw new InvalidOperationException(
+                $"Tenant {tenantId.Value} was not found while creating a worker - a foreign key should have prevented this.");
+        }
+
+        return (int)result;
     }
 
     public async Task SaveAsync(Worker worker, CancellationToken cancellationToken)

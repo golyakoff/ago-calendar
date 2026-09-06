@@ -40,12 +40,18 @@ internal static class CalendarSeed
     /// would collide - a named parameter for the tests that care what the key is.</param>
     /// <param name="allowedOrigins">Empty by default, which is the safe default the aggregate
     /// documents: no browser origin may embed this tenant until somebody says one may.</param>
+    /// <param name="workerQuota">`22-07`. Zero by default - the same "not granted until the add-on is
+    /// bought" default <see cref="Tenant.Register"/> itself uses - because this seed already writes
+    /// one worker <b>directly</b>, bypassing <see cref="IWorkerRepository.TryAddWithinQuotaAsync"/>
+    /// entirely, so most tests never need a grant at all. Named for the ones that go on to create a
+    /// further worker through <c>CreateWorkerHandler</c> or the real HTTP endpoint, which do.</param>
     public static async Task<SeededTenant> WriteAsync(
         PostgresFixture fixture,
         string zone = "Europe/Moscow",
         string? publicKey = null,
         IEnumerable<string>? allowedOrigins = null,
-        string? externalSubjectId = null)
+        string? externalSubjectId = null,
+        int workerQuota = 0)
     {
         var tenant = Tenant.Register(
             new TenantId(NewId()),
@@ -53,6 +59,7 @@ internal static class CalendarSeed
             new TenantPublicKey(publicKey ?? $"shop-{NewId():N}"[..24]),
             Now,
             allowedOrigins);
+        tenant.GrantWorkerQuota(workerQuota);
         var calendar = BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), Now);
         var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);

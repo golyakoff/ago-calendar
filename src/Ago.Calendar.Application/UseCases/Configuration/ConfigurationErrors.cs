@@ -27,6 +27,16 @@ public static class ConfigurationErrors
     public static Error TenantNotFound(TenantId tenantId) => new(
         "configuration.not_found", $"No tenant {tenantId.Value}.");
 
+    /// <summary>`22-07`: the tenant's active worker count already equals its granted
+    /// <see cref="Tenant.WorkerQuota"/> - the calendar add-on grants a fixed number of masters, and
+    /// this is the (N+1)-th one, refused inside <c>IWorkerRepository.TryAddWithinQuotaAsync</c>'s own
+    /// transaction rather than after the fact. The remedy is a bigger grant, not a retry of this exact
+    /// request - the same "well-formed but the world says no" shape
+    /// <see cref="WorkerHasBookingHistory"/> already gives a different refusal.</summary>
+    public static Error WorkerQuotaExceeded(TenantId tenantId) => new(
+        "configuration.worker_quota_exceeded",
+        $"Tenant {tenantId.Value} has reached the number of masters its calendar add-on grants.");
+
     /// <summary>
     /// A domain constructor said no. Turned into an ordinary rejection rather than allowed to escape
     /// as an exception: a tenant typing "-5" into a buffer field is a caller mistake, and letting

@@ -42,7 +42,8 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         // `20-06`'s first Done-when, in one test because it is one claim: the four objects only mean
         // anything together. A worker on no calendar offering nothing is invisible to every other
         // part of the product, and a working-hours rule for such a worker is refused by the aggregate.
-        var seed = await ProvisionAsync();
+        // `22-07`: quota 2 - the seeded worker plus the one this test creates through the endpoint.
+        var seed = await ProvisionAsync(workerQuota: 2);
 
         var calendarId = await CreatedIdAsync(
             "/api/v1/console/calendars",
@@ -71,6 +72,8 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         var configuration = await GetConfigurationAsync(seed);
 
         Assert.Equal(seed.Tenant.PublicKey.Value, configuration.PublicKey);
+        // `22-07`: the granted quota is visible on the same screen that is refusing to exceed it.
+        Assert.Equal(2, configuration.WorkerQuota);
         var created = Assert.Single(configuration.Calendars, calendar => calendar.CalendarId == calendarId);
         Assert.True(created.IsPublished);
         Assert.Contains(workerId, created.WorkerIds);
@@ -86,7 +89,8 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     {
         // `20-06`'s second Done-when, including its own parenthesis: "two calendars, confirming the
         // queue is not scoped to one".
-        var seed = await ProvisionAsync();
+        // `22-07`: quota 2 - the seeded worker plus the one this test creates through the endpoint.
+        var seed = await ProvisionAsync(workerQuota: 2);
         var secondCalendarId = await CreatedIdAsync(
             "/api/v1/console/calendars",
             new CreateCalendarRequest("Second chair", "Europe/Moscow", Publish: true),
@@ -339,7 +343,12 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Contains("configuration.invalid", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
-    private async Task<SeededTenant> ProvisionAsync() => await CalendarSeed.WriteAsync(fixture);
+    /// <param name="workerQuota">`22-07`: most callers here never create a worker beyond the one
+    /// <see cref="CalendarSeed.WriteAsync"/> already seeds directly, so the default of zero (no add-on
+    /// grant) is fine for them. The two tests that go on to create a further worker through the real
+    /// <c>POST /api/v1/console/workers</c> endpoint pass a quota that accounts for both.</param>
+    private async Task<SeededTenant> ProvisionAsync(int workerQuota = 0) =>
+        await CalendarSeed.WriteAsync(fixture, workerQuota: workerQuota);
 
     /// <summary>An operator of the same tenant holding a role that grants the queue permissions and
     /// not <see cref="Permission.CalendarConfigure"/>.</summary>

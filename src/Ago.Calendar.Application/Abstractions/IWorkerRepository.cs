@@ -23,7 +23,26 @@ public interface IWorkerRepository
     /// <see cref="Worker.IsActive"/>'s own remarks rule out.</summary>
     Task<IReadOnlyList<Worker>> ListForTenantAsync(TenantId tenantId, CancellationToken cancellationToken);
 
-    Task AddAsync(Worker worker, CancellationToken cancellationToken);
+    /// <summary>
+    /// `22-07`/rule 8: the atomic compare-and-set this product's own worker-quota enforcement rests
+    /// on - <c>docs/architecture/data-model.md</c>'s own contrast between <c>operators.active_chats</c>
+    /// (a denormalized counter, for a high-frequency contended path) and
+    /// <c>OperatorInviteRedemptionRepository</c>'s seat-limit check (a <c>SELECT ... FOR UPDATE</c> row
+    /// lock plus a real <c>COUNT(*)</c>, for a rare, low-contention one). Worker creation is the second
+    /// profile - at most a handful of calls ever per tenant - so this locks the tenant row directly
+    /// (<c>SELECT worker_quota FROM tenants WHERE id = @tenantId FOR UPDATE</c>) and counts real
+    /// <c>workers</c> rows inside that lock, rather than adding a denormalized counter that would need
+    /// its own symmetric decrement on every deactivation.
+    ///
+    /// <para>This replaces what used to be a plain <c>AddAsync</c> - there is no unconditional insert
+    /// left in this port, because there is no caller (<see cref="Worker"/> creation always happens
+    /// under a tenant's granted quota) for whom the condition would be wrong to check.</para>
+    /// </summary>
+    /// <returns><see langword="true"/> if the worker was added; <see langword="false"/> if the
+    /// tenant's active worker count already equals or exceeds its granted
+    /// <see cref="Tenant.WorkerQuota"/> - nothing is written on this path, and the caller's own
+    /// transaction (if it has one) is left uncommitted by this call alone.</returns>
+    Task<bool> TryAddWithinQuotaAsync(Worker worker, CancellationToken cancellationToken);
 
     Task SaveAsync(Worker worker, CancellationToken cancellationToken);
 

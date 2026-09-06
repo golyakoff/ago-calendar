@@ -65,6 +65,40 @@ public sealed class WorkerRepository(AgoCalendarDbContext db) : IWorkerRepositor
         return true;
     }
 
+    /// <summary>See <see cref="IWorkerRepository.TryReactivateWithinQuotaAsync"/> for the invariant
+    /// this closes - reactivation is a second door onto the same quota <see cref="TryAddWithinQuotaAsync"/>
+    /// guards for creation, so it takes the identical lock (<see cref="LockTenantAndReadWorkerQuotaAsync"/>)
+    /// before deciding anything, rather than a second, differently-shaped check for the same
+    /// fact.</summary>
+    public async Task<bool> TryReactivateWithinQuotaAsync(Worker worker, CancellationToken cancellationToken)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+        var quota = await LockTenantAndReadWorkerQuotaAsync(worker.TenantId, cancellationToken);
+        // Excludes `worker` itself by id, deliberately - so the answer does not depend on whether
+        // the caller already flipped its in-memory IsActive flag before calling in (it has: see the
+        // interface's own remarks on call order). Without the exclusion this count would be counting
+        // a row that, in the database this transaction has locked, is still inactive - harmlessly
+        // redundant right now, but a shape that would silently start double-counting if that call
+        // order ever changed.
+        var activeWorkerCount = await db.Workers.CountAsync(
+            w => w.TenantId == worker.TenantId && w.IsActive && w.Id != worker.Id, cancellationToken);
+
+        if (activeWorkerCount >= quota)
+        {
+            // Nothing committed - not the reactivation, and not any other change (a rename, say)
+            // the same request applied to `worker` before calling this. The caller's in-memory
+            // instance is left mutated, exactly like a refused CreateWorkerHandler leaves its own
+            // discarded Worker instance mutated - it is never persisted and never read back.
+            await transaction.RollbackAsync(cancellationToken);
+            return false;
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
     /// <summary>Raw SQL through this <see cref="AgoCalendarDbContext"/>'s own open connection/
     /// transaction, the same reason <c>OperatorInviteRedemptionRepository.LockSiteAndReadSeatLimitAsync</c>
     /// gives for its own identical shape: the lock only means anything if the count read and the

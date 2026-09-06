@@ -249,6 +249,75 @@ public class ConfigurationHandlerTests
     }
 
     [Fact]
+    public async Task ReactivatingAWorker_PastTheQuota_IsRefused()
+    {
+        // 22-23: a downgrade deactivates the excess (`adr/0125`) rather than deleting it, and this is
+        // the bypass that leaves - reactivating one of those rows through the ordinary edit endpoint
+        // with no gate at all.
+        var world = new World();
+        world.Workers.Quota = 2;
+        await world.CreateWorkerAsync(lastName: "Kept", firstName: "One");
+
+        // Added directly rather than through a second CreateWorkerAsync call - World's own
+        // SequentialIdGenerator is instantiated fresh per call, so two calls in the same test would
+        // mint the identical id and collide in Added, a test-fixture quirk unrelated to what this
+        // test proves. The downgrade itself is 22-07's own concern (out of scope here) - only its
+        // aftermath, a deactivated worker sitting at/over quota, matters to this test.
+        var excess = Worker.Create(
+            new WorkerId(Guid.NewGuid()), BookingFixtures.TenantId, "Excess", "Two", null, BookingFixtures.Now);
+        world.Workers.Added.Add(excess);
+        excess.Deactivate(BookingFixtures.Now);
+        world.Workers.Quota = 1;
+
+        var result = await world.UpdateWorkerAsync(excess.Id, isActive: true);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.worker_quota_exceeded", result.Error!.Value.Code);
+    }
+
+    [Fact]
+    public async Task ReactivatingAWorker_WithinTheQuota_Succeeds()
+    {
+        // Quota of exactly one, with no other active worker - this is what forces the count to
+        // exclude the worker being reactivated by its own id (see
+        // IWorkerRepository.TryReactivateWithinQuotaAsync's own remarks): the fake's Added list holds
+        // the same reference the handler already flipped IsActive on before calling in, so without
+        // the exclusion this worker would be counted against its own reactivation.
+        var world = new World();
+        world.Workers.Quota = 1;
+        var workerId = (await world.CreateWorkerAsync()).Value;
+        Assert.Single(world.Workers.Added, w => w.Id == workerId).Deactivate(BookingFixtures.Now);
+
+        var result = await world.UpdateWorkerAsync(workerId, isActive: true);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(Assert.Single(world.Workers.Added).IsActive);
+    }
+
+    [Fact]
+    public async Task UpdatingAnAlreadyActiveWorker_AtTheQuotaLimit_IsNotGatedByQuota()
+    {
+        // 22-23's own regression case: gating on "command.IsActive == true" instead of on the
+        // false-to-true transition would refuse this ordinary rename the instant the tenant's *other*
+        // workers alone already fill the quota - even though this worker was already active and
+        // nothing about his own activity is changing. A single-worker tenant would not expose this
+        // (excluding the worker being saved from his own count leaves nobody else to hit the limit),
+        // so a second, already-active worker is what makes the naive gate actually bite.
+        var world = new World();
+        world.Workers.Quota = 2;
+        var workerId = (await world.CreateWorkerAsync(lastName: "Doe")).Value;
+        var other = Worker.Create(
+            new WorkerId(Guid.NewGuid()), BookingFixtures.TenantId, "Other", "Person", null, BookingFixtures.Now);
+        world.Workers.Added.Add(other);
+        world.Workers.Quota = 1;
+
+        var result = await world.UpdateWorkerAsync(workerId, lastName: "Renamed", isActive: true);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Renamed", Assert.Single(world.Workers.Added, w => w.Id == workerId).LastName);
+    }
+
+    [Fact]
     public async Task DeletingAWorker_RequiresCalendarConfigure()
     {
         var world = new World();
@@ -474,6 +543,17 @@ internal sealed class RecordingWorkerRepository : IWorkerRepository
 
         Added.Add(worker);
         return Task.FromResult(true);
+    }
+
+    /// <summary>`22-23`: the same <c>Quota</c> the create-side fake above already gates, applied to
+    /// the reactivation door - excludes <paramref name="worker"/> from its own count by id, matching
+    /// the real repository's reasoning: the answer must not depend on the caller having already
+    /// flipped <see cref="Worker.IsActive"/> in memory before calling in, which it always has by the
+    /// time this fake sees it (<see cref="Added"/> holds the same reference).</summary>
+    public Task<bool> TryReactivateWithinQuotaAsync(Worker worker, CancellationToken cancellationToken)
+    {
+        var activeCount = Added.Count(w => w.TenantId == worker.TenantId && w.IsActive && w.Id != worker.Id);
+        return Task.FromResult(activeCount < Quota);
     }
 
     public Task SaveAsync(Worker worker, CancellationToken cancellationToken) => Task.CompletedTask;

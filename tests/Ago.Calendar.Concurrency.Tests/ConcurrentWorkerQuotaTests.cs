@@ -82,6 +82,85 @@ public class ConcurrentWorkerQuotaTests(ConcurrencyFixture fixture)
             $"active worker count {activeCount} exceeded the granted quota {quota} - the two writers disagreed.");
     }
 
+    /// <summary>
+    /// `22-23`'s own Done-when: the reactivation door onto the same quota, raced at the same three
+    /// degrees the create-side race above holds itself to. Calls
+    /// <see cref="WorkerRepository.TryReactivateWithinQuotaAsync"/> directly, the same reason the
+    /// create-side test above calls <see cref="WorkerRepository.TryAddWithinQuotaAsync"/> directly -
+    /// what is under test is the adapter's own lock-and-count statement, not
+    /// <c>UpdateWorkerHandler</c>'s permission check ahead of it.
+    /// </summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(8)]
+    [InlineData(24)]
+    public async Task ManyConcurrentReactivations_AgainstAQuotaWithOneFreeSlot_ProduceExactlyOneReactivatedWorker(
+        int callers)
+    {
+        var tenantId = await SeedTenantAsync(quota: 1);
+        var workerIds = await SeedInactiveWorkersAsync(tenantId, callers);
+
+        var results = await RaceReactivationsAsync(workerIds);
+
+        // Exactly one, at every degree of contention - the identical bar the create-side race holds
+        // itself to. Two would mean the quota was walked around under load; zero would mean the lock
+        // rejects everybody, including the one caller who should have gotten the free slot.
+        Assert.Single(results, accepted => accepted);
+        Assert.Equal(callers - 1, results.Count(accepted => !accepted));
+
+        await using var db = fixture.CreateDbContext();
+        var activeCount = await db.Workers.CountAsync(w => w.TenantId == tenantId && w.IsActive);
+        Assert.Equal(1, activeCount);
+    }
+
+    private async Task<IReadOnlyList<WorkerId>> SeedInactiveWorkersAsync(TenantId tenantId, int count)
+    {
+        var ids = new List<WorkerId>();
+        await using var db = fixture.CreateDbContext();
+        for (var index = 0; index < count; index++)
+        {
+            var worker = Worker.Create(
+                new WorkerId(NewId()), tenantId, $"Last{index}", $"First{index}", null, Now);
+            worker.Deactivate(Now);
+            db.Workers.Add(worker);
+            ids.Add(worker.Id);
+        }
+
+        await db.SaveChangesAsync();
+        return ids;
+    }
+
+    private async Task<IReadOnlyList<bool>> RaceReactivationsAsync(IReadOnlyList<WorkerId> workerIds)
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var attempts = workerIds
+            .Select(workerId => Task.Run(() => AttemptReactivationAsync(workerId, gate)))
+            .ToList();
+
+        await Task.Delay(50);
+        gate.SetResult();
+
+        return await Task.WhenAll(attempts);
+    }
+
+    private async Task<bool> AttemptReactivationAsync(WorkerId workerId, TaskCompletionSource gate)
+    {
+        await using var db = fixture.CreateDbContext();
+
+        // Open the connection and load+mutate the worker before the gate - the race under test is
+        // TryReactivateWithinQuotaAsync's own lock-and-count statement, not the read that precedes it.
+        await db.Database.OpenConnectionAsync();
+
+        var repository = new WorkerRepository(db);
+        var worker = await repository.GetByIdAsync(workerId, CancellationToken.None);
+        worker!.Reactivate(Now);
+
+        await gate.Task;
+
+        return await repository.TryReactivateWithinQuotaAsync(worker, CancellationToken.None);
+    }
+
     private async Task SeedActiveWorkerAsync(TenantId tenantId, string lastName, string firstName)
     {
         var worker = Worker.Create(new WorkerId(NewId()), tenantId, lastName, firstName, null, Now);

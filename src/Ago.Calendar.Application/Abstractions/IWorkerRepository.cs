@@ -44,6 +44,29 @@ public interface IWorkerRepository
     /// transaction (if it has one) is left uncommitted by this call alone.</returns>
     Task<bool> TryAddWithinQuotaAsync(Worker worker, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// `22-23`: the reactivation half of the same invariant <see cref="TryAddWithinQuotaAsync"/>
+    /// enforces for creation. A downgrade deactivates the excess rather than deleting it
+    /// (`adr/0125`), which is exactly what makes <c>PUT /workers/{id}</c> a second door onto the same
+    /// quota - a caller can flip <see cref="Worker.IsActive"/> back on for a worker the quota already
+    /// has no room for. This shares <see cref="TryAddWithinQuotaAsync"/>'s own lock-and-count shape
+    /// (see <c>WorkerRepository.TryReactivateWithinQuotaAsync</c> for the identical
+    /// <c>SELECT ... FOR UPDATE</c> plus <c>COUNT(*)</c> statement) rather than a second, differently
+    /// shaped check for the same fact - a second shape is how the two drift.
+    ///
+    /// <para>The caller applies <see cref="Worker.Reactivate"/> (and any other pending change, such
+    /// as a rename from the same request) to <paramref name="worker"/> <b>before</b> calling this -
+    /// the same order <c>CreateWorkerHandler</c> already uses against <see cref="TryAddWithinQuotaAsync"/>.
+    /// The count this method takes excludes <paramref name="worker"/> itself by id, so it reads the
+    /// same "how many workers other than this one are active" answer regardless of whether the caller
+    /// already flipped the in-memory flag - the decision does not depend on statement ordering.</para>
+    /// </summary>
+    /// <returns><see langword="true"/> if the reactivation (and any other pending change on
+    /// <paramref name="worker"/>) was persisted; <see langword="false"/> if the tenant's active count,
+    /// not counting this worker, already equals or exceeds its granted <see cref="Tenant.WorkerQuota"/>
+    /// - nothing is written on this path, including any unrelated field the same request changed.</returns>
+    Task<bool> TryReactivateWithinQuotaAsync(Worker worker, CancellationToken cancellationToken);
+
     Task SaveAsync(Worker worker, CancellationToken cancellationToken);
 
     /// <summary>

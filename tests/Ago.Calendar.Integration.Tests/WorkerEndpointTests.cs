@@ -34,7 +34,10 @@ public class WorkerEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task ATenant_CanListGetUpdateAndReadBackAWorker()
     {
-        var seed = await CalendarSeed.WriteAsync(fixture);
+        // `22-23`: this test's own later step deactivates the seeded worker and then reactivates him
+        // - a quota of 1 is what makes that reactivation of the tenant's only worker legal under the
+        // gate this item adds, rather than a scenario this test never meant to exercise.
+        var seed = await CalendarSeed.WriteAsync(fixture, workerQuota: 1);
 
         var listed = await GetAsync<WorkerResponse[]>("/api/v1/console/workers", seed);
         var row = Assert.Single(listed, w => w.WorkerId == seed.Worker.Id.Value);

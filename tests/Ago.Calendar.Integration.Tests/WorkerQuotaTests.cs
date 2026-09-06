@@ -119,6 +119,59 @@ public sealed class WorkerQuotaTests(PostgresFixture fixture)
         Assert.False(deactivated.IsActive);
     }
 
+    [Fact]
+    public async Task ReactivatingADeactivatedWorker_PastTheQuota_IsRefused_WithNothingWritten()
+    {
+        // `22-23`: the bypass `22-07`'s own downgrade rule leaves open - the excess is deactivated,
+        // not deleted, and the ordinary edit endpoint used to let anyone flip it straight back on.
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now);
+        var second = await CreateWorkerAsync(seed, "Two", "B", CalendarSeed.Now.AddSeconds(1));
+        Assert.True(second.IsSuccess);
+
+        // Down to one - 22-07's own rule deactivates the most recently created worker, "Two".
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 1, CalendarSeed.Now.AddSeconds(2));
+
+        // The request also renames the worker, so "nothing written" has to cover the whole call, not
+        // only the activity flag.
+        var result = await UpdateWorkerAsync(
+            seed, second.Value, lastName: "Renamed", firstName: "B", isActive: true,
+            now: CalendarSeed.Now.AddSeconds(3));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.worker_quota_exceeded", result.Error!.Value.Code);
+
+        await using var verify = fixture.CreateDbContext();
+        var worker = await verify.Workers.SingleAsync(w => w.Id == second.Value, CancellationToken.None);
+        Assert.False(worker.IsActive);
+        Assert.Equal("Two", worker.LastName);
+    }
+
+    [Fact]
+    public async Task ReactivatingADeactivatedWorker_WithinTheQuota_Succeeds()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now);
+        var second = await CreateWorkerAsync(seed, "Two", "B", CalendarSeed.Now.AddSeconds(1));
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 1, CalendarSeed.Now.AddSeconds(2));
+
+        // Room again - a genuine upgrade, distinct from the auto-reactivation
+        // RaisingTheQuotaBackUp_DoesNotReactivateAnyoneItPreviouslyDeactivated rules out: this test
+        // reactivates through the manual endpoint the author's own ADR names as the intended path.
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now.AddSeconds(3));
+
+        var result = await UpdateWorkerAsync(
+            seed, second.Value, lastName: "Two", firstName: "B", isActive: true,
+            now: CalendarSeed.Now.AddSeconds(4));
+
+        Assert.True(result.IsSuccess);
+
+        await using var verify = fixture.CreateDbContext();
+        var activeCount = await verify.Workers.CountAsync(
+            w => w.TenantId == seed.Tenant.Id && w.IsActive, CancellationToken.None);
+        Assert.Equal(2, activeCount);
+    }
+
     private async Task ApplyGrantAsync(TenantId tenantId, int quota, DateTimeOffset now)
     {
         await using var db = fixture.CreateDbContext();
@@ -136,6 +189,18 @@ public sealed class WorkerQuotaTests(PostgresFixture fixture)
         return await handler.HandleAsync(
             new CreateWorker(
                 seed.OperatorId, seed.Tenant.Id, lastName, firstName, null, null, seed.Calendar.Id, []),
+            CancellationToken.None);
+    }
+
+    private async Task<Result> UpdateWorkerAsync(
+        SeededTenant seed, WorkerId workerId, string lastName, string firstName, bool isActive, DateTimeOffset now)
+    {
+        await using var db = fixture.CreateDbContext();
+        var handler = new UpdateWorkerHandler(
+            new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(now));
+
+        return await handler.HandleAsync(
+            new UpdateWorker(seed.OperatorId, seed.Tenant.Id, workerId, lastName, firstName, null, null, isActive),
             CancellationToken.None);
     }
 

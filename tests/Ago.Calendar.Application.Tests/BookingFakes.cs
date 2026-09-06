@@ -220,6 +220,9 @@ internal sealed class FakeWorkerRepository(Worker? worker) : IWorkerRepository
     public Task<bool> TryAddWithinQuotaAsync(Worker worker, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");
 
+    public Task<bool> TryReactivateWithinQuotaAsync(Worker worker, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
+
     public Task SaveAsync(Worker worker, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");
 

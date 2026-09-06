@@ -28,6 +28,7 @@ public readonly record struct GetPendingBookingsForTenant(OperatorId OperatorId,
 public sealed class GetPendingBookingsForTenantHandler(
     IPendingBookingReadStore queue,
     IPermissionChecker permissions,
+    IContactVisibilityProjectionStore visibility,
     IClock clock)
 {
     /// <summary>A page bound that is generous rather than tuned: the queue drains continuously, so a
@@ -53,12 +54,22 @@ public sealed class GetPendingBookingsForTenantHandler(
         var canReadContacts = await permissions.HasPermissionAsync(
             query.OperatorId, query.TenantId, Permission.CustomerRead, cancellationToken);
 
+        // `23-12`: a third, independent read - only asked when there is a phone column for it to act
+        // on at all. A caller with no CustomerRead gets no join to customers (canReadContacts above),
+        // so what rung the tenant is on is not worth a query for them.
+        var mask = false;
+        if (canReadContacts)
+        {
+            var rung = await visibility.GetAsync(query.TenantId, cancellationToken);
+            mask = rung == ContactVisibility.MaskedWithReveal;
+        }
+
         // Clamped rather than rejected: a caller asking for more than the page bound wants "as many
         // as I can have", and an error would make them guess the number.
         var limit = Math.Clamp(query.Limit, 1, MaxLimit);
 
         var rows = await queue.GetPendingForTenantAsync(
-            query.TenantId, clock.UtcNow, limit, canReadContacts, cancellationToken);
+            query.TenantId, clock.UtcNow, limit, canReadContacts, mask, cancellationToken);
         return Result<IReadOnlyList<PendingBookingRow>>.Success(rows);
     }
 }

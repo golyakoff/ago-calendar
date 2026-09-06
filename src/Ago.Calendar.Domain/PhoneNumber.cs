@@ -30,6 +30,28 @@ public readonly record struct PhoneNumber
 
     public override string ToString() => Value;
 
+    /// <summary>
+    /// `23-12`/`decisions.md` §5: the masked display form a caller sees under
+    /// <see cref="ContactVisibility.MaskedWithReveal"/> - keeps the first two and last two characters
+    /// (enough that an operator can sanity-check "this looks like a real number") and replaces
+    /// everything between with a fixed run of bullets. The identical algorithm `ago-chat`'s own
+    /// <c>ListVisitorContactDetailsHandler.Mask</c> uses for the same purpose over its own store -
+    /// independently implemented rather than shared, since <c>Ago.Chat.*</c> is not a project this one
+    /// may reference (adr/0027) - restated here on <see cref="PhoneNumber"/> itself, rather than
+    /// duplicated across every read store that needs it, because it is a pure function of the value
+    /// this type already holds and every read store that masks a phone can already reference
+    /// <c>Ago.Calendar.Domain</c>.
+    ///
+    /// <para>The short-value branch below is unreachable for any <see cref="PhoneNumber"/> this type
+    /// can construct (<see cref="MinDigits"/> plus the leading <c>+</c> is already nine characters),
+    /// kept anyway so this method matches its chat-side twin exactly rather than silently depending on
+    /// today's minimum length.</para>
+    /// </summary>
+    public string Masked() =>
+        Value.Length <= 4
+            ? new string('•', Value.Length)
+            : $"{Value[..2]}{new string('•', Value.Length - 4)}{Value[^2..]}";
+
     private static string Normalise(string value)
     {
         ArgumentNullException.ThrowIfNull(value);

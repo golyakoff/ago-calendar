@@ -10,6 +10,9 @@ namespace Ago.Calendar.Application.Tests;
 /// whether the phone field gets fetched. No database here: whether the read store's SQL actually
 /// joins to <c>customers</c> is proven in <c>Ago.Calendar.Integration.Tests.SharedPendingQueueTests</c>;
 /// this is only about the handler's own decision, which is the part a fake can prove in microseconds.
+///
+/// <para>`23-12`: the identical shape extended to the tenant's own rung - a third, independent read,
+/// asked only when the second one (<c>CustomerRead</c>) already passed.</para>
 /// </summary>
 public class PendingBookingsPhoneGatingTests
 {
@@ -54,18 +57,62 @@ public class PendingBookingsPhoneGatingTests
         Assert.Empty(world.Queue.AskedFor);
     }
 
+    [Fact]
+    public async Task OnTheMaskedRung_WithCustomerRead_AsksTheReadStoreToMask()
+    {
+        var world = new World(ContactVisibility.MaskedWithReveal);
+
+        var result = await world.QueueAsync();
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        var asked = Assert.Single(world.Queue.AskedFor);
+        Assert.True(asked.IncludeContactData);
+        Assert.True(asked.Mask);
+    }
+
+    [Fact]
+    public async Task OnTheMaskedRung_WithoutCustomerRead_NeverAsksWhatRungTheTenantIsOn()
+    {
+        // No phone column will be in the row either way, so there is nothing for the rung to act on -
+        // asking would be a query this caller's answer has no use for.
+        var world = new World(ContactVisibility.MaskedWithReveal);
+        world.Permissions.Deny(Permission.CustomerRead);
+
+        var result = await world.QueueAsync();
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        var asked = Assert.Single(world.Queue.AskedFor);
+        Assert.False(asked.IncludeContactData);
+        Assert.False(asked.Mask);
+        Assert.Empty(world.Visibility.AskedFor);
+    }
+
+    [Fact]
+    public async Task OnTheVisibleRung_WithCustomerRead_NeverAsksTheReadStoreToMask()
+    {
+        var world = new World(ContactVisibility.Visible);
+
+        var result = await world.QueueAsync();
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        Assert.False(Assert.Single(world.Queue.AskedFor).Mask);
+    }
+
     private sealed class World
     {
         private readonly GetPendingBookingsForTenantHandler _handler;
 
-        public World()
+        public World(ContactVisibility rung = ContactVisibility.Visible)
         {
-            _handler = new GetPendingBookingsForTenantHandler(Queue, Permissions, new FakeClock(Now));
+            Visibility = new FakeContactVisibilityProjectionStore(rung);
+            _handler = new GetPendingBookingsForTenantHandler(Queue, Permissions, Visibility, new FakeClock(Now));
         }
 
         public FakePendingBookingReadStore Queue { get; } = new();
 
         public FakePermissionChecker Permissions { get; } = new();
+
+        public FakeContactVisibilityProjectionStore Visibility { get; }
 
         public Task<Ago.Platform.Kernel.Result<IReadOnlyList<PendingBookingRow>>> QueueAsync() =>
             _handler.HandleAsync(new GetPendingBookingsForTenant(Caller, TenantId, 100), CancellationToken.None);

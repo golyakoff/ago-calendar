@@ -99,6 +99,34 @@ public class WorkerSlotsHandlerTests
     }
 
     [Fact]
+    public async Task OnTheMaskedRung_WithCustomerRead_AsksTheReadStoreToMask()
+    {
+        var world = new World();
+        world.Visibility.Rung = ContactVisibility.MaskedWithReveal;
+
+        var result = await world.SlotsAsync();
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        Assert.True(Assert.Single(world.Slots.AskedFor).Mask);
+    }
+
+    [Fact]
+    public async Task OnTheMaskedRung_WithoutCustomerRead_NeverAsksWhatRungTheTenantIsOn()
+    {
+        var world = new World();
+        world.Visibility.Rung = ContactVisibility.MaskedWithReveal;
+        world.Permissions.Deny(Permission.CustomerRead);
+
+        var result = await world.SlotsAsync();
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        var asked = Assert.Single(world.Slots.AskedFor);
+        Assert.False(asked.IncludeContactData);
+        Assert.False(asked.Mask);
+        Assert.Empty(world.Visibility.AskedFor);
+    }
+
+    [Fact]
     public async Task TheReadStoreIsAskedForExactlyTheRequestedTenantWorkerAndRange()
     {
         var world = new World();
@@ -127,7 +155,7 @@ public class WorkerSlotsHandlerTests
             Workers = new WorkerLookup(workerExists
                 ? worker ?? Worker.Create(TargetWorker, TenantId, "Alexeyev", "Alex", null, Now)
                 : null);
-            _handler = new GetWorkerSlotsHandler(Slots, Workers, Permissions);
+            _handler = new GetWorkerSlotsHandler(Slots, Workers, Permissions, Visibility);
         }
 
         public FakeWorkerSlotReadStore Slots { get; } = new();
@@ -135,6 +163,8 @@ public class WorkerSlotsHandlerTests
         public WorkerLookup Workers { get; }
 
         public FakePermissionChecker Permissions { get; } = new();
+
+        public FakeContactVisibilityProjectionStore Visibility { get; } = new();
 
         public Task<Ago.Platform.Kernel.Result<IReadOnlyList<WorkerSlotRow>>> SlotsAsync(
             DateOnly? from = null, DateOnly? to = null) =>
@@ -149,13 +179,13 @@ public class WorkerSlotsHandlerTests
 /// re-decided there.</summary>
 internal sealed class FakeWorkerSlotReadStore(params WorkerSlotRow[] rows) : IWorkerSlotReadStore
 {
-    public List<(TenantId TenantId, WorkerId WorkerId, DateOnly From, DateOnly To, bool IncludeContactData)> AskedFor { get; } = [];
+    public List<(TenantId TenantId, WorkerId WorkerId, DateOnly From, DateOnly To, bool IncludeContactData, bool Mask)> AskedFor { get; } = [];
 
     public Task<IReadOnlyList<WorkerSlotRow>> GetForWorkerAsync(
         TenantId tenantId, WorkerId workerId, DateOnly from, DateOnly to, bool includeContactData,
-        CancellationToken cancellationToken)
+        bool mask, CancellationToken cancellationToken)
     {
-        AskedFor.Add((tenantId, workerId, from, to, includeContactData));
+        AskedFor.Add((tenantId, workerId, from, to, includeContactData, mask));
         return Task.FromResult<IReadOnlyList<WorkerSlotRow>>(rows);
     }
 }

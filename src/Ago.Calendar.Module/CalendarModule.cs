@@ -215,6 +215,12 @@ public sealed class CalendarModule : IProductModule
         // report stays; it reads `customers`, not identity.
         services.AddScoped<GetTenantContactsHandler>();
 
+        // `23-12`/`adr/0123`: the rung projection's own three new handlers - reveal, confirm, and the
+        // tenant's own audit read of every reveal.
+        services.AddScoped<RevealCustomerPhoneHandler>();
+        services.AddScoped<ConfirmOperatorVerifiedPhoneHandler>();
+        services.AddScoped<GetPhoneRevealsForTenantHandler>();
+
         // `22-14`/`adr/0100`: the switcher's own read - "which tenants may I act in here". Not an
         // identity-management endpoint of the kind `22-05` deleted above: it manages nothing and
         // grants nothing, it reports what the projection `ago-chat` replicates already says.

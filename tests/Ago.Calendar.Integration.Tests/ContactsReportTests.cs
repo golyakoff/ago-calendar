@@ -35,7 +35,7 @@ public class ContactsReportTests(PostgresFixture fixture)
         }
 
         var store = new ContactsReadStore(fixture.DataSource);
-        var rows = await store.ListForTenantAsync(mine.Tenant.Id, CancellationToken.None);
+        var rows = await store.ListForTenantAsync(mine.Tenant.Id, mask: false, CancellationToken.None);
 
         Assert.Equal(2, rows.Count);
         Assert.Contains(rows, r => r.CustomerId == mine.Customer.Id);
@@ -53,7 +53,9 @@ public class ContactsReportTests(PostgresFixture fixture)
         customer!.Describe("Anna", "Prefers afternoons");
         await db.SaveChangesAsync();
 
-        var result = await new GetTenantContactsHandler(new ContactsReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(db)))
+        var result = await new GetTenantContactsHandler(
+                new ContactsReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+                new ContactVisibilityProjectionStore(db))
             .HandleAsync(new GetTenantContacts(seed.OperatorId, seed.Tenant.Id), CancellationToken.None);
 
         Assert.True(result.IsSuccess, result.Error?.Message);
@@ -61,7 +63,7 @@ public class ContactsReportTests(PostgresFixture fixture)
         Assert.Equal("Anna", row.DisplayName);
         Assert.Equal("Prefers afternoons", row.Notes);
         Assert.Equal(0, row.NoShowCount);
-        Assert.Equal(seed.Customer.Phone, row.Phone);
+        Assert.Equal(seed.Customer.Phone.Value, row.Phone);
     }
 
     [Fact]
@@ -82,7 +84,8 @@ public class ContactsReportTests(PostgresFixture fixture)
 
         await using var reader = fixture.CreateDbContext();
         var result = await new GetTenantContactsHandler(
-                new ContactsReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(reader)))
+                new ContactsReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(reader)),
+                new ContactVisibilityProjectionStore(reader))
             .HandleAsync(new GetTenantContacts(strangerId, seed.Tenant.Id), CancellationToken.None);
 
         Assert.True(result.IsFailure);

@@ -96,6 +96,9 @@ public sealed record WorkingHoursRuleResponse(
 /// one - this response is already one row per booking, not per slot, so the field name did not need
 /// to change even though what it points at can now be a multi-slot run.
 /// </param>
+/// <param name="Masked">`23-12`: whether <see cref="Phone"/> above is the masked display form -
+/// meaningful only when <see cref="Phone"/> is non-null. The console must not infer this from the
+/// string's own shape.</param>
 public sealed record PendingBookingResponse(
     Guid BookingId,
     Guid CalendarId,
@@ -107,22 +110,54 @@ public sealed record PendingBookingResponse(
     DateOnly LocalDate,
     DateTimeOffset ConfirmationDeadline,
     bool IsOverdue,
-    string? Phone);
+    string? Phone,
+    bool Masked);
 
 // `22-05`/`adr/0093`: CreateRoleRequest/RoleResponse/InviteOperatorRequest/OperatorResponse removed -
 // there is no calendar-owned `roles`/`operators` table left to manage from this console. A person's
 // calendar permissions are granted on the account side now (`22-06`'s console screen).
 
+/// <param name="Masked">`23-12`: whether <see cref="Phone"/> is the masked display form. The console
+/// renders a reveal control exactly when this is <see langword="true"/>.</param>
+/// <param name="PhoneVerifiedAt">`20-09`'s own fact: when this number was proven reachable by SMS
+/// code, or <see langword="null"/> if it never has been.</param>
+/// <param name="PhoneConfirmedByOperatorAt">`23-12`'s own distinct fact: when an operator recorded
+/// "I called and it is them", or <see langword="null"/> if nobody has. Never merged with
+/// <see cref="PhoneVerifiedAt"/> - see <c>Customer.PhoneConfirmedByOperatorAt</c>'s own remarks.</param>
 /// <param name="NoShowCount">Read honestly - see <c>ContactRow.NoShowCount</c>'s own remarks on why
 /// this is zero for every customer in this product's v1, not a bug in the report.</param>
 public sealed record ContactResponse(
     Guid CustomerId,
     string Phone,
+    bool Masked,
     string? DisplayName,
     string? Notes,
     int NoShowCount,
+    DateTimeOffset? PhoneVerifiedAt,
+    DateTimeOffset? PhoneConfirmedByOperatorAt,
     DateTimeOffset FirstSeenAt,
     DateTimeOffset LastSeenAt);
+
+/// <summary>`23-12`: the response to a deliberate reveal - the real number, and nothing else. Never
+/// returned by any list endpoint.</summary>
+public sealed record CustomerPhoneRevealResponse(string Phone);
+
+/// <summary>`23-12`: what the console posts to reveal one customer's phone - which screen asked, for
+/// the reveal record's own "which surface" field.</summary>
+public sealed record RevealCustomerPhoneRequest(string Surface);
+
+/// <summary>`23-12`: the response to a successful "I called and it is them" confirmation.</summary>
+public sealed record ConfirmOperatorVerifiedPhoneResponse(DateTimeOffset ConfirmedAt);
+
+/// <summary>`23-12`'s own audit view - `decisions.md` §5's amendment: individual reveals, never an
+/// aggregated count.</summary>
+public sealed record ContactPhoneRevealResponse(
+    Guid Id, DateTimeOffset OccurredAt, Guid CustomerId, Guid OperatorId, string Surface);
+
+/// <param name="NextBefore">Keyset cursor for the next page - <see langword="null"/> once the oldest
+/// row has been reached.</param>
+public sealed record ContactPhoneRevealPageResponse(
+    IReadOnlyList<ContactPhoneRevealResponse> Items, Guid? NextBefore);
 
 /// <param name="LocalDate">The business-local day, as the shop names it - not an instant range. See
 /// <c>DeleteDayOff</c>.</param>
@@ -202,6 +237,8 @@ public sealed record WorkerScheduleResponse(
 /// hold <c>customer:read</c> for this tenant - see <see cref="CustomerId"/> for the discriminator.
 /// </param>
 /// <param name="Phone">Same two-reasons-for-null story as <see cref="CustomerDisplayName"/>.</param>
+/// <param name="Masked">`23-12`: whether <see cref="Phone"/> is the masked display form -
+/// meaningful only when <see cref="Phone"/> is non-null.</param>
 /// <param name="BookingId">
 /// `20-18`: which booking this slot belongs to, null exactly when <see cref="Status"/> is
 /// <c>"Available"</c> or <c>"Blocked"</c>. Two rows sharing this value are two slots of one run - the
@@ -220,6 +257,7 @@ public sealed record WorkerSlotResponse(
     Guid? CustomerId,
     string? CustomerDisplayName,
     string? Phone,
+    bool Masked,
     Guid? BookingId);
 
 /// <summary>
@@ -254,6 +292,7 @@ public sealed record RecutBookingPreviewResponse(
     Guid? CustomerId,
     string? CustomerDisplayName,
     string? Phone,
+    bool Masked,
     bool CanDecide);
 
 /// <summary>`20-16`: the request behind <c>POST /workers/{id}/schedule/recut</c>.</summary>

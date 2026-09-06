@@ -30,6 +30,7 @@ public sealed class RecutPreviewHandler(
     IWorkerSlotReadStore slots,
     IWallClockResolver wallClock,
     IPermissionChecker permissions,
+    IContactVisibilityProjectionStore visibility,
     IClock clock)
 {
     public async Task<Result<RecutPreviewResult>> HandleAsync(RecutPreview query, CancellationToken cancellationToken)
@@ -91,8 +92,17 @@ public sealed class RecutPreviewHandler(
         var canReadContacts = await permissions.HasPermissionAsync(
             query.OperatorId, query.TenantId, Permission.CustomerRead, cancellationToken);
 
+        // `23-12`: the identical third, independent read `GetTenantContactsHandler`'s own remarks
+        // give for itself, only asked when there is a phone column for it to act on at all.
+        var mask = false;
+        if (canReadContacts)
+        {
+            var rung = await visibility.GetAsync(query.TenantId, cancellationToken);
+            mask = rung == ContactVisibility.MaskedWithReveal;
+        }
+
         var rows = await slots.GetForWorkerAsync(
-            query.TenantId, query.WorkerId, query.From, lastDay, canReadContacts, cancellationToken);
+            query.TenantId, query.WorkerId, query.From, lastDay, canReadContacts, mask, cancellationToken);
 
         var rowsByDay = rows.ToLookup(row => row.LocalDate);
 
@@ -117,6 +127,7 @@ public sealed class RecutPreviewHandler(
                     row.CustomerId,
                     row.CustomerDisplayName,
                     row.Phone,
+                    row.Masked,
                     CanDecide: row.Status != EventStatus.NoShow));
 
                 fingerprintInput.Add((row.EventId.Value, row.Status));

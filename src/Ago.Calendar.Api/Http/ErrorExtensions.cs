@@ -162,6 +162,11 @@ public static class ErrorExtensions
             // product's identity model, and `22-15` removed the now-unreachable arms rather than
             // leave a mapping that reads as evidence something still produces them.
             "contacts.forbidden" => StatusCodes.Status403Forbidden,
+            // `23-12`: a customer id that does not resolve in the caller's own tenant - either it
+            // never existed, or it belongs to someone else's. The same "wrong tenant reads like no
+            // such row" info-hiding shape `booking.*_not_found` arms already use, never a different,
+            // more informative code that would confirm a real id belonging to another tenant.
+            "contacts.customer_not_found" => StatusCodes.Status404NotFound,
             // 2026-09-01: PublicBookingApiGate's own kill switch. 403, not the 404 that
             // booking.surface_not_found/booking.origin_not_allowed use two cases above - those hide a
             // caller-specific fact (whether a tenant/origin exists); this refusal is identical for

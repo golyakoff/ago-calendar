@@ -116,6 +116,7 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
             new WorkerSlotReadStore(fixture.DataSource),
             Resolver,
             new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+            new ContactVisibilityProjectionStore(db),
             Clock);
 
         return await handler.HandleAsync(

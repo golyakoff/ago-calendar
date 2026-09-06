@@ -147,6 +147,59 @@ public class CustomerTests
         Assert.Null(customer.DisplayName);
         Assert.Null(customer.Notes);
     }
+
+    /// <summary>`23-12`/`decisions.md` §5: "I called and it is them" - a fresh customer carries
+    /// neither confirmation, which is what lets a caller tell "confirmed" apart from "never
+    /// asked".</summary>
+    [Fact]
+    public void ANewCustomer_HasNoOperatorConfirmation()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var customer = CalendarFixtures.Customer(tenant);
+
+        Assert.Null(customer.PhoneConfirmedByOperatorAt);
+    }
+
+    [Fact]
+    public void RecordOperatorConfirmedPhone_SetsTheTimestamp()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var customer = CalendarFixtures.Customer(tenant);
+
+        customer.RecordOperatorConfirmedPhone(CalendarFixtures.Now);
+
+        Assert.Equal(CalendarFixtures.Now, customer.PhoneConfirmedByOperatorAt);
+    }
+
+    [Fact]
+    public void RecordOperatorConfirmedPhone_IsEarliestWins_ASecondCallNeverOverwrites()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var customer = CalendarFixtures.Customer(tenant);
+        var first = CalendarFixtures.Now;
+        var second = CalendarFixtures.Now.AddDays(1);
+
+        customer.RecordOperatorConfirmedPhone(first);
+        customer.RecordOperatorConfirmedPhone(second);
+
+        Assert.Equal(first, customer.PhoneConfirmedByOperatorAt);
+    }
+
+    /// <summary>The central distinction `decisions.md` §5 draws: "verified by operator" is a different
+    /// fact from "verified by code", recorded separately - confirming by phone call must never also
+    /// mark the SMS-code verification, and vice versa.</summary>
+    [Fact]
+    public void RecordOperatorConfirmedPhone_NeverSetsPhoneVerifiedAt_AndViceVersa()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var customer = CalendarFixtures.Customer(tenant);
+        customer.RecordOperatorConfirmedPhone(CalendarFixtures.Now);
+        Assert.Null(customer.PhoneVerifiedAt);
+
+        var other = CalendarFixtures.Customer(tenant, phone: "+79997654321");
+        other.RecordVerifiedPhone(CalendarFixtures.Now);
+        Assert.Null(other.PhoneConfirmedByOperatorAt);
+    }
 }
 
 // `22-05`/`adr/0093`: RoleTests removed - Role and Operator are gone along with the `roles`/

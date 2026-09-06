@@ -113,12 +113,34 @@ internal sealed class FakeEventRepositoryWithSaves : IEventRepository
 /// the handler, and handed to the read store rather than re-decided there.</summary>
 internal sealed class FakePendingBookingReadStore(params PendingBookingRow[] rows) : IPendingBookingReadStore
 {
-    public List<(TenantId TenantId, int Limit, bool IncludeContactData)> AskedFor { get; } = [];
+    public List<(TenantId TenantId, int Limit, bool IncludeContactData, bool Mask)> AskedFor { get; } = [];
 
     public Task<IReadOnlyList<PendingBookingRow>> GetPendingForTenantAsync(
-        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, CancellationToken cancellationToken)
+        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, bool mask,
+        CancellationToken cancellationToken)
     {
-        AskedFor.Add((tenantId, limit, includeContactData));
+        AskedFor.Add((tenantId, limit, includeContactData, mask));
         return Task.FromResult<IReadOnlyList<PendingBookingRow>>(rows);
     }
+}
+
+/// <summary>`23-12`: a tenant's own rung, faked - defaults to <see cref="ContactVisibility.Visible"/>
+/// unless a test stages otherwise, the identical default the real store's own "missing row" case
+/// returns.</summary>
+internal sealed class FakeContactVisibilityProjectionStore(
+    ContactVisibility rung = ContactVisibility.Visible) : IContactVisibilityProjectionStore
+{
+    public ContactVisibility Rung { get; set; } = rung;
+
+    public List<TenantId> AskedFor { get; } = [];
+
+    public Task<ContactVisibility> GetAsync(TenantId tenantId, CancellationToken cancellationToken)
+    {
+        AskedFor.Add(tenantId);
+        return Task.FromResult(Rung);
+    }
+
+    public Task StageAsync(
+        TenantId tenantId, ContactVisibility newRung, DateTimeOffset asOf, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by any handler test - only the consumer stages.");
 }

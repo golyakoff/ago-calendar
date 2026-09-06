@@ -54,6 +54,19 @@ public sealed class Customer
     /// </summary>
     public DateTimeOffset? PhoneVerifiedAt { get; private set; }
 
+    /// <summary>
+    /// `23-12`/`decisions.md` §5: "I called and it is them" - a different fact from
+    /// <see cref="PhoneVerifiedAt"/>'s own SMS-code answer, and recorded separately rather than
+    /// folded into it. §5's own denominator for the reveal count: forty revealed and thirty-one
+    /// confirmed is work, forty revealed and two confirmed is a question - and it can only ever be set
+    /// by an operator who could see the number to call it, which is what
+    /// <c>ConfirmOperatorVerifiedPhoneHandler</c>'s own <c>Permission.CustomerRead</c> gate enforces
+    /// (§5: "it lives only on rungs one and two - somebody who cannot see a number cannot confirm it
+    /// by calling"). Earliest-wins and idempotent, the identical shape <see cref="RecordVerifiedPhone"/>
+    /// already uses for the same reason: a second confirmation is not a stronger fact than the
+    /// first.</summary>
+    public DateTimeOffset? PhoneConfirmedByOperatorAt { get; private set; }
+
     private Customer(CustomerId id, TenantId tenantId, PhoneNumber phone, DateTimeOffset now)
     {
         Id = id;
@@ -91,6 +104,12 @@ public sealed class Customer
     /// applies at the row level (that type's own remarks on why a later, different timestamp must never
     /// silently replace an earlier one).</summary>
     public void RecordVerifiedPhone(DateTimeOffset verifiedAt) => PhoneVerifiedAt ??= verifiedAt;
+
+    /// <summary>`23-12`: the domain's own canonical statement of "once an operator has confirmed it by
+    /// calling, that stands" - see <see cref="PhoneConfirmedByOperatorAt"/>'s own remarks for why this
+    /// is a distinct fact from <see cref="RecordVerifiedPhone"/> rather than a second caller of
+    /// it.</summary>
+    public void RecordOperatorConfirmedPhone(DateTimeOffset confirmedAt) => PhoneConfirmedByOperatorAt ??= confirmedAt;
 
     public void RecordNoShow(DateTimeOffset now)
     {

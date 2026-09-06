@@ -68,7 +68,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
         Assert.Equal(booking.Id, row.EventId);
         Assert.Equal(seed.Customer.Id, row.CustomerId);
         Assert.NotNull(row.Phone);
-        Assert.Equal(seed.Customer.Phone, row.Phone!.Value);
+        Assert.Equal(seed.Customer.Phone.Value, row.Phone);
     }
 
     [Fact]
@@ -138,7 +138,8 @@ public class WorkerSlotsTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var result = await new GetWorkerSlotsHandler(
-                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)))
+                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+                new ContactVisibilityProjectionStore(db))
             .HandleAsync(
                 new GetWorkerSlots(mine.OperatorId, mine.Tenant.Id, theirs.Worker.Id, From, To),
                 CancellationToken.None);
@@ -155,7 +156,8 @@ public class WorkerSlotsTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var result = await new GetWorkerSlotsHandler(
-                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)))
+                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+                new ContactVisibilityProjectionStore(db))
             .HandleAsync(
                 new GetWorkerSlots(stranger, seed.Tenant.Id, seed.Worker.Id, From, To), CancellationToken.None);
 
@@ -194,14 +196,14 @@ public class WorkerSlotsTests(PostgresFixture fixture)
         // The unpermitted query succeeds under a role that is denied SELECT on customers - which it
         // could not do if the query ever named that table.
         var rows = await store.GetForWorkerAsync(
-            seed.Tenant.Id, seed.Worker.Id, From, To, includeContactData: false, CancellationToken.None);
+            seed.Tenant.Id, seed.Worker.Id, From, To, includeContactData: false, mask: false, CancellationToken.None);
         Assert.Single(rows);
 
         // The *same* role, asked for contact data, hits the table it was denied - proving
         // SqlWithContactData really does join customers, so the split above is not two branches that
         // happen to produce the same SQL.
         var denied = await Assert.ThrowsAsync<PostgresException>(() => store.GetForWorkerAsync(
-            seed.Tenant.Id, seed.Worker.Id, From, To, includeContactData: true, CancellationToken.None));
+            seed.Tenant.Id, seed.Worker.Id, From, To, includeContactData: true, mask: false, CancellationToken.None));
         Assert.Equal("42501", denied.SqlState);
     }
 
@@ -292,7 +294,8 @@ public class WorkerSlotsTests(PostgresFixture fixture)
     {
         await using var db = fixture.CreateDbContext();
         var result = await new GetWorkerSlotsHandler(
-                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)))
+                new WorkerSlotReadStore(fixture.DataSource), new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+                new ContactVisibilityProjectionStore(db))
             .HandleAsync(
                 new GetWorkerSlots(operatorId, tenantId, workerId, from ?? From, to ?? To), CancellationToken.None);
 

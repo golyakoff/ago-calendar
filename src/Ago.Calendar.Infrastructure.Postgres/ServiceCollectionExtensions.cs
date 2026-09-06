@@ -61,6 +61,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRoleAssignmentProjectionStore, RoleAssignmentProjectionStore>();
         services.AddScoped<IPermissionChecker, PermissionChecker>();
 
+        // `23-12`/`adr/0123`: the identical projection shape above, applied to a second fact
+        // `ago-chat` publishes - the account's contact-visibility rung. Same DbContext, same
+        // "Infrastructure adapter behind an Application port" reasoning.
+        services.AddScoped<IContactVisibilityProjectionStore, ContactVisibilityProjectionStore>();
+
         // `22-07`/`adr/0093`: applies `ago-chat`'s own granted worker quota - the outbox consumer's
         // one write. Scoped like every other adapter here, for the identical reason: it holds the
         // DbContext its own transaction runs on.
@@ -78,6 +83,11 @@ public static class ServiceCollectionExtensions
         // never shares the write context still apply, but there is no reason to open a second
         // connection pool for a second read store.
         services.AddScoped<IContactsReadStore, ContactsReadStore>();
+
+        // `23-12`: the reveal record's own write side - raw Npgsql like the read stores above rather
+        // than the DbContext, IContactPhoneRevealRepository's own remarks on why this has no
+        // aggregate to hold it.
+        services.AddScoped<IContactPhoneRevealRepository, ContactPhoneRevealRepository>();
 
         // `22-14`/`adr/0100`: "which tenants may I act in here" - the switcher's own read, and the one
         // operator-reachable query in this product that takes no TenantId. Same shared data source

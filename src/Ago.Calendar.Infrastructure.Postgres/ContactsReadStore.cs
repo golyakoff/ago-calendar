@@ -10,6 +10,16 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 /// connection rather than <c>AgoCalendarDbContext</c>'s - the identical reasoning
 /// <c>PendingBookingReadStore</c>'s own remarks give, restated because this is a second, independent
 /// instance of the same call rather than a shared base class nobody asked for.
+///
+/// <para><b>`23-12`: masking happens here, in the mapping step, never in the SQL and never in the
+/// console.</b> The query always reads the real <c>phone</c> column - there is no per-row cost to
+/// save the way `20-12`'s own two-SQL-constants trick saves a join, because this store already reads
+/// every row's phone unconditionally (a caller without <c>customer:read</c> never reaches this store
+/// at all, per <c>GetTenantContactsHandler</c>'s own permission gate) - and <see cref="ToRow"/> is the
+/// single place that decides whether the real value or <see cref="PhoneNumber.Masked"/> leaves the
+/// store. The real value is never assigned to <see cref="ContactRow.Phone"/> when
+/// <c>mask</c> is <see langword="true"/>, so there is no flag downstream of this method that a
+/// careless edit could ignore and forward the unmasked number.</para>
 /// </summary>
 public sealed class ContactsReadStore(NpgsqlDataSource dataSource) : IContactsReadStore
 {
@@ -19,28 +29,35 @@ public sealed class ContactsReadStore(NpgsqlDataSource dataSource) : IContactsRe
     private const string Sql =
         """
         select id as "CustomerId", phone as "Phone", display_name as "DisplayName", notes as "Notes",
-               no_show_count as "NoShowCount", first_seen_at as "FirstSeenAt", last_seen_at as "LastSeenAt"
+               no_show_count as "NoShowCount", phone_verified_at as "PhoneVerifiedAt",
+               operator_confirmed_phone_at as "PhoneConfirmedByOperatorAt",
+               first_seen_at as "FirstSeenAt", last_seen_at as "LastSeenAt"
         from customers
         where tenant_id = @TenantId
         order by last_seen_at desc
         """;
 
     public async Task<IReadOnlyList<ContactRow>> ListForTenantAsync(
-        TenantId tenantId, CancellationToken cancellationToken)
+        TenantId tenantId, bool mask, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         var rows = await connection.QueryAsync<ContactQueryRow>(new CommandDefinition(
             Sql, new { TenantId = tenantId.Value }, cancellationToken: cancellationToken));
 
-        return [.. rows.Select(ToRow)];
+        return [.. rows.Select(row => ToRow(row, mask))];
     }
 
-    private static ContactRow ToRow(ContactQueryRow row) => new(
+    private static ContactRow ToRow(ContactQueryRow row, bool mask) => new(
         new CustomerId(row.CustomerId),
-        new PhoneNumber(row.Phone),
+        mask ? new PhoneNumber(row.Phone).Masked() : row.Phone,
+        mask,
         row.DisplayName,
         row.Notes,
         row.NoShowCount,
+        row.PhoneVerifiedAt is null ? null : new DateTimeOffset(DateTime.SpecifyKind(row.PhoneVerifiedAt.Value, DateTimeKind.Utc)),
+        row.PhoneConfirmedByOperatorAt is null
+            ? null
+            : new DateTimeOffset(DateTime.SpecifyKind(row.PhoneConfirmedByOperatorAt.Value, DateTimeKind.Utc)),
         new DateTimeOffset(DateTime.SpecifyKind(row.FirstSeenAt, DateTimeKind.Utc)),
         new DateTimeOffset(DateTime.SpecifyKind(row.LastSeenAt, DateTimeKind.Utc)));
 
@@ -50,6 +67,8 @@ public sealed class ContactsReadStore(NpgsqlDataSource dataSource) : IContactsRe
         string? DisplayName,
         string? Notes,
         int NoShowCount,
+        DateTime? PhoneVerifiedAt,
+        DateTime? PhoneConfirmedByOperatorAt,
         DateTime FirstSeenAt,
         DateTime LastSeenAt);
 }

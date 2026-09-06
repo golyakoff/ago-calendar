@@ -33,9 +33,12 @@ public interface IWorkerSlotReadStore
     /// <c>GetWorkerSlotsHandler</c> and handed down rather than re-checked here - see
     /// <see cref="IPendingBookingReadStore.GetPendingForTenantAsync"/>'s own parameter of the same
     /// name for why that split exists.</param>
+    /// <param name="mask">`23-12`'s own gate, the identical shape and reasoning
+    /// <see cref="IPendingBookingReadStore.GetPendingForTenantAsync"/>'s own parameter of the same
+    /// name carries.</param>
     Task<IReadOnlyList<WorkerSlotRow>> GetForWorkerAsync(
         TenantId tenantId, WorkerId workerId, DateOnly from, DateOnly to, bool includeContactData,
-        CancellationToken cancellationToken);
+        bool mask, CancellationToken cancellationToken);
 }
 
 /// <summary>One slot, whatever it currently is - free, held, booked, cancelled, a no-show or a
@@ -55,7 +58,11 @@ public interface IWorkerSlotReadStore
 /// distinguish - see <paramref name="CustomerId"/> for how a caller tells them apart.</param>
 /// <param name="Phone">The same two-reasons-for-null story as <paramref name="CustomerDisplayName"/>,
 /// and see <see cref="PendingBookingRow.Phone"/> for why "permitted but nothing on file" is not a
-/// third state anything here can produce.</param>
+/// third state anything here can produce. `23-12`: a <see cref="string"/>, not a
+/// <see cref="PhoneNumber"/> - see <see cref="ContactRow.Phone"/>'s own remarks. Already masked
+/// (<see cref="Masked"/>) when the tenant's rung called for it.</param>
+/// <param name="Masked">`23-12`. Meaningful only when <see cref="Phone"/> is non-null; see
+/// <see cref="ContactRow.Masked"/>'s own remarks.</param>
 /// <param name="BookingId">
 /// `20-18`: which booking this slot belongs to - <see cref="Event.BookingId"/>, exposed verbatim.
 /// Null exactly when <paramref name="Status"/> is <see cref="EventStatus.Available"/> or
@@ -74,5 +81,6 @@ public readonly record struct WorkerSlotRow(
     string? ServiceName,
     CustomerId? CustomerId,
     string? CustomerDisplayName,
-    PhoneNumber? Phone,
+    string? Phone,
+    bool Masked,
     EventId? BookingId);

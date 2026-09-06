@@ -46,6 +46,24 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<ModuleQuantityGrantedConsumer>();
 
+// `23-12`/`adr/0123`: this product's third broker consumer - projects `ago-chat`'s own
+// `ContactVisibilityChanged` into the local `contact_visibility_projections` table, same shape as
+// the two consumers above.
+builder.Services
+    .AddOptions<ContactVisibilityChangedConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(ContactVisibilityChangedConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<ContactVisibilityChangedConsumer>();
+
+// `23-12`'s own retention: prunes `contact_phone_reveals` past its configured window, the same
+// bounded-batch-delete-on-a-schedule shape as `PendingBookingSweepJob`/`AvailabilityMaterializationJob`
+// above.
+builder.Services
+    .AddOptions<ContactPhoneRevealPruneJobOptions>()
+    .Bind(builder.Configuration.GetSection(ContactPhoneRevealPruneJobOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<ContactPhoneRevealPruneJob>();
+
 var host = builder.Build();
 
 // `20-21`/`adr/0056`: the same guard Ago.Calendar.Api runs, in the same place - before anything can

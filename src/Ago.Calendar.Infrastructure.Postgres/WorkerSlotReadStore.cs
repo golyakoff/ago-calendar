@@ -65,7 +65,7 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
 
     public async Task<IReadOnlyList<WorkerSlotRow>> GetForWorkerAsync(
         TenantId tenantId, WorkerId workerId, DateOnly from, DateOnly to, bool includeContactData,
-        CancellationToken cancellationToken)
+        bool mask, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         var rows = await connection.QueryAsync<WorkerSlotQueryRow>(new CommandDefinition(
@@ -87,10 +87,10 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
             },
             cancellationToken: cancellationToken));
 
-        return [.. rows.Select(ToRow)];
+        return [.. rows.Select(row => ToRow(row, mask))];
     }
 
-    private static WorkerSlotRow ToRow(WorkerSlotQueryRow row) => new(
+    private static WorkerSlotRow ToRow(WorkerSlotQueryRow row, bool mask) => new(
         new EventId(row.EventId),
         row.LocalDate,
         new DateTimeOffset(DateTime.SpecifyKind(row.StartsAt, DateTimeKind.Utc)),
@@ -102,8 +102,10 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         row.CustomerDisplayName,
         // null when the query never selected the column at all (SqlWithoutContactData leaves the
         // Dapper-materialised Phone at its type default) - see WorkerSlotRow.Phone's own remarks on
-        // the two things a null here can mean, told apart by CustomerId.
-        row.Phone is null ? null : new PhoneNumber(row.Phone),
+        // the two things a null here can mean, told apart by CustomerId. `23-12`: masked (never the
+        // real value) when the caller's rung called for it - see WorkerSlotRow.Masked's own remarks.
+        row.Phone is null ? null : (mask ? new PhoneNumber(row.Phone).Masked() : row.Phone),
+        row.Phone is not null && mask,
         // `20-18`: null exactly on an Available or Blocked row - see WorkerSlotRow.BookingId's own
         // remarks.
         row.BookingId is null ? null : new EventId(row.BookingId.Value));

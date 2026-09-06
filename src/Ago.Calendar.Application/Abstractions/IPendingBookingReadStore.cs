@@ -42,8 +42,16 @@ public interface IPendingBookingReadStore
     /// joining unconditionally and merely hiding the column afterwards. See
     /// <see cref="PendingBookingRow.Phone"/> for what the caller sees in each case.
     /// </param>
+    /// <param name="mask">
+    /// `23-12`: whether the tenant's own rung (<see cref="Application.Abstractions.IContactVisibilityProjectionStore"/>,
+    /// resolved once by the handler) is <see cref="ContactVisibility.MaskedWithReveal"/>. Meaningless
+    /// when <paramref name="includeContactData"/> is <see langword="false"/> - there is no phone in
+    /// the row for either value of this parameter to act on - and the handler passes
+    /// <see langword="false"/> in that case rather than the caller inventing a rule for it.
+    /// </param>
     Task<IReadOnlyList<PendingBookingRow>> GetPendingForTenantAsync(
-        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, CancellationToken cancellationToken);
+        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, bool mask,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -82,8 +90,12 @@ public interface IPendingBookingReadStore
 /// is a non-nullable <see cref="PhoneNumber"/>, so every <see cref="Customer"/> a pending booking can
 /// reference always has one; the "permitted but nothing recorded" state the item file asked about is
 /// therefore unreachable given today's model, and this row does not pretend otherwise with a third
-/// state nothing can produce.
+/// state nothing can produce. `23-12`: a <see cref="string"/>, not a <see cref="PhoneNumber"/> - see
+/// <see cref="ContactRow.Phone"/>'s own remarks for why a possibly-masked display value cannot be that
+/// type. Already masked (<see cref="Masked"/>) when the tenant's rung called for it.
 /// </param>
+/// <param name="Masked">`23-12`. Meaningful only when <see cref="Phone"/> is non-null; see
+/// <see cref="ContactRow.Masked"/>'s own remarks.</param>
 public readonly record struct PendingBookingRow(
     EventId BookingId,
     CalendarId CalendarId,
@@ -95,4 +107,5 @@ public readonly record struct PendingBookingRow(
     DateOnly LocalDate,
     DateTimeOffset ConfirmationDeadline,
     bool IsOverdue,
-    PhoneNumber? Phone);
+    string? Phone,
+    bool Masked);

@@ -98,7 +98,8 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         """;
 
     public async Task<IReadOnlyList<PendingBookingRow>> GetPendingForTenantAsync(
-        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, CancellationToken cancellationToken)
+        TenantId tenantId, DateTimeOffset now, int limit, bool includeContactData, bool mask,
+        CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
 
@@ -108,10 +109,10 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
             new { TenantId = tenantId.Value, Now = now, Limit = limit },
             cancellationToken: cancellationToken));
 
-        return [.. rows.Select(ToRow)];
+        return [.. rows.Select(row => ToRow(row, mask))];
     }
 
-    private static PendingBookingRow ToRow(PendingBookingQueueRow row) => new(
+    private static PendingBookingRow ToRow(PendingBookingQueueRow row, bool mask) => new(
         new EventId(row.EventId),
         new CalendarId(row.CalendarId),
         new WorkerId(row.WorkerId),
@@ -128,8 +129,10 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         row.IsOverdue,
         // null when the query never selected the column at all (SqlWithoutContactData leaves the
         // Dapper-materialised Phone at its type default) - see PendingBookingRow.Phone's own remarks
-        // on why that is the only state a null here can mean.
-        row.Phone is null ? null : new PhoneNumber(row.Phone));
+        // on why that is the only state a null here can mean. `23-12`: masked (never the real value)
+        // when the caller's rung called for it - see PendingBookingRow.Masked's own remarks.
+        row.Phone is null ? null : (mask ? new PhoneNumber(row.Phone).Masked() : row.Phone),
+        row.Phone is not null && mask);
 
     /// <summary>
     /// The raw shape Dapper materialises, separate from <see cref="PendingBookingRow"/> so the

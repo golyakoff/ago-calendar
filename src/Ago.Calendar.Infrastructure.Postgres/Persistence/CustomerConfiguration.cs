@@ -22,6 +22,9 @@ internal sealed class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         builder.Property(c => c.DisplayName).HasColumnName("display_name").HasMaxLength(200);
         builder.Property(c => c.Notes).HasColumnName("notes").HasMaxLength(4000);
         builder.Property(c => c.PhoneVerifiedAt).HasColumnName("phone_verified_at").HasColumnType("timestamptz");
+        builder.Property(c => c.PhoneConfirmedByOperatorAt)
+            .HasColumnName("operator_confirmed_phone_at")
+            .HasColumnType("timestamptz");
         builder.Property(c => c.NoShowCount).HasColumnName("no_show_count");
         builder.Property(c => c.FirstSeenAt).HasColumnName("first_seen_at").HasColumnType("timestamptz");
         builder.Property(c => c.LastSeenAt).HasColumnName("last_seen_at").HasColumnType("timestamptz");

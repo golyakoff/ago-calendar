@@ -27,7 +27,10 @@ public readonly record struct GetWorkerSlots(
 /// they guessed exists.</para>
 /// </summary>
 public sealed class GetWorkerSlotsHandler(
-    IWorkerSlotReadStore slots, IWorkerRepository workers, IPermissionChecker permissions)
+    IWorkerSlotReadStore slots,
+    IWorkerRepository workers,
+    IPermissionChecker permissions,
+    IContactVisibilityProjectionStore visibility)
 {
     public async Task<Result<IReadOnlyList<WorkerSlotRow>>> HandleAsync(
         GetWorkerSlots query, CancellationToken cancellationToken)
@@ -57,8 +60,17 @@ public sealed class GetWorkerSlotsHandler(
         var canReadContacts = await permissions.HasPermissionAsync(
             query.OperatorId, query.TenantId, Permission.CustomerRead, cancellationToken);
 
+        // `23-12`: the identical third, independent read `GetTenantContactsHandler`'s own remarks
+        // give for itself, only asked when there is a phone column for it to act on at all.
+        var mask = false;
+        if (canReadContacts)
+        {
+            var rung = await visibility.GetAsync(query.TenantId, cancellationToken);
+            mask = rung == ContactVisibility.MaskedWithReveal;
+        }
+
         var rows = await slots.GetForWorkerAsync(
-            query.TenantId, query.WorkerId, query.From, query.To, canReadContacts, cancellationToken);
+            query.TenantId, query.WorkerId, query.From, query.To, canReadContacts, mask, cancellationToken);
         return Result<IReadOnlyList<WorkerSlotRow>>.Success(rows);
     }
 }

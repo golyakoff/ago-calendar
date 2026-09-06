@@ -91,7 +91,8 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var result = await new GetPendingBookingsForTenantHandler(
-                new PendingBookingReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(Now))
+                new PendingBookingReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+                new ContactVisibilityProjectionStore(db), new FixedClock(Now))
             .HandleAsync(new GetPendingBookingsForTenant(stranger, world.TenantId, 100), CancellationToken.None);
 
         Assert.True(result.IsFailure);
@@ -232,6 +233,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         var result = await new GetPendingBookingsForTenantHandler(
                 new PendingBookingReadStore(fixture.DataSource),
                 new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+                new ContactVisibilityProjectionStore(db),
                 new FixedClock(at ?? Now))
             .HandleAsync(new GetPendingBookingsForTenant(operatorId, tenantId, 100), CancellationToken.None);
 

@@ -41,6 +41,10 @@ public readonly record struct RecutDayPreview(
 /// list holds a customer by construction) for the "nobody holds it" reason
 /// <see cref="WorkerSlotRow.CustomerDisplayName"/> also carries - kept as the identical two-null-reasons
 /// shape rather than inventing a narrower one for this one caller.</param>
+/// <param name="Phone">`23-12`: carried verbatim from <see cref="WorkerSlotRow.Phone"/> - already
+/// masked when the tenant's rung called for it, a <see cref="string"/> rather than a
+/// <see cref="PhoneNumber"/> for the identical reason that row's own remarks give.</param>
+/// <param name="Masked">`23-12`: carried verbatim from <see cref="WorkerSlotRow.Masked"/>.</param>
 /// <param name="CanDecide"><see langword="false"/> only for a <see cref="EventStatus.NoShow"/> row: a
 /// visit that already happened cannot be cancelled through <see cref="CancelBookingHandler"/>, whose
 /// state machine accepts only <see cref="EventStatus.PendingConfirmation"/> and
@@ -57,5 +61,6 @@ public readonly record struct RecutBookingPreview(
     string? ServiceName,
     CustomerId? CustomerId,
     string? CustomerDisplayName,
-    PhoneNumber? Phone,
+    string? Phone,
+    bool Masked,
     bool CanDecide);

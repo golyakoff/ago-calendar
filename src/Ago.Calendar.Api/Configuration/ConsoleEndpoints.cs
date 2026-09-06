@@ -83,6 +83,16 @@ public static class ConsoleEndpoints
         // own console is where a person is granted `calendar:configure` and friends now (`22-06`).
         group.MapGet("/contacts", HandleContactsAsync).WithName("GetContacts");
 
+        // `23-12`/`decisions.md` §5: masked, revealed on demand, and the reveal is recorded.
+        group.MapPost("/contacts/{customerId:guid}/reveal-phone", HandleRevealCustomerPhoneAsync)
+            .WithName("RevealCustomerPhone");
+        // `23-12`: "I called and it is them" - a distinct fact from the SMS code's own verification.
+        group.MapPost("/contacts/{customerId:guid}/confirm-phone", HandleConfirmOperatorVerifiedPhoneAsync)
+            .WithName("ConfirmOperatorVerifiedPhone");
+        // `23-12`'s own audit view - individual reveals, never an aggregated count
+        // (`decisions.md` §5's amendment).
+        group.MapGet("/contacts/phone-reveals", HandlePhoneRevealsAsync).WithName("GetPhoneReveals");
+
         // `20-15`: the materialised slot view - what the tenant's own schedule actually produced for
         // one worker, over a date range. Read-only; see the item's own scope for why it offers no
         // edit of its own.
@@ -489,7 +499,8 @@ public static class ConsoleEndpoints
                 row.LocalDate,
                 row.ConfirmationDeadline,
                 row.IsOverdue,
-                row.Phone?.Value))
+                row.Phone,
+                row.Masked))
             .ToArray());
     }
 
@@ -589,13 +600,79 @@ public static class ConsoleEndpoints
         return Results.Ok(result.Value
             .Select(row => new ContactResponse(
                 row.CustomerId.Value,
-                row.Phone.Value,
+                row.Phone,
+                row.Masked,
                 row.DisplayName,
                 row.Notes,
                 row.NoShowCount,
+                row.PhoneVerifiedAt,
+                row.PhoneConfirmedByOperatorAt,
                 row.FirstSeenAt,
                 row.LastSeenAt))
             .ToArray());
+    }
+
+    private static async Task<IResult> HandleRevealCustomerPhoneAsync(
+        Guid customerId,
+        RevealCustomerPhoneRequest request,
+        ClaimsPrincipal principal,
+        RevealCustomerPhoneHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        var result = await handler.HandleAsync(
+            new RevealCustomerPhone(
+                principal.GetOperatorId(), principal.GetTenantId(), new CustomerId(customerId), request.Surface),
+            cancellationToken);
+
+        return result.IsSuccess
+            ? Results.Ok(new CustomerPhoneRevealResponse(result.Value))
+            : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    private static async Task<IResult> HandleConfirmOperatorVerifiedPhoneAsync(
+        Guid customerId,
+        ClaimsPrincipal principal,
+        ConfirmOperatorVerifiedPhoneHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new ConfirmOperatorVerifiedPhone(principal.GetOperatorId(), principal.GetTenantId(), new CustomerId(customerId)),
+            cancellationToken);
+
+        return result.IsSuccess
+            ? Results.Ok(new ConfirmOperatorVerifiedPhoneResponse(result.Value))
+            : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    private static async Task<IResult> HandlePhoneRevealsAsync(
+        Guid? before,
+        int? limit,
+        ClaimsPrincipal principal,
+        GetPhoneRevealsForTenantHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetPhoneRevealsForTenant(principal.GetOperatorId(), principal.GetTenantId(), before, limit),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        var page = result.Value;
+        return Results.Ok(new ContactPhoneRevealPageResponse(
+            [.. page.Items.Select(item => new ContactPhoneRevealResponse(
+                item.Id, item.OccurredAt, item.CustomerId, item.OperatorId, item.Surface))],
+            page.NextBeforeId));
     }
 
     private static async Task<IResult> HandleWorkerSlotsAsync(
@@ -628,7 +705,8 @@ public static class ConsoleEndpoints
                 row.ServiceName,
                 row.CustomerId?.Value,
                 row.CustomerDisplayName,
-                row.Phone?.Value,
+                row.Phone,
+                row.Masked,
                 row.BookingId?.Value))
             .ToArray());
     }
@@ -671,7 +749,8 @@ public static class ConsoleEndpoints
                             booking.ServiceName,
                             booking.CustomerId?.Value,
                             booking.CustomerDisplayName,
-                            booking.Phone?.Value,
+                            booking.Phone,
+                            booking.Masked,
                             booking.CanDecide)),
                     ])),
             ],

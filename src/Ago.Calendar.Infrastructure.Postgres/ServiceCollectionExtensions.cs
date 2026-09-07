@@ -129,6 +129,10 @@ public static class ServiceCollectionExtensions
         // ChatModuleRegistration's own remarks.
         services.AddScoped<IChatModuleRegistrationRepository, ChatModuleRegistrationRepository>();
 
+        // `22-30`: the whole-tenant erasure procedure - see ITenantErasureRepository's own remarks
+        // for why this is a separate port from ITenantRepository rather than a third method on it.
+        services.AddScoped<ITenantErasureRepository, TenantErasureRepository>();
+
         // adr/0017: the platform's own generic outbox/inbox, bound to this product's context. The
         // tables exist from this migration onward; the first writer is `20-05`.
         services.AddOutboxInbox<AgoCalendarDbContext>();

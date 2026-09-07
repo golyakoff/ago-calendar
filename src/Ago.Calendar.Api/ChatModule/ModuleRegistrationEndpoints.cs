@@ -1,6 +1,8 @@
 ﻿using Ago.Calendar.Api.Http;
 using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.UseCases.ChatModuleRegistration;
+using Ago.Calendar.Application.UseCases.TenantErasure;
+using Ago.Calendar.Domain;
 
 namespace Ago.Calendar.Api.ChatModule;
 
@@ -43,6 +45,14 @@ public static class ModuleRegistrationEndpoints
         group.MapPost("/{tenantId:guid}/rotate", HandleRotateAsync).WithName("RotateChatModuleCredential");
         group.MapDelete("/{tenantId:guid}", HandleRevokeAsync).WithName("RevokeChatModuleRegistration");
         group.MapGet("/{tenantId:guid}", HandleGetStatusAsync).WithName("GetChatModuleRegistrationStatus");
+        // `22-30`: a distinct route and a distinct verb from the revoke above - deleting the
+        // registration (this route family's own `DELETE /{tenantId}`) stops a credential from
+        // authenticating; this one deletes the tenant's own data and everything under it. Folding
+        // the two together would make one HTTP call mean two irreversible things, one of them a
+        // credential's own lifecycle and the other a person's data - the same "one call, one fact"
+        // reasoning this route family already keeps rotate and revoke apart for (this file's own
+        // opening remarks).
+        group.MapDelete("/{tenantId:guid}/tenant-data", HandleEraseAsync).WithName("EraseChatModuleTenantData");
 
         return app;
     }
@@ -109,6 +119,39 @@ public static class ModuleRegistrationEndpoints
         return result.IsSuccess ? Results.Ok() : result.Error!.Value.ToProblem(httpContext);
     }
 
+    /// <summary>
+    /// `22-30`: "an operation, authenticated the way `22-11`'s registration calls already are" - the
+    /// backlog item's own words for why this reuses the provisioning-secret check above rather than
+    /// <c>ChatModuleTaskEndpoints</c>'s per-site signed credential. That choice is deliberate and
+    /// stated here rather than left to be inferred: the whole reason this item exists is a tenant
+    /// whose per-site credential may have been revoked, may have lapsed, or may never have been
+    /// provisioned in the first place - the very cases a per-site credential cannot reach. The
+    /// deployment-wide provisioning secret is what chat still holds regardless of any one tenant's
+    /// own registration state, which is what lets this endpoint answer "erase" for exactly the
+    /// tenants a per-site credential could not authenticate a call for.
+    ///
+    /// <para>No <see cref="IChatModuleRegistrationRepository"/> lookup here, unlike every other
+    /// handler in this class - deliberately: whether a <c>chat_module_registrations</c> row exists is
+    /// irrelevant to whether a <see cref="Tenant"/> row (and everything under it) does, and gating
+    /// this call on the former would refuse exactly the revoked-registration case this item exists to
+    /// close.</para>
+    /// </summary>
+    private static async Task<IResult> HandleEraseAsync(
+        Guid tenantId,
+        EraseTenantDataHandler handler,
+        IModuleProvisioningAuthenticator authenticator,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (!authenticator.Authenticate(httpContext.Request.Headers[ProvisioningSecretHeaderName]))
+        {
+            return Results.Unauthorized();
+        }
+
+        var result = await handler.HandleAsync(new EraseTenantData(new TenantId(tenantId)), cancellationToken);
+        return Results.Ok(new TenantErasureResponse(result.TenantExisted, result.Confirmed));
+    }
+
     private static async Task<IResult> HandleGetStatusAsync(
         Guid tenantId,
         GetChatModuleRegistrationStatusHandler handler,
@@ -139,4 +182,10 @@ public static class ModuleRegistrationEndpoints
 
     public sealed record ChatModuleRegistrationStatusResponse(
         bool Exists, DateTimeOffset? RegisteredAt, bool HasCredentialInGracePeriod);
+
+    /// <summary>`22-30`/`adr/0149` rule 2: the module's own proof, on the wire - see
+    /// <see cref="Application.Abstractions.TenantErasureResult"/>'s own remarks for what each field
+    /// means and why <see cref="Confirmed"/>, not <see cref="TenantExisted"/>, is the fact a caller
+    /// should gate on.</summary>
+    public sealed record TenantErasureResponse(bool TenantExisted, bool Confirmed);
 }

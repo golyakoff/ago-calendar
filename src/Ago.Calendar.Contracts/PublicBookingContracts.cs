@@ -22,7 +22,36 @@ public sealed record BookableCalendarResponse(
 
 /// <param name="DurationMinutes">Whole minutes, so a renderer prints "45 min" without parsing a
 /// duration format.</param>
-public sealed record BookableServiceResponse(Guid ServiceId, string Name, int DurationMinutes);
+/// <param name="PriceMinorUnits">
+/// `23-35`, decided 2026-09-07: a visitor sees the price before booking, the same way a real salon's
+/// own booking page states one. <see langword="null"/> when the tenant stated no price - a renderer
+/// shows nothing, never a placeholder, because "no price stated" and "free" are different facts and a
+/// placeholder would collapse them. Never carried into the booking confirmation
+/// (<c>BookingConfirmedResponse</c>, unchanged by this item and already documented as deliberately
+/// carrying nothing beyond what a customer needs to identify the appointment): a number shown before a
+/// booking is a courtesy the visitor can act on knowing it may be approximate; the same number restated
+/// after a booking exists reads as a receipt, which is the evidentiary weight the backlog item's own
+/// Goal warns against taking on for a value this product does not enforce or collect.
+/// </param>
+/// <param name="PriceCurrencyCode"><see langword="null"/> exactly when <paramref name="PriceMinorUnits"/>
+/// is.</param>
+/// <param name="PriceIsFrom">
+/// True means the number is a floor, not the guaranteed final price - the answer to "what does a price
+/// mean when the real cost depends on the master or takes longer than usual": the operator states which
+/// reading applies to this service rather than the product picking one universal meaning, and a
+/// renderer prefixes the amount with "от" ("from") exactly when this is true. See
+/// <c>Ago.Calendar.Domain.Service</c>'s own remarks.
+/// </param>
+/// <param name="Description">Marketing copy the tenant maintains, or <see langword="null"/> for none.
+/// Data, not layout, same as every other field here - a renderer decides where it goes.</param>
+public sealed record BookableServiceResponse(
+    Guid ServiceId,
+    string Name,
+    int DurationMinutes,
+    int? PriceMinorUnits,
+    string? PriceCurrencyCode,
+    bool PriceIsFrom,
+    string? Description);
 
 public sealed record BookableWorkerResponse(Guid WorkerId, string DisplayName);
 

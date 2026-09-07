@@ -89,6 +89,11 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         Assert.Equal(ModuleStepKinds.ChoiceList, started.Step.Kind);
         var serviceAction = Assert.Single(started.Step.Actions);
         Assert.Equal(_seed.Service.Id.Value.ToString(), serviceAction.Value);
+        // `23-35`: the seeded service carries no price (CalendarSeed.WriteAsync's own default), so
+        // ModuleStepFactory.DescribeService's price branch is not exercised here - proving instead
+        // that its no-price rendering is unchanged, the one assertion this walkthrough can make about
+        // it without a second, price-carrying seed.
+        Assert.Equal("Haircut (45 min)", serviceAction.Label);
 
         var afterService = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, serviceAction.Value);

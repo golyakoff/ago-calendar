@@ -357,6 +357,63 @@ public class ConfigurationHandlerTests
         Assert.Single(world.Workers.Added);
     }
 
+    // `23-35`: a service has a price and a description, or it deliberately does not.
+
+    [Fact]
+    public async Task CreatingAService_RequiresCalendarConfigure()
+    {
+        var world = new World();
+        world.Permissions.Deny(Permission.CalendarConfigure);
+
+        var result = await world.CreateServiceAsync();
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.forbidden", result.Error!.Value.Code);
+        Assert.Empty(world.Services.Added);
+    }
+
+    [Fact]
+    public async Task CreatingAService_WithAPriceAndADescription_StoresBoth()
+    {
+        var world = new World();
+
+        var result = await world.CreateServiceAsync(
+            priceMinorUnits: 250000, priceIsFrom: true, description: "Colour and cut.");
+
+        Assert.True(result.IsSuccess);
+        var created = Assert.Single(world.Services.Added);
+        Assert.Equal(Money.Rubles(250000), created.Price);
+        Assert.True(created.PriceIsFrom);
+        Assert.Equal("Colour and cut.", created.Description);
+    }
+
+    [Fact]
+    public async Task CreatingAService_WithNeitherAPriceNorADescription_IsValid()
+    {
+        // A nullable field that is sometimes wrong is worse than an honest absence - see the
+        // backlog item's own Goal. A shop still setting itself up leaves both blank.
+        var world = new World();
+
+        var result = await world.CreateServiceAsync();
+
+        Assert.True(result.IsSuccess);
+        var created = Assert.Single(world.Services.Added);
+        Assert.Null(created.Price);
+        Assert.Null(created.Description);
+    }
+
+    [Fact]
+    public async Task CreatingAService_WithANegativePrice_TurnsADomainRefusalIntoAnOrdinaryRejection()
+    {
+        var world = new World();
+
+        var result = await world.CreateServiceAsync(priceMinorUnits: -1);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.invalid", result.Error!.Value.Code);
+        Assert.Empty(world.Services.Added);
+    }
+
     [Fact]
     public async Task SettingAllowedOrigins_RequiresCalendarConfigure()
     {
@@ -406,6 +463,8 @@ public class ConfigurationHandlerTests
 
         public RecordingWorkerRepository Workers { get; } = new();
 
+        public RecordingServiceRepository Services { get; } = new();
+
         public Task<Result<CalendarId>> CreateCalendarAsync(
             string name = "Main", string timeZone = "Europe/Moscow", bool publish = true) =>
             new CreateCalendarHandler(
@@ -442,6 +501,24 @@ public class ConfigurationHandlerTests
                         displayName,
                         new CalendarId(calendarId ?? BookingFixtures.CalendarId.Value),
                         serviceIds ?? []),
+                    CancellationToken.None);
+
+        public Task<Result<ServiceId>> CreateServiceAsync(
+            string name = "Haircut",
+            int durationMinutes = 45,
+            int? priceMinorUnits = null,
+            bool priceIsFrom = false,
+            string? description = null) =>
+            new CreateServiceHandler(
+                    new FakeTenantRepository(Tenant),
+                    Services,
+                    Permissions,
+                    new SequentialIdGenerator(),
+                    new FakeClock(BookingFixtures.Now))
+                .HandleAsync(
+                    new CreateService(
+                        Actor, BookingFixtures.TenantId, name, durationMinutes,
+                        priceMinorUnits, priceIsFrom, description),
                     CancellationToken.None);
 
         public Task<Result> UpdateWorkerAsync(
@@ -569,5 +646,26 @@ internal sealed class RecordingWorkerRepository : IWorkerRepository
         Added.Remove(worker);
         Deleted.Add(id);
         return Task.FromResult(true);
+    }
+}
+
+/// <summary>`23-35`'s own version of <see cref="RecordingCalendarRepository"/> - records what
+/// <see cref="CreateServiceHandler"/> actually wrote, so a refused call having written nothing is an
+/// assertion rather than an inference.</summary>
+internal sealed class RecordingServiceRepository : IServiceRepository
+{
+    public List<Service> Added { get; } = [];
+
+    public Task<Service?> GetByIdAsync(ServiceId id, CancellationToken cancellationToken) =>
+        Task.FromResult(Added.Find(service => service.Id == id));
+
+    public Task<IReadOnlyList<Service>> ListForTenantAsync(
+        TenantId tenantId, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<Service>>([.. Added.Where(service => service.TenantId == tenantId)]);
+
+    public Task AddAsync(Service service, CancellationToken cancellationToken)
+    {
+        Added.Add(service);
+        return Task.CompletedTask;
     }
 }

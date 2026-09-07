@@ -53,7 +53,21 @@ public interface IBookingSurfaceReadStore
 /// <param name="DurationMinutes">Whole minutes - <see cref="Service"/> stores it that way for the
 /// reason its own remarks give, and a wire contract that said "PT45M" would make every renderer parse
 /// a duration to print "45 min".</param>
-public readonly record struct BookableServiceRow(ServiceId ServiceId, string Name, int DurationMinutes);
+/// <param name="PriceMinorUnits">`23-35`. <see cref="Service.Price"/>'s own minor units, or
+/// <see langword="null"/> when the tenant stated none - carried straight through to every consumer of
+/// this row (the widget's <c>BookableServiceResponse</c> and the chat channel's
+/// <c>ModuleStepFactory.ServiceChoice</c> alike), which is the point: one read, one shape, every
+/// booking-capable surface renders the same fact rather than each re-deriving it.</param>
+/// <param name="PriceCurrencyCode"><see langword="null"/> exactly when <paramref name="PriceMinorUnits"/>
+/// is.</param>
+public readonly record struct BookableServiceRow(
+    ServiceId ServiceId,
+    string Name,
+    int DurationMinutes,
+    int? PriceMinorUnits = null,
+    string? PriceCurrencyCode = null,
+    bool PriceIsFrom = false,
+    string? Description = null);
 
 public readonly record struct BookableWorkerRow(WorkerId WorkerId, string DisplayName);
 

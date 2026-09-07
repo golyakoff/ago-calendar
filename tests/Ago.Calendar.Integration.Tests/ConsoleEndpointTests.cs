@@ -85,6 +85,51 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AServiceCreatedWithAPriceAndADescription_ReadsBackBothThroughTheRealStore()
+    {
+        // `23-35`'s own demonstration: not asserted, proved end to end - a real POST, a real Postgres
+        // row (EF Core's complex-property mapping for Money?, exercised for the first time against a
+        // real database rather than only an in-memory model), and a real GET reading it back through
+        // the console's own configuration screen.
+        var seed = await ProvisionAsync();
+
+        var serviceId = await CreatedIdAsync(
+            "/api/v1/console/services",
+            new CreateServiceRequest(
+                "Colour", 90, PriceMinorUnits: 350000, PriceIsFrom: true, Description: "Full colour and toner."),
+            seed,
+            "serviceId");
+
+        var configuration = await GetConfigurationAsync(seed);
+
+        var created = Assert.Single(configuration.Services, service => service.ServiceId == serviceId);
+        Assert.Equal(350000, created.PriceMinorUnits);
+        Assert.Equal("RUB", created.PriceCurrencyCode);
+        Assert.True(created.PriceIsFrom);
+        Assert.Equal("Full colour and toner.", created.Description);
+    }
+
+    [Fact]
+    public async Task AServiceCreatedWithNeitherAPriceNorADescription_ReadsBackNeither()
+    {
+        // The honest-absence half of the same claim: null is not "not yet supported", it survives the
+        // round trip through EF Core's nullable complex property as null, not as a zero or an empty
+        // string that a renderer could mistake for a stated fact.
+        var seed = await ProvisionAsync();
+
+        var serviceId = await CreatedIdAsync(
+            "/api/v1/console/services", new CreateServiceRequest("Consultation", 15), seed, "serviceId");
+
+        var configuration = await GetConfigurationAsync(seed);
+
+        var created = Assert.Single(configuration.Services, service => service.ServiceId == serviceId);
+        Assert.Null(created.PriceMinorUnits);
+        Assert.Null(created.PriceCurrencyCode);
+        Assert.False(created.PriceIsFrom);
+        Assert.Null(created.Description);
+    }
+
+    [Fact]
     public async Task AnOperator_SeesThePendingQueueAcrossEveryCalendarAndCanRejectFromIt()
     {
         // `20-06`'s second Done-when, including its own parenthesis: "two calendars, confirming the

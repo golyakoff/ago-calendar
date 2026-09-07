@@ -18,7 +18,20 @@ public readonly record struct ConfiguredCalendar(
 public readonly record struct ConfiguredWorker(
     WorkerId WorkerId, string DisplayName, bool IsActive, IReadOnlyList<Guid> ServiceIds);
 
-public readonly record struct ConfiguredService(ServiceId ServiceId, string Name, int DurationMinutes);
+/// <param name="PriceMinorUnits">`23-35`. Kopecks, or <see langword="null"/> when the tenant has
+/// stated no price - see <see cref="Service.Price"/>'s own remarks.</param>
+/// <param name="PriceCurrencyCode">Stated rather than assumed, the same "never assume, always state"
+/// discipline `date-and-time.md` rule 11 already applies to a timestamp's own offset - even though v1
+/// only ever writes <see cref="Money.RubleCode"/>. <see langword="null"/> exactly when
+/// <paramref name="PriceMinorUnits"/> is.</param>
+public readonly record struct ConfiguredService(
+    ServiceId ServiceId,
+    string Name,
+    int DurationMinutes,
+    int? PriceMinorUnits,
+    string? PriceCurrencyCode,
+    bool PriceIsFrom,
+    string? Description);
 
 public readonly record struct ConfiguredWorkingHoursRule(
     WorkingHoursRuleId RuleId, WorkerId WorkerId, DayOfWeek DayOfWeek, TimeOnly StartsAt, TimeOnly EndsAt);
@@ -113,7 +126,13 @@ public sealed class GetTenantConfigurationHandler(
             ],
             [
                 .. tenantServices.Select(service => new ConfiguredService(
-                    service.Id, service.Name, (int)service.Duration.TotalMinutes)),
+                    service.Id,
+                    service.Name,
+                    (int)service.Duration.TotalMinutes,
+                    service.Price?.MinorUnits,
+                    service.Price?.CurrencyCode,
+                    service.PriceIsFrom,
+                    service.Description)),
             ],
             tenant.WorkerQuota));
     }

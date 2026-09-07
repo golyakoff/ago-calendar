@@ -267,7 +267,7 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
             new CalendarId(CalendarSeed.NewId()), first.Tenant.Id, "Second",
             new CalendarTimeZone("Europe/Moscow"), Now);
         secondCalendar.Publish();
-        var secondWorker = Worker.Create(
+        var secondWorker = Domain.Worker.Create(
             new WorkerId(CalendarSeed.NewId()), first.Tenant.Id, "Bo", "Bo", null, CalendarSeed.Now);
         secondWorker.JoinCalendar(secondCalendar);
         secondWorker.Offer(first.Service);

@@ -130,6 +130,11 @@
          set the bar - a token bucket is a Lua script executing inside Redis, and a fake of it proves
          only that the fake behaves as its author expected. -->
     <PackageVersion Include="Testcontainers.Redis" Version="4.14.0" />
+    <!-- `23-66`: the first real-broker test in this repository - see
+         Ago.Calendar.Integration.Tests.ModuleQuantityGrantedWireFixture's own remarks. Same version
+         ago-chat pins for the identical package (adr/0018's "one deployment-wide feed" reasoning
+         applied to a version, not only a source). -->
+    <PackageVersion Include="Testcontainers.RabbitMq" Version="4.14.0" />
     <!-- `20-03`: the booking endpoint's Done-when is an HTTP claim ("a denied attempt returns 429
          with Retry-After"), and only a real request over a real host can prove a status code and a
          header. WebApplicationFactory runs Ago.Calendar.Api in-process against the same

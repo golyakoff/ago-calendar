@@ -191,6 +191,11 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<Application.UseCases.ChatModuleRegistration.RevokeChatModuleRegistrationHandler>();
         services.AddScoped<Application.UseCases.ChatModuleRegistration.GetChatModuleRegistrationStatusHandler>();
 
+        // `22-30`: same route family, same provisioning-secret authentication, same reason to live
+        // here rather than in Ago.Calendar.Api's own Program.cs - see this file's own remarks just
+        // above for RegisterChatModuleHandler and friends.
+        services.AddScoped<Application.UseCases.TenantErasure.EraseTenantDataHandler>();
+
         services.AddScoped<GetTenantConfigurationHandler>();
         services.AddScoped<GetBookingReadinessHandler>();
         services.AddScoped<CreateCalendarHandler>();

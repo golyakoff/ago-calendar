@@ -364,7 +364,7 @@ public class AvailabilityMaterializationTests(PostgresFixture fixture)
         // own, is exactly as unbookable as the pre-`20-14` "performs no service" case was - the
         // handler has nothing to derive a slot length or a horizon from either way.
         var seed = await CalendarSeed.WriteAsync(fixture);
-        var bare = Worker.Create(
+        var bare = Domain.Worker.Create(
             new WorkerId(CalendarSeed.NewId()), seed.Tenant.Id, "Bare", "Bare", null, CalendarSeed.Now);
         bare.JoinCalendar(seed.Calendar);
 

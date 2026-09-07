@@ -12,6 +12,14 @@
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Testcontainers.Redis" />
+    <!-- `23-66`: the first real-broker test in this repository - proves the wire ago-chat's own
+         outbox publishes on and Ago.Calendar.Worker's ModuleQuantityGrantedConsumer actually
+         subscribes to, rather than stopping at either side's own row (testing.md: "never mock the
+         broker either", the same discipline Ago.Chat.Integration.Tests' OutboxDispatcherFixture
+         already applies on the publishing side). -->
+    <PackageReference Include="Testcontainers.RabbitMq" />
+    <PackageReference Include="Ago.Platform.Abstractions" />
+    <PackageReference Include="Ago.Platform.Messaging.RabbitMq" />
     <PackageReference Include="StackExchange.Redis" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="xunit" />
@@ -38,6 +46,11 @@
          against a real Postgres - the identical shape SchemaMigratorTests already established one
          line above, for the sibling one-shot tool. -->
     <ProjectReference Include="..\..\src\Ago.Calendar.Provisioner\Ago.Calendar.Provisioner.csproj" />
+    <!-- `23-66`: the real consumer under test - ModuleQuantityGrantedConsumer/
+         ModuleQuantityGrantedConsumerOptions live in this host project, not in Application/
+         Infrastructure, the same "the consumer is host-shaped, its store is not" split
+         RoleAssignmentsChangedConsumer already established. -->
+    <ProjectReference Include="..\..\src\Ago.Calendar.Worker\Ago.Calendar.Worker.csproj" />
   </ItemGroup>
 
 </Project>

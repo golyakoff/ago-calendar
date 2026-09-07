@@ -14,7 +14,15 @@ namespace Ago.Calendar.Integration.Tests;
 internal sealed record SeededTenant(
     Tenant Tenant,
     BookingCalendar Calendar,
-    Worker Worker,
+    // `23-66`: qualified as `Domain.Worker`, not the bare `Worker` this record used before -
+    // the same disambiguation `TwoWorkersOnOneCalendar_WithDifferentSlotLengths_ProduceDifferentGrids`
+    // already uses in AvailabilityMaterializationTests.cs. Adding Ago.Calendar.Worker as a
+    // ProjectReference (ModuleQuantityGrantedWireTests' own need for the real
+    // ModuleQuantityGrantedConsumer) makes that assembly's own Ago.Calendar.Worker namespace visible
+    // from this file's enclosing Ago.Calendar.* namespace chain, and bare `Worker` is then ambiguous
+    // between that namespace and this type (CS0118) - not a rename of the domain type itself, which
+    // stays Ago.Calendar.Domain.Worker everywhere else in this codebase.
+    Domain.Worker Worker,
     Service Service,
     Customer Customer,
     OperatorId OperatorId,
@@ -66,7 +74,7 @@ internal static class CalendarSeed
         tenant.GrantWorkerQuota(workerQuota);
         var calendar = BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), Now);
-        var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);
+        var worker = Domain.Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);
         var service = Service.Create(
             new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45), servicePrice);
         var customer = Customer.Register(

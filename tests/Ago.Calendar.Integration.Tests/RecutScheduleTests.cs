@@ -290,12 +290,14 @@ public class RecutScheduleTests(PostgresFixture fixture)
         return target;
     }
 
-    private async Task<Worker> ASecondWorkerOnTheSameCalendarAsync(SeededTenant seed)
+    // `23-66`: qualified as `Domain.Worker` - see SeededTenant's own remarks in CalendarSeed.cs for
+    // why bare `Worker` became ambiguous (CS0118) once this project also referenced Ago.Calendar.Worker.
+    private async Task<Domain.Worker> ASecondWorkerOnTheSameCalendarAsync(SeededTenant seed)
     {
         await using var db = fixture.CreateDbContext();
         var calendar = await db.Calendars.SingleAsync(c => c.Id == seed.Calendar.Id);
 
-        var worker = Worker.Create(new WorkerId(CalendarSeed.NewId()), seed.Tenant.Id, "Roe", "Jamie", null, Monday);
+        var worker = Domain.Worker.Create(new WorkerId(CalendarSeed.NewId()), seed.Tenant.Id, "Roe", "Jamie", null, Monday);
         worker.JoinCalendar(calendar);
 
         var schedule = WorkerSchedule.CreateWeekly(

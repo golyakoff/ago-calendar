@@ -37,7 +37,13 @@ public sealed class CreateServiceHandler(
                 // Minutes in, TimeSpan out, and the conversion happens exactly here. The wire carries
                 // an int because a renderer prints "45 min"; the domain carries a TimeSpan because
                 // that is what it does arithmetic in (date-and-time.md rule 7).
-                TimeSpan.FromMinutes(command.DurationMinutes));
+                TimeSpan.FromMinutes(command.DurationMinutes),
+                // `23-35`: kopecks in, Money out, at the identical boundary - and the only currency
+                // this call ever constructs is the one Money.Rubles names, for the reason CreateService
+                // itself gives.
+                command.PriceMinorUnits is { } minorUnits ? Money.Rubles(minorUnits) : null,
+                command.PriceIsFrom,
+                command.Description);
         }
         catch (Exception exception) when (exception is ArgumentException or ArgumentOutOfRangeException)
         {

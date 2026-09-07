@@ -55,6 +55,23 @@ public class OriginAuthorizationTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task TheBookingSurface_ShowsThisTenantsPrice_NeverAnotherTenantsPrice()
+    {
+        // `23-35`: a visitor sees a price, so this is not only the general "another tenant's origin
+        // gets nothing" claim the other tests in this file already prove - it names the field.
+        var a = await CalendarSeed.WriteAsync(fixture, allowedOrigins: [OriginA], servicePrice: Money.Rubles(150000));
+        var b = await CalendarSeed.WriteAsync(fixture, allowedOrigins: [OriginB], servicePrice: Money.Rubles(999900));
+
+        var response = await GetAsync($"/api/v1/embed/{a.Tenant.PublicKey.Value}", OriginA);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var surface = await response.Content.ReadFromJsonAsync<BookingSurfaceResponse>();
+        var service = Assert.Single(Assert.Single(surface!.Calendars).Services);
+        Assert.Equal(150000, service.PriceMinorUnits);
+        Assert.NotEqual(b.Service.Id, new ServiceId(service.ServiceId));
+    }
+
+    [Fact]
     public async Task TheBookingSurface_IsRefused_ToAnotherTenantsApprovedOrigin()
     {
         var (a, _) = await TwoTenantsAsync();

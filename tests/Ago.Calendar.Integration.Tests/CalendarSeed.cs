@@ -45,13 +45,17 @@ internal static class CalendarSeed
     /// one worker <b>directly</b>, bypassing <see cref="IWorkerRepository.TryAddWithinQuotaAsync"/>
     /// entirely, so most tests never need a grant at all. Named for the ones that go on to create a
     /// further worker through <c>CreateWorkerHandler</c> or the real HTTP endpoint, which do.</param>
+    /// <param name="servicePrice">`23-35`. <see langword="null"/> by default, the same "no price
+    /// stated" state every real tenant starts in - named for the tests that need the seeded service
+    /// priced, notably the ones proving one tenant's price never reaches another's embed.</param>
     public static async Task<SeededTenant> WriteAsync(
         PostgresFixture fixture,
         string zone = "Europe/Moscow",
         string? publicKey = null,
         IEnumerable<string>? allowedOrigins = null,
         string? externalSubjectId = null,
-        int workerQuota = 0)
+        int workerQuota = 0,
+        Money? servicePrice = null)
     {
         var tenant = Tenant.Register(
             new TenantId(NewId()),
@@ -63,7 +67,8 @@ internal static class CalendarSeed
         var calendar = BookingCalendar.Create(
             new CalendarId(NewId()), tenant.Id, "Main", new CalendarTimeZone(zone), Now);
         var worker = Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);
-        var service = Service.Create(new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45));
+        var service = Service.Create(
+            new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45), servicePrice);
         var customer = Customer.Register(
             new CustomerId(NewId()), tenant.Id, new PhoneNumber("+79991234567"), Now);
 

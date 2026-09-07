@@ -39,7 +39,9 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
     /// </summary>
     private const string ServicesSql =
         """
-        select distinct s.id as "ServiceId", s.name as "Name", s.duration_minutes as "DurationMinutes"
+        select distinct s.id as "ServiceId", s.name as "Name", s.duration_minutes as "DurationMinutes",
+               s.price_minor_units as "PriceMinorUnits", s.price_currency_code as "PriceCurrencyCode",
+               s.price_is_from as "PriceIsFrom", s.description as "Description"
         from services s
         join worker_services ws on ws.service_id = s.id
         join workers w on w.id = ws.worker_id and w.is_active
@@ -152,7 +154,8 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
             ServicesSql, new { CalendarId = calendarId.Value }, cancellationToken: cancellationToken));
 
         return [.. rows.Select(row => new BookableServiceRow(
-            new ServiceId(row.ServiceId), row.Name, row.DurationMinutes))];
+            new ServiceId(row.ServiceId), row.Name, row.DurationMinutes,
+            row.PriceMinorUnits, row.PriceCurrencyCode, row.PriceIsFrom, row.Description))];
     }
 
     public async Task<IReadOnlyList<BookableWorkerRow>> ListWorkersAsync(
@@ -205,7 +208,14 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
         ];
     }
 
-    private sealed record ServiceRaw(Guid ServiceId, string Name, int DurationMinutes);
+    private sealed record ServiceRaw(
+        Guid ServiceId,
+        string Name,
+        int DurationMinutes,
+        int? PriceMinorUnits,
+        string? PriceCurrencyCode,
+        bool PriceIsFrom,
+        string? Description);
 
     private sealed record WorkerRaw(Guid WorkerId, string DisplayName);
 

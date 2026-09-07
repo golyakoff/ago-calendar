@@ -144,7 +144,13 @@ public static class ConsoleEndpoints
             ],
             [
                 .. configuration.Services.Select(service => new ConfiguredServiceResponse(
-                    service.ServiceId.Value, service.Name, service.DurationMinutes)),
+                    service.ServiceId.Value,
+                    service.Name,
+                    service.DurationMinutes,
+                    service.PriceMinorUnits,
+                    service.PriceCurrencyCode,
+                    service.PriceIsFrom,
+                    service.Description)),
             ],
             configuration.WorkerQuota));
     }
@@ -257,7 +263,8 @@ public static class ConsoleEndpoints
 
         var result = await handler.HandleAsync(
             new CreateService(
-                principal.GetOperatorId(), principal.GetTenantId(), request.Name, request.DurationMinutes),
+                principal.GetOperatorId(), principal.GetTenantId(), request.Name, request.DurationMinutes,
+                request.PriceMinorUnits, request.PriceIsFrom, request.Description),
             cancellationToken);
 
         return result.IsSuccess

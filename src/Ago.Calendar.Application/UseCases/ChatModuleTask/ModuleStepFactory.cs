@@ -43,8 +43,33 @@ internal static class ModuleStepFactory
                 new ConfirmationLine("When", DescribeRange(startsAt, endsAt)),
             ]);
 
-    private static string DescribeService(BookableServiceRow service) =>
-        $"{service.Name} ({service.DurationMinutes} min)";
+    /// <summary>
+    /// `23-35`: the price reaches this channel too, not only the widget - <see cref="BookableServiceRow"/>
+    /// is the one read both consumers share, and a service priced on the widget but silent on a text
+    /// channel would be the exact "one channel shows it, another doesn't" inconsistency `20-06`'s own
+    /// "expressible as a prompt and a list of labelled choices" constraint exists to rule out.
+    /// </summary>
+    private static string DescribeService(BookableServiceRow service)
+    {
+        var duration = $"{service.DurationMinutes} min";
+        if (service.PriceMinorUnits is not { } minorUnits)
+        {
+            return $"{service.Name} ({duration})";
+        }
+
+        return $"{service.Name} ({duration}, {DescribePrice(minorUnits, service.PriceIsFrom)})";
+    }
+
+    /// <summary>v1's only currency is <see cref="Ago.Calendar.Domain.Money.RubleCode"/> - see its own
+    /// remarks for why this is not yet a lookup table keyed by a currency code nobody has used.</summary>
+    private static string DescribePrice(int minorUnits, bool isFrom)
+    {
+        var amount = minorUnits % 100 == 0
+            ? (minorUnits / 100).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : (minorUnits / 100m).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
+
+        return isFrom ? $"from {amount} RUB" : $"{amount} RUB";
+    }
 
     private static string DescribeSlot(OpenSlotRow slot) => DescribeRange(slot.StartsAt, slot.EndsAt);
 

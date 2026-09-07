@@ -118,6 +118,136 @@ public class ServiceTests
             new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
             TimeSpan.FromSeconds(90)));
     }
+
+    // `23-35`: a service has a price and a description, or it deliberately does not.
+
+    [Fact]
+    public void Create_WithNeitherAPriceNorADescription_IsValid()
+    {
+        var tenant = CalendarFixtures.Tenant();
+
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Consultation",
+            TimeSpan.FromMinutes(30));
+
+        Assert.Null(service.Price);
+        Assert.False(service.PriceIsFrom);
+        Assert.Null(service.Description);
+    }
+
+    [Fact]
+    public void Create_WithAPriceAndADescription_ReadsBackBoth()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var price = Money.Rubles(200000);
+
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45), price, priceIsFrom: true, description: "  A classic cut.  ");
+
+        Assert.Equal(price, service.Price);
+        Assert.True(service.PriceIsFrom);
+        // Trimmed, the same discipline Name already gets.
+        Assert.Equal("A classic cut.", service.Description);
+    }
+
+    [Fact]
+    public void Create_WithPriceIsFromTrueButNoPrice_NormalisesToFalse()
+    {
+        // The two fields can never disagree about whether there is a price to qualify - see
+        // Service's own remarks. A caller passing PriceIsFrom: true with no price is not an error;
+        // it is a value that means nothing and is discarded rather than stored as a lie.
+        var tenant = CalendarFixtures.Tenant();
+
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Consultation",
+            TimeSpan.FromMinutes(30), price: null, priceIsFrom: true);
+
+        Assert.Null(service.Price);
+        Assert.False(service.PriceIsFrom);
+    }
+
+    [Fact]
+    public void Create_WithAWhitespaceOnlyDescription_IsTreatedAsNone()
+    {
+        var tenant = CalendarFixtures.Tenant();
+
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45), description: "   ");
+
+        Assert.Null(service.Description);
+    }
+
+    [Fact]
+    public void Create_WithADescriptionOverTheCap_Throws()
+    {
+        var tenant = CalendarFixtures.Tenant();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45), description: new string('a', 1001)));
+    }
+
+    [Fact]
+    public void Reconfigure_ChangesThePriceAndDescription()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45));
+
+        service.Reconfigure(
+            "Haircut", TimeSpan.FromMinutes(45), Money.Rubles(150000), priceIsFrom: false,
+            description: "Wash and cut.");
+
+        Assert.Equal(Money.Rubles(150000), service.Price);
+        Assert.False(service.PriceIsFrom);
+        Assert.Equal("Wash and cut.", service.Description);
+    }
+}
+
+public class MoneyTests
+{
+    [Fact]
+    public void Rubles_WithZero_IsValid()
+    {
+        // A free consultation is a real price, not the absence of one - only a negative amount is
+        // rejected.
+        var money = Money.Rubles(0);
+
+        Assert.Equal(0, money.MinorUnits);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(-100)]
+    public void Rubles_WithANegativeAmount_Throws(int minorUnits)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => Money.Rubles(minorUnits));
+    }
+
+    [Fact]
+    public void Rubles_AboveTheCap_Throws()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => Money.Rubles(Money.MaxMinorUnits + 1));
+    }
+
+    [Fact]
+    public void Create_WithAnUnsupportedCurrency_Throws()
+    {
+        // v1 accepts exactly one currency - see Money's own remarks on why this is not yet a caller's
+        // choice.
+        Assert.Throws<ArgumentOutOfRangeException>(() => Money.Create(1000, "USD"));
+    }
+
+    [Fact]
+    public void Create_WithTheRubleCode_IsValid()
+    {
+        var money = Money.Create(1000, Money.RubleCode);
+
+        Assert.Equal(Money.RubleCode, money.CurrencyCode);
+    }
 }
 
 public class CustomerTests

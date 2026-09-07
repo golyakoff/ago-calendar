@@ -32,8 +32,18 @@ public readonly record struct UpdateCalendar(
 /// <param name="DurationMinutes">Whole minutes - <see cref="Service"/> refuses anything else, and its
 /// remarks say why a slot boundary on a fraction of a minute is unreadable in every UI that renders
 /// it.</param>
+/// <param name="PriceMinorUnits">`23-35`. Kopecks, or <see langword="null"/> for "this service has no
+/// stated price" - see <see cref="Service.Price"/>'s own remarks for why that is a real, honest state
+/// rather than a validation gap. No currency parameter alongside it: v1 accepts exactly one currency
+/// (<see cref="Money.RubleCode"/>), chosen server-side rather than offered as a choice nobody can yet
+/// make differently - see <see cref="Money"/>'s own remarks.</param>
+/// <param name="PriceIsFrom">Ignored when <paramref name="PriceMinorUnits"/> is <see langword="null"/>
+/// - <see cref="Service.Create"/> normalises the combination the same way.</param>
+/// <param name="Description">Freeform, or <see langword="null"/>/empty for none - <see cref="Service"/>
+/// caps its length and treats whitespace-only as absent.</param>
 public readonly record struct CreateService(
-    OperatorId OperatorId, TenantId TenantId, string Name, int DurationMinutes);
+    OperatorId OperatorId, TenantId TenantId, string Name, int DurationMinutes,
+    int? PriceMinorUnits = null, bool PriceIsFrom = false, string? Description = null);
 
 /// <param name="MiddleName">Отчество - optional, unlike <paramref name="LastName"/> and
 /// <paramref name="FirstName"/>.</param>

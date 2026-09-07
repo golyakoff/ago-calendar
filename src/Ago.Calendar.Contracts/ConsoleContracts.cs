@@ -10,7 +10,17 @@ public sealed record CreateCalendarRequest(string Name, string TimeZone, bool Pu
 
 public sealed record UpdateCalendarRequest(string Name, bool Publish);
 
-public sealed record CreateServiceRequest(string Name, int DurationMinutes);
+/// <param name="PriceMinorUnits">`23-35`. Kopecks, or <see langword="null"/> for no stated price - no
+/// currency alongside it: v1 accepts exactly one, chosen server-side (<c>Ago.Calendar.Domain.Money</c>'s
+/// own remarks say why).</param>
+/// <param name="PriceIsFrom">"от" pricing - ignored server-side when <paramref name="PriceMinorUnits"/>
+/// is <see langword="null"/>.</param>
+public sealed record CreateServiceRequest(
+    string Name,
+    int DurationMinutes,
+    int? PriceMinorUnits = null,
+    bool PriceIsFrom = false,
+    string? Description = null);
 
 /// <param name="MiddleName">Отчество - optional.</param>
 /// <param name="DisplayName">`20-13`. Non-null means the console's own display-name field was
@@ -77,7 +87,18 @@ public sealed record ConfiguredCalendarResponse(
 public sealed record ConfiguredWorkerResponse(
     Guid WorkerId, string DisplayName, bool IsActive, IReadOnlyList<Guid> ServiceIds);
 
-public sealed record ConfiguredServiceResponse(Guid ServiceId, string Name, int DurationMinutes);
+/// <param name="PriceMinorUnits">`23-35`. Kopecks, or <see langword="null"/> when the tenant has
+/// stated no price.</param>
+/// <param name="PriceCurrencyCode"><see langword="null"/> exactly when <paramref name="PriceMinorUnits"/>
+/// is - stated rather than assumed, even though v1 only ever writes <c>"RUB"</c>.</param>
+public sealed record ConfiguredServiceResponse(
+    Guid ServiceId,
+    string Name,
+    int DurationMinutes,
+    int? PriceMinorUnits,
+    string? PriceCurrencyCode,
+    bool PriceIsFrom,
+    string? Description);
 
 public sealed record WorkingHoursRuleResponse(
     Guid RuleId, Guid WorkerId, int DayOfWeek, TimeOnly StartsAt, TimeOnly EndsAt);

@@ -73,7 +73,13 @@ public static class PublicBookingEndpoints
                     calendar.TimeZone,
                     [
                         .. calendar.Services.Select(service => new BookableServiceResponse(
-                            service.ServiceId.Value, service.Name, service.DurationMinutes)),
+                            service.ServiceId.Value,
+                            service.Name,
+                            service.DurationMinutes,
+                            service.PriceMinorUnits,
+                            service.PriceCurrencyCode,
+                            service.PriceIsFrom,
+                            service.Description)),
                     ])),
             ]));
     }

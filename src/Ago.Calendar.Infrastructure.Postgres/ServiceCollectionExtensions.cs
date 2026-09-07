@@ -98,6 +98,10 @@ public static class ServiceCollectionExtensions
         // singleton, for the identical reason ContactsReadStore's own remark gives.
         services.AddScoped<IWorkerSlotReadStore, WorkerSlotReadStore>();
 
+        // `23-34`: what is actually booked, across every calendar - the same shared NpgsqlDataSource
+        // singleton again, for the identical reason.
+        services.AddScoped<IConfirmedBookingReadStore, ConfirmedBookingReadStore>();
+
         // `23-23`: "can this tenant take a booking right now, and if not, which precondition is
         // unmet" - the same shared NpgsqlDataSource singleton again, for the identical reason.
         services.AddScoped<IBookingReadinessReadStore, BookingReadinessReadStore>();

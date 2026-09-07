@@ -3,6 +3,7 @@ using Ago.Calendar.Api.Auth;
 using Ago.Calendar.Api.Http;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
 using Ago.Calendar.Application.UseCases.Configuration;
+using Ago.Calendar.Application.UseCases.ConfirmedBookings;
 using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
@@ -70,6 +71,14 @@ public static class ConsoleEndpoints
         group.MapPost("/working-hours", HandleAddWorkingHoursAsync).WithName("AddWorkingHoursRule");
 
         group.MapGet("/pending-bookings", HandlePendingBookingsAsync).WithName("GetPendingBookings");
+
+        // `23-34`: what is actually booked, across every calendar - the queue above only ever holds
+        // what nobody has decided yet. Gated inside the handler on `customer:read` alone, deliberately
+        // narrower than this group's own `OperatorPolicy` - see `GetConfirmedBookingsForTenantHandler`'s
+        // own doc comment for why this is the one calendar screen the console's usual
+        // `calendar:configure` nav gate does not apply to.
+        group.MapGet("/confirmed-bookings", HandleConfirmedBookingsAsync).WithName("GetConfirmedBookings");
+
         group.MapPost("/bookings/{bookingId:guid}/reject", HandleRejectAsync).WithName("RejectBooking");
         group.MapPost("/bookings/{bookingId:guid}/cancel", HandleCancelAsync).WithName("CancelBooking");
         group.MapPost("/bookings/{bookingId:guid}/no-show", HandleNoShowAsync).WithName("MarkNoShow");
@@ -506,6 +515,42 @@ public static class ConsoleEndpoints
                 row.LocalDate,
                 row.ConfirmationDeadline,
                 row.IsOverdue,
+                row.Phone,
+                row.Masked))
+            .ToArray());
+    }
+
+    private static async Task<IResult> HandleConfirmedBookingsAsync(
+        DateOnly from,
+        DateOnly to,
+        ClaimsPrincipal principal,
+        GetConfirmedBookingsForTenantHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetConfirmedBookingsForTenant(principal.GetOperatorId(), principal.GetTenantId(), from, to),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok(result.Value
+            .Select(row => new ConfirmedBookingResponse(
+                row.BookingId.Value,
+                row.CalendarId.Value,
+                row.WorkerId.Value,
+                row.WorkerDisplayName,
+                row.ServiceId.Value,
+                row.ServiceName,
+                row.CustomerId.Value,
+                row.CustomerDisplayName,
+                row.StartsAt,
+                row.EndsAt,
+                row.LocalDate,
+                row.Weekday,
                 row.Phone,
                 row.Masked))
             .ToArray());

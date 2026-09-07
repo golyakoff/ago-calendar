@@ -86,9 +86,12 @@ public static class ErrorExtensions
             // operator of a known tenant, so "you may not" is a thing they are entitled to be told.
             // `22-20` folds in `recut.forbidden` and `worker_slots.forbidden` - two later use cases
             // (`20-15`, `20-16`) that reused this file's own permission-refusal vocabulary rather than
-            // inventing their own; the reasoning is unchanged.
+            // inventing their own; the reasoning is unchanged. `23-34` folds in
+            // `confirmed_bookings.forbidden` for the identical reason - an authenticated operator of a
+            // known tenant, entitled to be told "you may not" rather than shown a 404.
             "booking.forbidden" or "availability.forbidden" or "configuration.forbidden"
-                or "recut.forbidden" or "worker_slots.forbidden" => StatusCodes.Status403Forbidden,
+                or "recut.forbidden" or "worker_slots.forbidden" or "confirmed_bookings.forbidden" =>
+                StatusCodes.Status403Forbidden,
             "booking.not_found" or "configuration.not_found" => StatusCodes.Status404NotFound,
             // `22-20`. A worker id that does not resolve in this tenant - the same "does not exist,
             // or belongs to someone else" vagueness `ConfigurationErrors.NotFound`'s own remarks give
@@ -128,8 +131,12 @@ public static class ErrorExtensions
             // unrecognised decision string. `worker_slots.invalid_range` joins them for `To < From` -
             // no different in kind from `availability.invalid_day_boundary`'s own malformed-range
             // check two arms up, just a second endpoint with its own producer.
+            // `23-34`'s own `GetConfirmedBookingsForTenantHandler` gives `confirmed_bookings.invalid_range`
+            // the identical `To < From` shape `worker_slots.invalid_range` already has - a second,
+            // independent producer of the same malformed-range check, not a different kind of failure.
             "recut.from_before_today" or "recut.not_a_regression" or "recut.horizon_before_from"
-                or "recut.missing_decision" or "recut.invalid" or "worker_slots.invalid_range" =>
+                or "recut.missing_decision" or "recut.invalid" or "worker_slots.invalid_range"
+                or "confirmed_bookings.invalid_range" =>
                 StatusCodes.Status400BadRequest,
             // `20-13`. 409, not 400: the request was well-formed and the worker exists - what refuses
             // it is a state the deletion rule itself protects (the same "the world moved" reasoning

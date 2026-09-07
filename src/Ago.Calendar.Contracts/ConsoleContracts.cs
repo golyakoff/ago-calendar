@@ -163,6 +163,43 @@ public sealed record ContactResponse(
 /// returned by any list endpoint.</summary>
 public sealed record CustomerPhoneRevealResponse(string Phone);
 
+/// <summary>
+/// `23-34`: one confirmed booking - an appointment, not a slot, the same one-row-per-<c>booking_id</c>
+/// shape <see cref="PendingBookingResponse"/> already established. Field names match
+/// <c>Ago.Calendar.Application.Abstractions.ConfirmedBookingRow</c> verbatim.
+/// </summary>
+/// <param name="WorkerDisplayName">Never gated - a worker's own name is the shop's own roster, not
+/// personal data about a customer.</param>
+/// <param name="ServiceName">Never gated, the same reasoning <see cref="WorkerSlotResponse.ServiceName"/>
+/// already carries.</param>
+/// <param name="CustomerDisplayName"><see langword="null"/> only when the customer has never had a
+/// name recorded - unrelated to this response's own permission gate, since every row already passed
+/// <c>customer:read</c> (<c>IConfirmedBookingReadStore</c>'s own remarks on why this screen has no
+/// contact-free row the way <see cref="PendingBookingResponse"/> and <see cref="WorkerSlotResponse"/>
+/// both do).</param>
+/// <param name="Weekday">0 = Sunday, matching <see cref="WorkerSlotResponse.Weekday"/>'s own
+/// convention and the identical reasoning: computed server-side from <see cref="LocalDate"/> so the
+/// console never derives a weekday from a bare date string in its own, possibly different, zone.</param>
+/// <param name="Phone">Always populated - masked or real, never <see langword="null"/>, because every
+/// row on this screen already passed <c>customer:read</c>.</param>
+/// <param name="Masked">`23-12`: whether <see cref="Phone"/> is the tenant's own rung-masked display
+/// value rather than the real number.</param>
+public sealed record ConfirmedBookingResponse(
+    Guid BookingId,
+    Guid CalendarId,
+    Guid WorkerId,
+    string WorkerDisplayName,
+    Guid ServiceId,
+    string? ServiceName,
+    Guid CustomerId,
+    string? CustomerDisplayName,
+    DateTimeOffset StartsAt,
+    DateTimeOffset EndsAt,
+    DateOnly LocalDate,
+    int Weekday,
+    string Phone,
+    bool Masked);
+
 /// <summary>`23-12`: what the console posts to reveal one customer's phone - which screen asked, for
 /// the reveal record's own "which surface" field.</summary>
 public sealed record RevealCustomerPhoneRequest(string Surface);

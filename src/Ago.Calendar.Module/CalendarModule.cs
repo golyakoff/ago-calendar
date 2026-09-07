@@ -146,6 +146,10 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<MarkNoShowHandler>();
         services.AddScoped<GetPendingBookingsForTenantHandler>();
 
+        // `23-34`: what is actually booked, across every calendar - a read, never an action, so it
+        // sits beside the queue's own registration rather than among the three transitions above it.
+        services.AddScoped<Application.UseCases.ConfirmedBookings.GetConfirmedBookingsForTenantHandler>();
+
         // `20-06`. Registered in the module rather than in Ago.Calendar.Api, even though only the Api
         // host has routes for them: adr/0013's split is by failure profile, and the hosts differ in
         // what they *run*, never in what the product is. A scoped registration nobody resolves costs

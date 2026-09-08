@@ -40,7 +40,20 @@ internal sealed class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         builder.Property(c => c.FirstSeenAt).HasColumnName("first_seen_at").HasColumnType("timestamptz");
         builder.Property(c => c.LastSeenAt).HasColumnName("last_seen_at").HasColumnType("timestamptz");
 
+        // `23-60`/`adr/0147`: tombstone columns - see Customer.MergedIntoCustomerId's own remarks for
+        // why a merged row is marked rather than deleted. Self-referencing, cascade on delete: the only
+        // way a customers row is ever removed at all is the whole-tenant erasure cascade from `tenants`
+        // (`22-30`/personal-data.md's own `customers` row), and when that happens every row under the
+        // tenant should go together regardless of which side of a merge it was on.
+        builder.Property(c => c.MergedIntoCustomerId)
+            .HasColumnName("merged_into_customer_id")
+            .HasConversion(IdConverters.NullableCustomer);
+        builder.Property(c => c.MergedAt).HasColumnName("merged_at").HasColumnType("timestamptz");
+
         builder.HasOne<Tenant>().WithMany().HasForeignKey(c => c.TenantId);
+        builder.HasOne<Customer>().WithMany()
+            .HasForeignKey(c => c.MergedIntoCustomerId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         // `23-59`/`adr/0147`: narrowed from a plain unique index to a *partial* one, active only for
         // Source = 'Booking' - the identity rule this index's own original remarks describe

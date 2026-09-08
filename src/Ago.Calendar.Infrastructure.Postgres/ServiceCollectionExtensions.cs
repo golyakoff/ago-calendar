@@ -43,6 +43,11 @@ public static class ServiceCollectionExtensions
         // `23-59`/`adr/0147`: the consumer's own write port - a contact collected in chat becomes a
         // customer, idempotently, for a tenant that has this product.
         services.AddScoped<IContactCollectedCustomerStore, ContactCollectedCustomerStore>();
+        // `23-60`/`adr/0147`: the merge's own write port - shares AgoCalendarDbContext with
+        // ICustomerRepository above (both scoped, both resolved within the same request), which is
+        // what lets MergeCustomersHandler's own already-mutated Customer aggregates reach
+        // CustomerMergeStore already tracked - see that store's own remarks.
+        services.AddScoped<ICustomerMergeStore, CustomerMergeStore>();
         services.AddScoped<IWorkingHoursRuleRepository, WorkingHoursRuleRepository>();
         // `20-14`: a worker's own schedule template - the materialiser's other input alongside
         // IWorkingHoursRuleRepository.
@@ -104,6 +109,14 @@ public static class ServiceCollectionExtensions
         // `23-34`: what is actually booked, across every calendar - the same shared NpgsqlDataSource
         // singleton again, for the identical reason.
         services.AddScoped<IConfirmedBookingReadStore, ConfirmedBookingReadStore>();
+
+        // `23-60`/`adr/0147`: the merge write (the DbContext-based transaction
+        // ICustomerMergeStore's own remarks describe, not a raw-Npgsql read store, so it is
+        // registered beside CustomerRepository below rather than here) plus its two reads - the
+        // preview ("both sets of bookings before deciding") and the tenant's own audit trail, the same
+        // shared NpgsqlDataSource singleton every other read store above already uses.
+        services.AddScoped<ICustomerMergePreviewReadStore, CustomerMergePreviewReadStore>();
+        services.AddScoped<ICustomerMergeReadStore, CustomerMergeReadStore>();
 
         // `23-23`: "can this tenant take a booking right now, and if not, which precondition is
         // unmet" - the same shared NpgsqlDataSource singleton again, for the identical reason.

@@ -230,6 +230,13 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<ConfirmOperatorVerifiedPhoneHandler>();
         services.AddScoped<GetPhoneRevealsForTenantHandler>();
 
+        // `23-60`/`adr/0147`: the other half of that ADR's own choice - a phone match is now a hint an
+        // operator can act on. The preview ("both sets of bookings before deciding"), the merge itself,
+        // and the tenant's own audit read of every merge performed.
+        services.AddScoped<GetCustomerMergePreviewHandler>();
+        services.AddScoped<MergeCustomersHandler>();
+        services.AddScoped<GetCustomerMergesForTenantHandler>();
+
         // `22-14`/`adr/0100`: the switcher's own read - "which tenants may I act in here". Not an
         // identity-management endpoint of the kind `22-05` deleted above: it manages nothing and
         // grants nothing, it reports what the projection `ago-chat` replicates already says.

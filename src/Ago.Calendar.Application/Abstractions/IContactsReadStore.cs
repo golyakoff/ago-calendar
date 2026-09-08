@@ -26,6 +26,16 @@ namespace Ago.Calendar.Application.Abstractions;
 /// <see cref="ContactRow.Phone"/> this store returns is already the masked string; the real value
 /// never crosses into the row at all, so there is no flag a careless caller could ignore and
 /// accidentally forward the unmasked number.</para>
+///
+/// <para><b>`23-60`/`adr/0147`: excludes a row once <see cref="Customer.MergedIntoCustomerId"/> is
+/// set.</b> A tombstoned row is not a lead card any operator should still be acting on - it exists so
+/// <see cref="Event.CustomerId"/>'s own foreign key and <c>ICustomerMergeReadStore</c>'s own audit
+/// trail still resolve, not so it keeps appearing on the ordinary contacts screen a merge was
+/// performed specifically to clean up. Each surviving row's own
+/// <see cref="ContactRow.DuplicatePhoneCustomerIds"/> is this store's other new fact - "share a phone
+/// or an e-mail" is the item's own Scope line; this product's <see cref="Customer"/> has no e-mail
+/// field to compare (<c>docs/adr/0161-*</c> states this as a scope boundary rather than a gap this
+/// item silently leaves), so the comparison is phone alone.</para>
 /// </summary>
 public interface IContactsReadStore
 {
@@ -55,6 +65,12 @@ public interface IContactsReadStore
 /// item file is explicit that fixing the missing writer is a separate item - this report shows the
 /// real column, whatever it currently holds, rather than inventing a value to make the screen look
 /// more finished than the product is.</param>
+/// <param name="DuplicatePhoneCustomerIds">`23-60`/`adr/0147`: every other live (not tombstoned)
+/// customer in this tenant whose <see cref="Customer.Phone"/> equals this row's own - what the
+/// console's "shares a contact detail" hint and merge action are built from. Empty for the ordinary
+/// case (no known duplicate). Computed by the store from the same rows it already read for this
+/// tenant, never a second query - grouping a list the handler already has in hand costs nothing a
+/// fresh round trip would.</param>
 public readonly record struct ContactRow(
     CustomerId CustomerId,
     string Phone,
@@ -65,4 +81,5 @@ public readonly record struct ContactRow(
     DateTimeOffset? PhoneVerifiedAt,
     DateTimeOffset? PhoneConfirmedByOperatorAt,
     DateTimeOffset FirstSeenAt,
-    DateTimeOffset LastSeenAt);
+    DateTimeOffset LastSeenAt,
+    IReadOnlyList<CustomerId> DuplicatePhoneCustomerIds);

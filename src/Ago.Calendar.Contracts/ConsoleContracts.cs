@@ -147,6 +147,9 @@ public sealed record PendingBookingResponse(
 /// <see cref="PhoneVerifiedAt"/> - see <c>Customer.PhoneConfirmedByOperatorAt</c>'s own remarks.</param>
 /// <param name="NoShowCount">Read honestly - see <c>ContactRow.NoShowCount</c>'s own remarks on why
 /// this is zero for every customer in this product's v1, not a bug in the report.</param>
+/// <param name="DuplicatePhoneCustomerIds">`23-60`/`adr/0147`: every other live customer in this
+/// tenant sharing this row's own phone - what the console's "shares a contact detail" hint and its
+/// Merge action are built from. Empty for the ordinary case.</param>
 public sealed record ContactResponse(
     Guid CustomerId,
     string Phone,
@@ -157,7 +160,8 @@ public sealed record ContactResponse(
     DateTimeOffset? PhoneVerifiedAt,
     DateTimeOffset? PhoneConfirmedByOperatorAt,
     DateTimeOffset FirstSeenAt,
-    DateTimeOffset LastSeenAt);
+    DateTimeOffset LastSeenAt,
+    IReadOnlyList<Guid> DuplicatePhoneCustomerIds);
 
 /// <summary>`23-12`: the response to a deliberate reveal - the real number, and nothing else. Never
 /// returned by any list endpoint.</summary>
@@ -216,6 +220,58 @@ public sealed record ContactPhoneRevealResponse(
 /// row has been reached.</param>
 public sealed record ContactPhoneRevealPageResponse(
     IReadOnlyList<ContactPhoneRevealResponse> Items, Guid? NextBefore);
+
+/// <summary>`23-60`/`adr/0147`: the two candidate ids, unordered - <c>MergeCustomers</c>'s own doc
+/// comment explains why neither the preview request nor this one lets the caller name a
+/// "survivor".</summary>
+public sealed record CustomerMergePreviewRequest(Guid FirstCustomerId, Guid SecondCustomerId);
+
+/// <param name="Status">The CLR enum member name (<c>Available</c>/<c>PendingConfirmation</c>/
+/// <c>Booked</c>/<c>Cancelled</c>/<c>NoShow</c>/<c>Blocked</c>), verbatim - a closed vocabulary the
+/// console already has its own copy of for the pending/confirmed-bookings screens.</param>
+public sealed record CustomerMergePreviewBookingResponse(
+    Guid BookingId,
+    string Status,
+    string? ServiceName,
+    string WorkerDisplayName,
+    DateTimeOffset StartsAt,
+    DateTimeOffset EndsAt,
+    DateOnly LocalDate);
+
+/// <param name="WillSurvive">`adr/0161`: whether the server would keep this candidate if the
+/// operator goes on to confirm - display-only, re-decided (never trusted) by the merge itself.</param>
+public sealed record CustomerMergeCandidateResponse(
+    Guid CustomerId,
+    string Source,
+    bool WillSurvive,
+    string Phone,
+    bool Masked,
+    string? DisplayName,
+    int NoShowCount,
+    IReadOnlyList<CustomerMergePreviewBookingResponse> Bookings);
+
+public sealed record CustomerMergePreviewResponse(
+    CustomerMergeCandidateResponse First, CustomerMergeCandidateResponse Second);
+
+/// <summary>`23-60`/`adr/0147`: the merge itself - the same two unordered ids the preview above was
+/// asked about, now acted on.</summary>
+public sealed record MergeCustomersRequest(Guid FirstCustomerId, Guid SecondCustomerId);
+
+/// <param name="SurvivorCustomerId">Which of the two the operator's request actually kept - decided
+/// by the handler, not the request; see <c>MergeCustomersHandler</c>'s own doc comment for why an
+/// operator cannot choose this.</param>
+public sealed record CustomerMergeOutcomeResponse(Guid SurvivorCustomerId, Guid AbsorbedCustomerId, int BookingsMoved);
+
+/// <summary>`23-60`/`adr/0147`'s own Done-when: "the merge is recorded ... and is visible
+/// afterwards." One row, one merge - the same shape <see cref="ContactPhoneRevealResponse"/> already
+/// establishes for a different audit trail.</summary>
+public sealed record CustomerMergeResponse(
+    Guid Id, DateTimeOffset MergedAt, Guid SurvivorCustomerId, Guid AbsorbedCustomerId, Guid OperatorId, int BookingsMoved);
+
+/// <param name="NextBefore">Keyset cursor for the next page - <see langword="null"/> once the oldest
+/// row has been reached, the identical shape <see cref="ContactPhoneRevealPageResponse"/> already
+/// establishes.</param>
+public sealed record CustomerMergePageResponse(IReadOnlyList<CustomerMergeResponse> Items, Guid? NextBefore);
 
 /// <param name="LocalDate">The business-local day, as the shop names it - not an instant range. See
 /// <c>DeleteDayOff</c>.</param>

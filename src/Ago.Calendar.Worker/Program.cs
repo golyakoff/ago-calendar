@@ -64,6 +64,15 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<ContactPhoneRevealPruneJob>();
 
+// `23-59`/`adr/0147`: this product's fourth broker consumer - projects `ago-chat`'s own
+// `ContactCollected` into a `Customer` row, for a tenant that has this product provisioned. See
+// ContactCollectedConsumer's own remarks for the local tenant-existence gate and the phone-kind filter.
+builder.Services
+    .AddOptions<ContactCollectedConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(ContactCollectedConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<ContactCollectedConsumer>();
+
 var host = builder.Build();
 
 // `20-21`/`adr/0056`: the same guard Ago.Calendar.Api runs, in the same place - before anything can

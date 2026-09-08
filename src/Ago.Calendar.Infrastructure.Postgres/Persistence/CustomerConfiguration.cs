@@ -19,6 +19,17 @@ internal sealed class CustomerConfiguration : IEntityTypeConfiguration<Customer>
             .HasConversion(IdConverters.Phone)
             .IsRequired();
 
+        // `23-59`/`adr/0147`: stored as the CLR member name via EF's default string conversion, not an
+        // ordinal - the same reasoning every other closed-vocabulary enum in this codebase's own
+        // remarks give (an ordinal makes reordering the enum a silent data corruption).
+        builder.Property(c => c.Source)
+            .HasColumnName("source")
+            .HasConversion<string>()
+            .HasMaxLength(16)
+            .HasDefaultValue(CustomerSource.Booking)
+            .IsRequired();
+        builder.Property(c => c.SourceContactId).HasColumnName("source_contact_id");
+
         builder.Property(c => c.DisplayName).HasColumnName("display_name").HasMaxLength(200);
         builder.Property(c => c.Notes).HasColumnName("notes").HasMaxLength(4000);
         builder.Property(c => c.PhoneVerifiedAt).HasColumnName("phone_verified_at").HasColumnType("timestamptz");
@@ -31,16 +42,28 @@ internal sealed class CustomerConfiguration : IEntityTypeConfiguration<Customer>
 
         builder.HasOne<Tenant>().WithMany().HasForeignKey(c => c.TenantId);
 
-        // The lead card's identity rule, at the storage level. (tenant_id, phone), never phone
-        // alone: the same person booking at two shops is two cards, and one tenant's notes must
-        // never reach another's console.
-        //
-        // This index is also `20-03`'s find-or-create backstop. Two simultaneous first-time bookings
-        // from the same number both find nothing and both insert; this is what makes the loser fail
-        // instead of creating a second card - the same "the index is the storage backstop, not the
-        // primary mechanism" division adr/0019 already draws for AGO Chat's message sequence.
+        // `23-59`/`adr/0147`: narrowed from a plain unique index to a *partial* one, active only for
+        // Source = 'Booking' - the identity rule this index's own original remarks describe
+        // ("the same person booking at two shops is two cards") still holds exactly as before within
+        // that source, but a chat-sourced row must be allowed to share a phone with a booking-sourced
+        // one (`adr/0147`'s own "a phone that matches an existing customer does not merge" - a
+        // duplicate is the point, not a bug this index should still be preventing). `BookingStore`'s
+        // own `ON CONFLICT (tenant_id, phone)` clause carries the identical `WHERE source = 'Booking'`
+        // predicate, because Postgres only accepts a partial index as an upsert's conflict target when
+        // the statement's own predicate matches it exactly.
         builder.HasIndex(c => new { c.TenantId, c.Phone })
             .IsUnique()
+            .HasFilter("source = 'Booking'")
             .HasDatabaseName("ux_customers_tenant_phone");
+
+        // `23-59`/`adr/0147`: the chat-sourced counterpart - one row per (tenant, source contact), so
+        // redelivering the identical `ContactCollected` event twice upserts the same row rather than
+        // creating a second one. Partial (only when `source_contact_id` is not null) for the same
+        // reason `ux_customers_tenant_phone` above is now partial: a `Booking`-sourced row never
+        // populates this column, so there is nothing for this index to arbitrate for it.
+        builder.HasIndex(c => new { c.TenantId, c.SourceContactId })
+            .IsUnique()
+            .HasFilter("source_contact_id IS NOT NULL")
+            .HasDatabaseName("ux_customers_tenant_source_contact");
     }
 }

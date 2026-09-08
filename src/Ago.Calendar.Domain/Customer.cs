@@ -24,6 +24,30 @@ public sealed class Customer
 
     public PhoneNumber Phone { get; }
 
+    /// <summary>`23-59`/`adr/0147`: where this row came from - <see cref="CustomerSource.Booking"/>
+    /// for the ordinary path (the default, and every row that existed before this item), and
+    /// <see cref="CustomerSource.Chat"/> for one carried over from a chat contact. Never used to
+    /// merge - see <see cref="SourceContactId"/>'s own remarks for why a phone matching an existing
+    /// customer still becomes its own row.</summary>
+    public CustomerSource Source { get; private set; }
+
+    /// <summary>`23-59`/`adr/0147`: the originating `Ago.Chat.Domain.VisitorContactDetail`'s own id,
+    /// carried opaque - this product has no reason to know anything else about that row, the same
+    /// arms-length treatment `Operator.ExternalSubjectId`-style external identifiers get elsewhere in
+    /// this codebase. <see langword="null"/> for a <see cref="CustomerSource.Booking"/> row.
+    ///
+    /// <para><b>The idempotency key for a chat-sourced row, not the phone.</b> A chat contact detail is
+    /// written once and never edited (`Ago.Chat.Domain.VisitorContactDetail`'s own remarks), so this id
+    /// names exactly one fact - which is what lets <c>ux_customers_tenant_source_contact</c> (a partial
+    /// unique index, active only when this column is not null) make redelivering the identical
+    /// <c>ContactCollected</c> event an upsert onto the <em>same</em> row rather than a duplicate, while
+    /// two <em>different</em> chat contacts that happen to share a phone number still become two
+    /// separate rows - the identical "a phone is a hint, not proof" reasoning `adr/0147` gives for never
+    /// merging a chat-sourced row into a booking-sourced one, applied here between two chat-sourced rows
+    /// as well, deliberately: nothing about this column ever collapses two distinct people who happen to
+    /// share a number.</para></summary>
+    public Guid? SourceContactId { get; private set; }
+
     /// <summary>Optional: the customer types a phone number and nothing else, and an operator fills
     /// the name in later - or never.</summary>
     public string? DisplayName { get; private set; }
@@ -67,11 +91,13 @@ public sealed class Customer
     /// first.</summary>
     public DateTimeOffset? PhoneConfirmedByOperatorAt { get; private set; }
 
-    private Customer(CustomerId id, TenantId tenantId, PhoneNumber phone, DateTimeOffset now)
+    private Customer(CustomerId id, TenantId tenantId, PhoneNumber phone, CustomerSource source, Guid? sourceContactId, DateTimeOffset now)
     {
         Id = id;
         TenantId = tenantId;
         Phone = phone;
+        Source = source;
+        SourceContactId = sourceContactId;
         FirstSeenAt = now;
         LastSeenAt = now;
     }
@@ -82,7 +108,21 @@ public sealed class Customer
     }
 
     public static Customer Register(CustomerId id, TenantId tenantId, PhoneNumber phone, DateTimeOffset now) =>
-        new(id, tenantId, phone, now);
+        new(id, tenantId, phone, CustomerSource.Booking, sourceContactId: null, now);
+
+    /// <summary>
+    /// `23-59`/`adr/0147`: the C#-callable statement of what a chat-carried customer is - the same
+    /// "the domain method is the precondition's canonical statement, the SQL is what runs" split
+    /// <see cref="PhoneVerifiedAt"/>'s own remarks describe for <see cref="Register"/>/<see cref="RecordVerifiedPhone"/>:
+    /// the real, load-bearing write for this factory is <c>Ago.Calendar.Infrastructure.Postgres.ContactCollectedCustomerStore</c>'s
+    /// own raw SQL upsert, chosen for the identical contention reason <c>BookingStore</c>'s own remarks
+    /// give (Postgres arbitrating an <c>ON CONFLICT</c> in one round trip rather than a read-then-insert
+    /// a concurrent redelivery could race). Kept here so the aggregate stays an honest description of the
+    /// rule regardless.
+    /// </summary>
+    public static Customer RegisterFromChat(
+        CustomerId id, TenantId tenantId, PhoneNumber phone, Guid sourceContactId, DateTimeOffset now) =>
+        new(id, tenantId, phone, CustomerSource.Chat, sourceContactId, now);
 
     /// <summary>What an operator edits on the card. Blank clears the field rather than being
     /// rejected - "I typed the wrong name" needs an undo, and a validator that forbids empty would

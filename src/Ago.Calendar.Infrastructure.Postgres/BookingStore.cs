@@ -57,12 +57,24 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
     /// reading <c>ChannelIdentity.FirstSeenAt</c> rather than "now"). <c>COALESCE</c> in this direction
     /// means a customer row can only ever move from unverified to verified, never the reverse and never
     /// to a different timestamp once set.</para>
+    ///
+    /// <para><b>`23-59`/`adr/0147`: <c>source</c> is written as the literal <c>'Booking'</c>, and the
+    /// <c>ON CONFLICT</c> target now carries the identical <c>WHERE source = 'Booking'</c> predicate as
+    /// <c>ux_customers_tenant_phone</c> itself.</b> That index is a partial one since this item - active
+    /// only for a <c>Booking</c>-sourced row, so a chat-carried row can share a phone with this one
+    /// without colliding (`CustomerConfiguration`'s own remarks) - and Postgres only accepts a partial
+    /// index as an upsert's conflict-arbitration target when the statement's own <c>WHERE</c> clause
+    /// matches the index's exactly; without it this statement would fail outright with "there is no
+    /// unique or exclusion constraint matching the ON CONFLICT specification," not silently misbehave.
+    /// This statement never writes <c>source_contact_id</c> - it stays its column default
+    /// (<see langword="null"/>), which is what keeps a booking-sourced row out of
+    /// <c>ux_customers_tenant_source_contact</c>'s own partial index entirely.</para>
     /// </summary>
     private const string UpsertCustomerSql =
         """
-        INSERT INTO customers (id, tenant_id, phone, display_name, phone_verified_at, no_show_count, first_seen_at, last_seen_at)
-        VALUES (@id, @tenantId, @phone, @displayName, @phoneVerifiedAt, 0, @now, @now)
-        ON CONFLICT (tenant_id, phone) DO UPDATE
+        INSERT INTO customers (id, tenant_id, phone, source, display_name, phone_verified_at, no_show_count, first_seen_at, last_seen_at)
+        VALUES (@id, @tenantId, @phone, 'Booking', @displayName, @phoneVerifiedAt, 0, @now, @now)
+        ON CONFLICT (tenant_id, phone) WHERE source = 'Booking' DO UPDATE
             SET last_seen_at = GREATEST(customers.last_seen_at, EXCLUDED.last_seen_at),
                 display_name = COALESCE(customers.display_name, EXCLUDED.display_name),
                 phone_verified_at = COALESCE(customers.phone_verified_at, EXCLUDED.phone_verified_at)

@@ -330,6 +330,35 @@ public class CustomerTests
         other.RecordVerifiedPhone(CalendarFixtures.Now);
         Assert.Null(other.PhoneConfirmedByOperatorAt);
     }
+
+    /// <summary>`23-59`/`adr/0147`: <see cref="Customer.RegisterFromChat"/>'s own canonical statement -
+    /// unlike <see cref="Customer.Register"/>, this factory <em>is</em> actually called at runtime
+    /// (<c>ContactCollectedCustomerStore</c>'s own remarks), so both a domain-level and a Postgres-level
+    /// proof exist for it.</summary>
+    [Fact]
+    public void RegisterFromChat_SetsSourceToChat_AndCarriesTheSourceContactId()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var sourceContactId = Guid.NewGuid();
+
+        var customer = Customer.RegisterFromChat(
+            new CustomerId(Guid.NewGuid()), tenant.Id, new PhoneNumber("+15550100"), sourceContactId, CalendarFixtures.Now);
+
+        Assert.Equal(CustomerSource.Chat, customer.Source);
+        Assert.Equal(sourceContactId, customer.SourceContactId);
+        Assert.Equal(CalendarFixtures.Now, customer.FirstSeenAt);
+        Assert.Equal(CalendarFixtures.Now, customer.LastSeenAt);
+    }
+
+    [Fact]
+    public void Register_TheOrdinaryBookingPath_SetsSourceToBooking_WithNoSourceContactId()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var customer = CalendarFixtures.Customer(tenant);
+
+        Assert.Equal(CustomerSource.Booking, customer.Source);
+        Assert.Null(customer.SourceContactId);
+    }
 }
 
 // `22-05`/`adr/0093`: RoleTests removed - Role and Operator are gone along with the `roles`/

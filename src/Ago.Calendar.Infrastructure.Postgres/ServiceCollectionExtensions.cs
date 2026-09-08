@@ -40,6 +40,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkerRepository, WorkerRepository>();
         services.AddScoped<IServiceRepository, ServiceRepository>();
         services.AddScoped<ICustomerRepository, CustomerRepository>();
+        // `23-59`/`adr/0147`: the consumer's own write port - a contact collected in chat becomes a
+        // customer, idempotently, for a tenant that has this product.
+        services.AddScoped<IContactCollectedCustomerStore, ContactCollectedCustomerStore>();
         services.AddScoped<IWorkingHoursRuleRepository, WorkingHoursRuleRepository>();
         // `20-14`: a worker's own schedule template - the materialiser's other input alongside
         // IWorkingHoursRuleRepository.

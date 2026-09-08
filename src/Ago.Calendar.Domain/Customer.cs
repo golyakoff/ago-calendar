@@ -91,6 +91,26 @@ public sealed class Customer
     /// first.</summary>
     public DateTimeOffset? PhoneConfirmedByOperatorAt { get; private set; }
 
+    /// <summary>`23-60`/`adr/0147`: set once, by <see cref="MarkMergedInto"/>, when an operator
+    /// decides this row and another are the same person and this one loses. <see langword="null"/>
+    /// for every row that has never been on the losing side of a merge - which, before this item,
+    /// was every row that existed.
+    ///
+    /// <para><b>Tombstoned, never deleted.</b> <see cref="Event.CustomerId"/> carries a foreign key to
+    /// this table (`EventConfiguration`), and <see cref="Event"/>'s own remarks are explicit that a
+    /// customer's history - including a cancelled or no-show visit - is kept forever, not summarised
+    /// and discarded. Deleting the losing row outright would either orphan every booking it ever had
+    /// or force them onto the survivor as a second, hidden write this column's own reader could not
+    /// see happened. Setting this column instead keeps the row, and everything that already points at
+    /// it, exactly where it was; <see cref="ICustomerRepository.GetByIdAsync"/> and
+    /// <see cref="IContactsReadStore"/> are what decide whether a tombstoned row is still worth
+    /// showing on an ordinary screen, not this aggregate.</para></summary>
+    public CustomerId? MergedIntoCustomerId { get; private set; }
+
+    /// <summary>When <see cref="MarkMergedInto"/> was called - <see langword="null"/> exactly when
+    /// <see cref="MergedIntoCustomerId"/> is.</summary>
+    public DateTimeOffset? MergedAt { get; private set; }
+
     private Customer(CustomerId id, TenantId tenantId, PhoneNumber phone, CustomerSource source, Guid? sourceContactId, DateTimeOffset now)
     {
         Id = id;
@@ -165,5 +185,76 @@ public sealed class Customer
         {
             LastSeenAt = now;
         }
+    }
+
+    /// <summary>
+    /// `23-60`/`adr/0147`: what the surviving side of a merge absorbs from the side that loses -
+    /// called on the survivor, given the row about to be tombstoned. The C#-callable statement of the
+    /// rule, the same "domain method is the precondition's canonical statement" split this type's own
+    /// remarks describe for <see cref="PhoneVerifiedAt"/>: <c>ICustomerMergeStore</c>'s own
+    /// implementation is what actually persists both rows together in one transaction, but what
+    /// changes and why is decided here, not there.
+    ///
+    /// <para><b>No-show count adds, it does not replace.</b> The two rows describe one person under
+    /// two identities; a no-show under either identity is a no-show by the person, and losing the
+    /// count from whichever side had fewer bookings would defeat the reason this item exists - `20-04`'s
+    /// own "prepayment required after a no-show history" rule has to see the combined history once the
+    /// operator has said, deliberately, that it is one history.</para>
+    ///
+    /// <para><b>Phone-verification facts fill a gap, never overwrite one.</b> <c>??=</c>, the identical
+    /// earliest-call-wins shape <see cref="RecordVerifiedPhone"/> and
+    /// <see cref="RecordOperatorConfirmedPhone"/> already use for a redelivery of the same fact - here
+    /// the "redelivery" is the other row's own copy of a fact about the same phone number (a merge
+    /// candidate is only ever detected by a shared phone, so both rows' <see cref="Phone"/> already
+    /// agree; <see cref="MergeCustomersHandler"/>'s own remarks state this precondition rather than
+    /// re-checking it here).</para>
+    ///
+    /// <para><b>Never touches <see cref="DisplayName"/> or <see cref="Notes"/>.</b> A name or a note is
+    /// what an operator wrote about a specific card; silently splicing the losing row's text onto the
+    /// survivor risks attributing a stranger's note to the wrong context with nobody deciding it should
+    /// happen. `23-60`'s own Done-when asks only that the bookings end up on one record - it does not
+    /// ask for the free text to follow, and this method does not invent that requirement.</para>
+    /// </summary>
+    public void AbsorbHistoryFrom(Customer absorbed, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(absorbed);
+        if (absorbed.Id == Id)
+        {
+            throw new InvalidOperationException("A customer cannot absorb itself.");
+        }
+
+        NoShowCount += absorbed.NoShowCount;
+        PhoneVerifiedAt ??= absorbed.PhoneVerifiedAt;
+        PhoneConfirmedByOperatorAt ??= absorbed.PhoneConfirmedByOperatorAt;
+        Touch(now);
+    }
+
+    /// <summary>
+    /// `23-60`/`adr/0147`: called on the losing side of a merge, once, ever - the domain's own
+    /// statement of "a merge is irreversible" (`adr/0147`'s own asymmetry argument, and this item's own
+    /// answer to the question it left open: undo stays out of scope, so nothing in this codebase ever
+    /// calls the inverse of this method). Throws rather than silently no-opping on a second call,
+    /// deliberately unlike <see cref="RecordVerifiedPhone"/>'s own idempotent <c>??=</c>: a phone
+    /// verification arriving twice is an ordinary redelivery this aggregate must absorb quietly, but a
+    /// second merge naming an already-tombstoned row is a caller bug - either a stale id reused after
+    /// the console should have refreshed its list, or two operators racing the same merge - and a
+    /// silent no-op would hide exactly the kind of double-write this item's own transaction boundary
+    /// exists to prevent.
+    /// </summary>
+    public void MarkMergedInto(CustomerId survivorId, DateTimeOffset mergedAt)
+    {
+        if (survivorId == Id)
+        {
+            throw new InvalidOperationException("A customer cannot be merged into itself.");
+        }
+
+        if (MergedIntoCustomerId is not null)
+        {
+            throw new InvalidOperationException(
+                $"Customer {Id.Value} was already merged into {MergedIntoCustomerId.Value.Value} at {MergedAt}.");
+        }
+
+        MergedIntoCustomerId = survivorId;
+        MergedAt = mergedAt;
     }
 }

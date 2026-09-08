@@ -174,6 +174,15 @@ public static class ErrorExtensions
             // such row" info-hiding shape `booking.*_not_found` arms already use, never a different,
             // more informative code that would confirm a real id belonging to another tenant.
             "contacts.customer_not_found" => StatusCodes.Status404NotFound,
+            // `23-60`/`adr/0161`: a merge request naming the same id twice - a caller error about the
+            // request's own shape, not a state conflict, the same 400 class `chat_module_task.kind_mismatch`
+            // above uses for the identical reason.
+            "contacts.cannot_merge_customer_with_itself" => StatusCodes.Status400BadRequest,
+            // `23-60`/`adr/0161`: a merge request naming a row that is already tombstoned - a
+            // conflict with the resource's own current state, the same 409 class
+            // `chat_module_task.already_complete` above uses for the identical shape ("this act
+            // already happened, and cannot happen twice").
+            "contacts.customer_already_merged" => StatusCodes.Status409Conflict,
             // 2026-09-01: PublicBookingApiGate's own kill switch. 403, not the 404 that
             // booking.surface_not_found/booking.origin_not_allowed use two cases above - those hide a
             // caller-specific fact (whether a tenant/origin exists); this refusal is identical for

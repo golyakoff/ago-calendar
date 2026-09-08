@@ -102,6 +102,14 @@ public static class ConsoleEndpoints
         // (`decisions.md` §5's amendment).
         group.MapGet("/contacts/phone-reveals", HandlePhoneRevealsAsync).WithName("GetPhoneReveals");
 
+        // `23-60`/`adr/0147`: the other half of that ADR's own choice - "seeing both sets of bookings
+        // before deciding", the merge itself, and the tenant's own audit trail of every merge
+        // performed. POST rather than GET for the preview: it names two ids the caller chose, closer
+        // in shape to `RecutSchedulePreview` (also a POST) than to a bare query-string filter.
+        group.MapPost("/contacts/merge-preview", HandleCustomerMergePreviewAsync).WithName("GetCustomerMergePreview");
+        group.MapPost("/contacts/merge", HandleMergeCustomersAsync).WithName("MergeCustomers");
+        group.MapGet("/contacts/merges", HandleCustomerMergesAsync).WithName("GetCustomerMerges");
+
         // `20-15`: the materialised slot view - what the tenant's own schedule actually produced for
         // one worker, over a date range. Read-only; see the item's own scope for why it offers no
         // edit of its own.
@@ -660,8 +668,105 @@ public static class ConsoleEndpoints
                 row.PhoneVerifiedAt,
                 row.PhoneConfirmedByOperatorAt,
                 row.FirstSeenAt,
-                row.LastSeenAt))
+                row.LastSeenAt,
+                [.. row.DuplicatePhoneCustomerIds.Select(id => id.Value)]))
             .ToArray());
+    }
+
+    private static async Task<IResult> HandleCustomerMergePreviewAsync(
+        CustomerMergePreviewRequest request,
+        ClaimsPrincipal principal,
+        GetCustomerMergePreviewHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        var result = await handler.HandleAsync(
+            new GetCustomerMergePreview(
+                principal.GetOperatorId(), principal.GetTenantId(),
+                new CustomerId(request.FirstCustomerId), new CustomerId(request.SecondCustomerId)),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        var preview = result.Value;
+        return Results.Ok(new CustomerMergePreviewResponse(ToCandidateResponse(preview.First), ToCandidateResponse(preview.Second)));
+    }
+
+    private static CustomerMergeCandidateResponse ToCandidateResponse(CustomerMergeCandidate candidate) => new(
+        candidate.CustomerId.Value,
+        candidate.Source.ToString(),
+        candidate.WillSurvive,
+        candidate.Phone,
+        candidate.Masked,
+        candidate.DisplayName,
+        candidate.NoShowCount,
+        [.. candidate.Bookings.Select(booking => new CustomerMergePreviewBookingResponse(
+            booking.BookingId.Value,
+            booking.Status.ToString(),
+            booking.ServiceName,
+            booking.WorkerDisplayName,
+            booking.StartsAt,
+            booking.EndsAt,
+            booking.LocalDate))]);
+
+    private static async Task<IResult> HandleMergeCustomersAsync(
+        MergeCustomersRequest request,
+        ClaimsPrincipal principal,
+        MergeCustomersHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        var result = await handler.HandleAsync(
+            new MergeCustomers(
+                principal.GetOperatorId(), principal.GetTenantId(),
+                new CustomerId(request.FirstCustomerId), new CustomerId(request.SecondCustomerId)),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        var outcome = result.Value;
+        return Results.Ok(new CustomerMergeOutcomeResponse(
+            outcome.SurvivorCustomerId.Value, outcome.AbsorbedCustomerId.Value, outcome.BookingsMoved));
+    }
+
+    private static async Task<IResult> HandleCustomerMergesAsync(
+        Guid? before,
+        int? limit,
+        ClaimsPrincipal principal,
+        GetCustomerMergesForTenantHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetCustomerMergesForTenant(principal.GetOperatorId(), principal.GetTenantId(), before, limit),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        var page = result.Value;
+        return Results.Ok(new CustomerMergePageResponse(
+            [.. page.Items.Select(item => new CustomerMergeResponse(
+                item.Id, item.MergedAt, item.SurvivorCustomerId, item.AbsorbedCustomerId, item.OperatorId, item.BookingsMoved))],
+            page.NextBeforeId));
     }
 
     private static async Task<IResult> HandleRevealCustomerPhoneAsync(

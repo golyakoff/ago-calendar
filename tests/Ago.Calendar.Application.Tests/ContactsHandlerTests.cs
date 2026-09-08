@@ -20,7 +20,7 @@ public class ContactsHandlerTests
     public async Task WithCustomerRead_ReturnsTheStoresRows()
     {
         var row = new ContactRow(
-            new CustomerId(Guid.CreateVersion7(Now)), "+79990000001", false, "Anna", null, 0, null, null, Now, Now);
+            new CustomerId(Guid.CreateVersion7(Now)), "+79990000001", false, "Anna", null, 0, null, null, Now, Now, []);
         var store = new FakeContactsReadStore(row);
         var handler = new GetTenantContactsHandler(store, Permissive(), new FakeContactVisibilityProjectionStore());
 
@@ -49,7 +49,7 @@ public class ContactsHandlerTests
     public async Task OnTheMaskedRung_AsksTheStoreToMask()
     {
         var row = new ContactRow(
-            new CustomerId(Guid.CreateVersion7(Now)), "+79990000001", false, "Anna", null, 0, null, null, Now, Now);
+            new CustomerId(Guid.CreateVersion7(Now)), "+79990000001", false, "Anna", null, 0, null, null, Now, Now, []);
         var store = new FakeContactsReadStore(row);
         var visibility = new FakeContactVisibilityProjectionStore(ContactVisibility.MaskedWithReveal);
         var handler = new GetTenantContactsHandler(store, Permissive(), visibility);

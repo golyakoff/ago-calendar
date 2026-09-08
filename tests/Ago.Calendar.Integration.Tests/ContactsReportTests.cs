@@ -5,6 +5,7 @@ using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
+using Microsoft.EntityFrameworkCore;
 
 namespace Ago.Calendar.Integration.Tests;
 
@@ -41,6 +42,74 @@ public class ContactsReportTests(PostgresFixture fixture)
         Assert.Contains(rows, r => r.CustomerId == mine.Customer.Id);
         Assert.Contains(rows, r => r.CustomerId == extraOfMine.Id);
         Assert.DoesNotContain(rows, r => r.CustomerId == theirs.Customer.Id);
+    }
+
+    /// <summary>`23-60`/`adr/0147`'s own first Done-when: "a tenant can see that two customer records
+    /// share a phone." Against a real Postgres, not asserted from the SQL alone - two rows sharing a
+    /// phone, one a chat-sourced duplicate the way `23-59` actually produces one, each naming the
+    /// other back and nobody else.</summary>
+    [Fact]
+    public async Task TheReadStore_NamesEveryOtherLiveCustomerSharingTheSamePhone()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var chatDuplicate = Customer.RegisterFromChat(
+            new CustomerId(CalendarSeed.NewId()), seed.Tenant.Id, seed.Customer.Phone, Guid.NewGuid(), CalendarSeed.Now);
+        var unrelated = Customer.Register(
+            new CustomerId(CalendarSeed.NewId()), seed.Tenant.Id, new PhoneNumber("+79990009999"), CalendarSeed.Now);
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            db.Customers.AddRange(chatDuplicate, unrelated);
+            await db.SaveChangesAsync();
+        }
+
+        var rows = await new ContactsReadStore(fixture.DataSource)
+            .ListForTenantAsync(seed.Tenant.Id, mask: false, CancellationToken.None);
+
+        var seededRow = Assert.Single(rows, r => r.CustomerId == seed.Customer.Id);
+        Assert.Equal([chatDuplicate.Id], seededRow.DuplicatePhoneCustomerIds);
+
+        var chatRow = Assert.Single(rows, r => r.CustomerId == chatDuplicate.Id);
+        Assert.Equal([seed.Customer.Id], chatRow.DuplicatePhoneCustomerIds);
+
+        var unrelatedRow = Assert.Single(rows, r => r.CustomerId == unrelated.Id);
+        Assert.Empty(unrelatedRow.DuplicatePhoneCustomerIds);
+    }
+
+    /// <summary>Once one side of a duplicate pair is merged away, the survivor's own
+    /// `DuplicatePhoneCustomerIds` empties out - the hint disappears because the tombstoned row is
+    /// excluded from this store's own query entirely (`IContactsReadStore`'s own remarks), not
+    /// because anything re-checks whether a phone is still shared.</summary>
+    [Fact]
+    public async Task AfterAMerge_TheSurvivorNoLongerShowsADuplicateHint()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var chatDuplicate = Customer.RegisterFromChat(
+            new CustomerId(CalendarSeed.NewId()), seed.Tenant.Id, seed.Customer.Phone, Guid.NewGuid(), CalendarSeed.Now);
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            db.Customers.Add(chatDuplicate);
+            await db.SaveChangesAsync();
+        }
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            var survivor = await db.Customers.SingleAsync(c => c.Id == seed.Customer.Id);
+            var absorbed = await db.Customers.SingleAsync(c => c.Id == chatDuplicate.Id);
+            survivor.AbsorbHistoryFrom(absorbed, CalendarSeed.Now.AddHours(1));
+            absorbed.MarkMergedInto(survivor.Id, CalendarSeed.Now.AddHours(1));
+            await new CustomerMergeStore(db).MergeAsync(
+                seed.Tenant.Id, survivor, absorbed, seed.OperatorId, Guid.NewGuid(), CalendarSeed.Now.AddHours(1),
+                CancellationToken.None);
+        }
+
+        var rows = await new ContactsReadStore(fixture.DataSource)
+            .ListForTenantAsync(seed.Tenant.Id, mask: false, CancellationToken.None);
+
+        var survivorRow = Assert.Single(rows);
+        Assert.Equal(seed.Customer.Id, survivorRow.CustomerId);
+        Assert.Empty(survivorRow.DuplicatePhoneCustomerIds);
     }
 
     [Fact]

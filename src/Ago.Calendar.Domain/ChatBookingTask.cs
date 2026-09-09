@@ -1,4 +1,6 @@
-﻿namespace Ago.Calendar.Domain;
+﻿using System.Globalization;
+
+namespace Ago.Calendar.Domain;
 
 /// <summary>
 /// One visitor's walk through the booking flow when it is driven from a chat conversation
@@ -43,6 +45,14 @@ public sealed class ChatBookingTask
 
     public WorkerId? WorkerId { get; private set; }
 
+    /// <summary>`25-33`: the date chosen in the date round, remembered rather than merely passed
+    /// through - unlike <see cref="ServiceId"/>/<see cref="WorkerId"/>/<see cref="EventId"/>, nothing
+    /// about this value is validated again downstream (there is no "is this date real" check the way
+    /// a slot id gets one), but it still has to survive to the time round and to a lost-race
+    /// re-offer (<see cref="ReopenForSlotChoice"/>), both of which must show the *same* date's own
+    /// slots rather than the whole calendar again.</summary>
+    public DateOnly? SelectedDate { get; private set; }
+
     public EventId? EventId { get; private set; }
 
     /// <summary>Raw, as typed by the visitor - the same "unvalidated until a handler turns it into a
@@ -60,7 +70,16 @@ public sealed class ChatBookingTask
     /// see that handler's own remarks for the failure this produced before this field existed
     /// (`docs/backlog/25-32-*.md`). An incoming value identical to this one is not proof by
     /// construction, but the ids compared here are independently generated per entity
-    /// (<c>IIdGenerator</c>), so an accidental collision is not a real possibility to defend against.</summary>
+    /// (<c>IIdGenerator</c>), so an accidental collision is not a real possibility to defend against.
+    ///
+    /// <para><b>`25-33`: <see cref="ChatBookingTaskState.AwaitingDateChoice"/> and
+    /// <see cref="ChatBookingTaskState.AwaitingSlotChoice"/> are a second adjacent same-kind pair
+    /// (both <c>date_time_picker</c>), for the identical reason above - and the identical guard
+    /// covers them too.</b> The values compared are still never a real collision risk, but for a
+    /// different reason than "independently generated ids": a date-round value is an ISO date string
+    /// (<c>"yyyy-MM-dd"</c>, see <see cref="ChooseDate"/>) and a time-round value is an
+    /// <see cref="EventId"/> GUID - two disjoint formats that cannot equal each other by construction,
+    /// the same non-collision property in a different shape.</para></summary>
     public string? LastAppliedValue { get; private set; }
 
     public ChatBookingTaskState State { get; private set; }
@@ -109,8 +128,27 @@ public sealed class ChatBookingTask
     {
         RequireState(ChatBookingTaskState.AwaitingWorkerChoice);
         WorkerId = workerId;
-        State = ChatBookingTaskState.AwaitingSlotChoice;
+        // `25-33`: the date round, not the flat slot list directly - see
+        // ChatBookingTaskState.AwaitingDateChoice's own remarks.
+        State = ChatBookingTaskState.AwaitingDateChoice;
         LastAppliedValue = workerId.Value.ToString();
+        UpdatedAt = now;
+    }
+
+    /// <summary>`25-33`: a date was chosen from the date round; the time round for that date is sent
+    /// next. <see cref="SelectedDate"/> is remembered, not merely passed through, because both a
+    /// retried reply (<see cref="LastAppliedValue"/>'s own remarks) and a failed booking attempt
+    /// (<see cref="ReopenForSlotChoice"/>) need to re-derive this *same* date's own time list later.
+    /// <see cref="LastAppliedValue"/> is set to the ISO date string, in the exact format
+    /// <c>ReplyToModuleTaskHandler</c> parses <paramref name="date"/> from and
+    /// <c>ModuleStepFactory</c> encodes it as on the wire - the two must agree, or a retried reply
+    /// would silently stop being recognised as one.</summary>
+    public void ChooseDate(DateOnly date, DateTimeOffset now)
+    {
+        RequireState(ChatBookingTaskState.AwaitingDateChoice);
+        SelectedDate = date;
+        State = ChatBookingTaskState.AwaitingSlotChoice;
+        LastAppliedValue = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         UpdatedAt = now;
     }
 
@@ -139,7 +177,10 @@ public sealed class ChatBookingTask
     /// own words are "the visitor should never see a dead end", so this returns the task to
     /// <see cref="ChatBookingTaskState.AwaitingSlotChoice"/> rather than failing it, and the caller
     /// re-queries <c>GetOpenSlotsHandler</c> for a fresh list before sending the next step. The chosen
-    /// worker is kept - only the slot that just lost the race is cleared.
+    /// worker is kept - only the slot that just lost the race is cleared. `25-33`: <see cref="SelectedDate"/>
+    /// is left untouched by this method for the identical reason <see cref="WorkerId"/> is - the
+    /// visitor re-offered a choice sees the *same* date's own remaining slots, not the date round
+    /// again.
     /// </summary>
     public void ReopenForSlotChoice(string phone, DateTimeOffset now)
     {

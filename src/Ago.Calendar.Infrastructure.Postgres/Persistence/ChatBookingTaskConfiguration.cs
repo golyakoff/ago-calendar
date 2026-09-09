@@ -19,6 +19,12 @@ internal sealed class ChatBookingTaskConfiguration : IEntityTypeConfiguration<Ch
         builder.Property(t => t.CalendarId).HasColumnName("calendar_id").HasConversion(IdConverters.Calendar);
         builder.Property(t => t.ServiceId).HasColumnName("service_id").HasConversion(IdConverters.NullableService);
         builder.Property(t => t.WorkerId).HasColumnName("worker_id").HasConversion(IdConverters.NullableWorker);
+
+        // `25-33`: a plain nullable DateOnly column, the same "date" column type Event.LocalDate
+        // already uses (EventConfiguration's own precedent) - null until the date round's own
+        // ChooseDate runs, and never cleared afterward (ReopenForSlotChoice's own remarks).
+        builder.Property(t => t.SelectedDate).HasColumnName("selected_date").HasColumnType("date");
+
         builder.Property(t => t.EventId).HasColumnName("event_id").HasConversion(IdConverters.NullableEvent);
 
         // Raw text, not IdConverters.Phone's PhoneNumber - unlike Event.CustomerId, this column is a

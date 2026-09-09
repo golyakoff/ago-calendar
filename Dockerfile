@@ -87,7 +87,17 @@ RUN cp "/app/${PROJECT_NAME}.dll" /app/app.dll \
 # MB - it uses this one anyway, for the same reason ago-chat's migrator does: a second base behind a
 # build-arg would fork the one property this file exists for, that three images sharing a dependency
 # closure are built by one command that cannot drift. EXPOSE below is inert for it, and harmless.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS final
+#
+# `25-26`: `-extra`, not the plain chiseled tag ago-chat uses. Measured directly (`docker export` +
+# `tar -tv` against both tags), not assumed from documentation: the plain `10.0-noble-chiseled` ships
+# zero files under `/usr/share/zoneinfo` - `AvailabilityMaterializationJob` failed live in production
+# for every calendar with a non-UTC IANA zone (`TimeZoneNotFoundException` on `Europe/Moscow`,
+# `SystemWallClockResolver.Resolve`), because this repository, unlike `ago-chat`, genuinely resolves
+# an IANA zone id against the OS's own tzdata (`SystemWallClockResolver`; grepping `ago-chat/src` for
+# `FindSystemTimeZoneById` finds nothing - it never needed this). `-extra` carries the same
+# no-shell/no-package-manager chiseled property, confirmed to add exactly `/usr/share/zoneinfo` (plus
+# ICU) and nothing else that would reopen the attack-surface reasoning above.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra AS final
 ARG PROJECT_NAME
 ARG GIT_COMMIT
 # The OCI annotations a registry and `docker inspect`/`crane config` read (adr/0047). `.source` is

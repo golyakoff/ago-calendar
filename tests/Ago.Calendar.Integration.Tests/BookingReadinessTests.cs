@@ -51,8 +51,10 @@ public class BookingReadinessTests(PostgresFixture fixture) : IAsyncLifetime
         var calendar = Assert.Single(readiness);
         Assert.Null(calendar.CalendarId);
         Assert.False(calendar.IsBookable);
+        // `25-12`: fill order, not flows.md 3.1's list order - CalendarPublished moved to the end
+        // (GetBookingReadinessHandler's own Order remarks have the full reasoning).
         Assert.Equal(
-            ["CalendarPublished", "WorkerOnCalendar", "ServiceOffered", "WorkingHoursConfigured", "ScheduleSaved", "SlotsMaterialized"],
+            ["WorkerOnCalendar", "ServiceOffered", "WorkingHoursConfigured", "ScheduleSaved", "SlotsMaterialized", "CalendarPublished"],
             calendar.Preconditions.Select(p => p.Precondition));
         Assert.All(calendar.Preconditions, p => Assert.False(p.IsMet));
     }

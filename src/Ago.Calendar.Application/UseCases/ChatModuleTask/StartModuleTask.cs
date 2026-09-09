@@ -12,7 +12,13 @@
 /// Unused today - `adr/0065` decided v1 has no intent detection, so the entry point is a fixed menu
 /// regardless of what was typed - but the wire contract carries it, so the command does too, rather
 /// than silently dropping a field a future item might read.</param>
+/// <param name="Locale">`25-37`: the site's own configured widget language, as Chat's own Domain
+/// enum's PascalCase member name (<c>"En"</c>/<c>"Ru"</c>) - see
+/// <c>Ago.Calendar.Contracts.ModuleTaskStartRequest.Locale</c>'s own remarks. Handed straight to
+/// <see cref="ModuleStepFactory.ServiceChoice"/> for this task's first step; never stored on
+/// <see cref="Domain.ChatBookingTask"/> itself (<see cref="ReplyToModuleTask.Locale"/>'s own remarks
+/// on why every later step re-reads it from the wire instead).</param>
 public readonly record struct StartModuleTask(
-    Guid ChatTaskId, Guid SiteId, Guid ConversationId, string TriggerText);
+    Guid ChatTaskId, Guid SiteId, Guid ConversationId, string TriggerText, string Locale = "En");
 
 public readonly record struct ModuleTaskStarted(string ExternalTaskId, ModuleStep Step, bool Complete);

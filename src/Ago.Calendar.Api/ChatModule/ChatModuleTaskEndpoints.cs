@@ -100,7 +100,8 @@ public static class ChatModuleTaskEndpoints
         }
 
         var result = await handler.HandleAsync(
-            new StartModuleTask(request.ChatTaskId, request.SiteId, request.ConversationId, request.TriggerText),
+            new StartModuleTask(
+                request.ChatTaskId, request.SiteId, request.ConversationId, request.TriggerText, request.Locale),
             cancellationToken);
 
         if (!result.IsSuccess)
@@ -138,7 +139,8 @@ public static class ChatModuleTaskEndpoints
         // being replied to - see this class's own remarks.
         var result = await handler.HandleAsync(
             new ReplyToModuleTask(
-                externalTaskId, request.ChatTaskId, request.Kind, request.Value, request.PhoneVerifiedAt, auth.SiteId),
+                externalTaskId, request.ChatTaskId, request.Kind, request.Value, request.PhoneVerifiedAt, auth.SiteId,
+                request.Locale, request.KnownPhone, request.AcceptUnverifiedPhone),
             cancellationToken);
 
         if (!result.IsSuccess)

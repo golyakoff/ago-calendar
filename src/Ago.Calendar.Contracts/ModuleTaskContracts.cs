@@ -64,7 +64,16 @@ public sealed record DateTimePickerPayload(string Prompt, IReadOnlyList<SlotOpti
 /// <param name="SiteId">Opaque, same reason.</param>
 /// <param name="ConversationId">Opaque, same reason.</param>
 /// <param name="TriggerText">What the visitor typed to enter the module.</param>
-public sealed record ModuleTaskStartRequest(Guid ChatTaskId, Guid SiteId, Guid ConversationId, string TriggerText);
+/// <param name="Locale">
+/// `25-37`: additive - the site's own configured widget language, its Domain enum's PascalCase member
+/// name on Chat's own side (<c>"En"</c>/<c>"Ru"</c>). This wire boundary carried no locale at all
+/// before this item - every string <c>ModuleStepFactory</c> builds was a hardcoded English literal.
+/// Not re-sent on the reply route's own request below because this product never persists it: see
+/// <see cref="ModuleTaskReplyRequest.Locale"/>'s own remarks for why every step after the first one
+/// needs it resent instead.
+/// </param>
+public sealed record ModuleTaskStartRequest(
+    Guid ChatTaskId, Guid SiteId, Guid ConversationId, string TriggerText, string Locale = "En");
 
 public sealed record ModuleTaskStartResponse(string ExternalTaskId, StepDto Step, bool Complete);
 
@@ -82,7 +91,32 @@ public sealed record ModuleTaskStartResponse(string ExternalTaskId, StepDto Step
 /// <c>Ago.Calendar.Application.UseCases.BookEvent.BookEvent.PhoneVerifiedAt</c> unchanged; see that
 /// type and <c>BookEventHandler</c>'s own remarks for what refuses a claim carrying none.
 /// </param>
-public sealed record ModuleTaskReplyRequest(Guid ChatTaskId, string Kind, string Value, DateTimeOffset? PhoneVerifiedAt = null);
+/// <param name="Locale">
+/// `25-37`: additive, resent on every reply - <see cref="ModuleTaskStartRequest.Locale"/>'s own
+/// remarks explain the first-step case; this product never persists the value on its own
+/// <c>ChatBookingTask</c> (that would have needed a schema column this item's migration budget does
+/// not carry - `CLAUDE.md` rule 13's own "one migration lane" restated per item, spent in `ago-chat`
+/// on its new `WidgetConfig` field instead), so every subsequent step re-reads it straight off this
+/// same request.
+/// </param>
+/// <param name="KnownPhone">
+/// `25-38`/`25-39`: the most recent phone number the visitor gave earlier in the conversation - Chat's
+/// own contact-capture note (self-reported, never proven reachable), or <see langword="null"/> when
+/// nothing was ever recorded. Resent on every reply for the identical "never persisted here" reason
+/// <see cref="Locale"/> is. Read two ways by <c>ReplyToModuleTaskHandler</c>: to word (and, per
+/// `25-38`, to name explicitly rather than silently retype) the verified-phone step's own prompt, and -
+/// only when <see cref="AcceptUnverifiedPhone"/> is <see langword="true"/> - to book directly with it,
+/// unverified, the moment a slot is chosen.
+/// </param>
+/// <param name="AcceptUnverifiedPhone">
+/// `25-39`: this site's own temporary, off-by-default relaxation of <c>BookEvent.RequiresVerifiedPhone</c> -
+/// resent on every reply for the identical "never persisted here" reason above. See
+/// <c>ReplyToModuleTaskHandler.HandleSlotChosenAsync</c>'s own remarks for exactly what turning this on
+/// changes about the flow.
+/// </param>
+public sealed record ModuleTaskReplyRequest(
+    Guid ChatTaskId, string Kind, string Value, DateTimeOffset? PhoneVerifiedAt = null, string Locale = "En",
+    string? KnownPhone = null, bool AcceptUnverifiedPhone = false);
 
 /// <param name="Step">Null exactly when <see cref="Complete"/> is true - no further reply is
 /// expected.</param>

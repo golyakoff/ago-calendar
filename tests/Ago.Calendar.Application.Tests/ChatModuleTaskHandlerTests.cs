@@ -53,6 +53,239 @@ public class ChatModuleTaskHandlerTests
     // cannot be expressed at this level without duplicating every one of those fixtures - the
     // integration suite is the level that already has a real database to seed a second tenant into.
 
+    // ------------------------------------------------------------------------------------------
+    // `25-37`: locale - every ModuleStepFactory string renders in the tenant's configured
+    // language, and English stays available for a tenant configured that way (every other test
+    // in this file, none of which mentions locale at all).
+    // ------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Start_WithRussianLocale_RendersTheServiceChoicePromptInRussian()
+    {
+        var world = new World();
+
+        var result = await world.StartAsync(locale: "Ru");
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Что вы хотите забронировать?", result.Value.Step.Prompt);
+    }
+
+    /// <summary>The full walkthrough's own Russian twin - every step, in order, rendered in the
+    /// tenant's configured language, ending in a Russian confirmation card. Proves `25-37`'s own
+    /// Done-when for "at least one tenant" across the whole flow, not just the first step.</summary>
+    [Fact]
+    public async Task AFullWalkthrough_WithRussianLocale_RendersEveryStepInRussian()
+    {
+        var world = new World();
+
+        var start = await world.StartAsync(locale: "Ru");
+        Assert.Equal("Что вы хотите забронировать?", start.Value.Step.Prompt);
+        var externalTaskId = start.Value.ExternalTaskId;
+
+        var afterService = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString(), locale: "Ru");
+        Assert.Equal("С кем вы хотите записаться?", afterService.Value.Step!.Prompt);
+        var workerAction = Assert.Single(afterService.Value.Step!.Actions);
+
+        var afterWorker = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value, locale: "Ru");
+        Assert.Equal("Выберите время:", afterWorker.Value.Step!.Prompt);
+        var slotAction = Assert.Single(afterWorker.Value.Step!.Actions);
+
+        var afterSlot = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value, locale: "Ru");
+        Assert.Equal(ModuleStepKind.VerifiedPhoneForm, afterSlot.Value.Step!.Kind);
+        Assert.Equal("Какой номер телефона лучше всего подходит, чтобы с вами связаться?", afterSlot.Value.Step!.Prompt);
+        Assert.Equal("Номер телефона", afterSlot.Value.Step!.FieldLabel);
+
+        var afterPhone = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000010", phoneVerifiedAt: BookingFixtures.Now,
+            locale: "Ru");
+        Assert.True(afterPhone.Value.Complete);
+        Assert.Equal(ModuleStepKind.ConfirmationCard, afterPhone.Value.Step!.Kind);
+        Assert.Equal("Вы записаны!", afterPhone.Value.Step!.ConfirmationTitle);
+        Assert.Collection(
+            afterPhone.Value.Step!.ConfirmationLines!,
+            l => Assert.Equal("Услуга", l.Label),
+            l => Assert.Equal("С кем", l.Label),
+            l => Assert.Equal("Когда", l.Label));
+    }
+
+    /// <summary>`25-37`'s currency instruction, restated as a test: the surrounding word localises
+    /// ("от") but the currency code itself never does.</summary>
+    [Fact]
+    public async Task Start_WithRussianLocaleAndAFromPricedService_LocalizesTheWordNotTheCurrency()
+    {
+        var world = new World();
+        world.ReadStore.Services.Clear();
+        world.ReadStore.Services.Add(
+            new BookableServiceRow(BookingFixtures.ServiceId, "Haircut", 45, PriceMinorUnits: 150000, PriceIsFrom: true));
+
+        var result = await world.StartAsync(locale: "Ru");
+
+        var action = Assert.Single(result.Value.Step.Actions);
+        Assert.Contains("от 1500 RUB", action.Label, StringComparison.Ordinal);
+        Assert.DoesNotContain("руб", action.Label, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // `25-38`: a visitor who already gave a phone number earlier in the conversation sees the
+    // verified-phone step's own prompt name that number and explain why it is being asked again -
+    // RequiresVerifiedPhone stays true regardless (20-09's guarantee, unweakened).
+    // ------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task HandleSlotChosen_WithAKnownPhone_PrefillsThePromptWithItAndExplainsWhy()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        var afterSlot = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
+            knownPhone: "+79990000011");
+
+        // Still the strict kind - 20-09's guarantee is unweakened by a known number alone.
+        Assert.Equal(ModuleStepKind.VerifiedPhoneForm, afterSlot.Value.Step!.Kind);
+        Assert.Contains("+79990000011", afterSlot.Value.Step!.Prompt, StringComparison.Ordinal);
+        // Names why this confirms the number for the booking, distinct from contact info on file -
+        // the backlog item's own subject ("no explanation").
+        Assert.Contains("confirm", afterSlot.Value.Step!.Prompt, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task HandleSlotChosen_WithNoKnownPhone_UsesThePlainPromptWithNoNumberNamed()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        var afterSlot = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
+
+        Assert.Equal(ModuleStepKind.VerifiedPhoneForm, afterSlot.Value.Step!.Kind);
+        Assert.Equal("What's the best phone number to reach you on?", afterSlot.Value.Step!.Prompt);
+    }
+
+    /// <summary>`25-38`'s own explicit guardrail: a known number changes only the wording and the
+    /// prefill, never the requirement itself - a typed-back number still has to carry a real
+    /// verification assertion or the booking is refused exactly as it always was.</summary>
+    [Fact]
+    public async Task HandleSlotChosen_WithAKnownPhone_StillRequiresAVerificationAssertionToBook()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
+            knownPhone: "+79990000012");
+
+        // No phoneVerifiedAt - exactly what a caller that skipped Chat's own verification gate would send.
+        var afterPhone = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000012", knownPhone: "+79990000012");
+
+        Assert.False(afterPhone.Value.Complete);
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterPhone.Value.Step!.Kind);
+        Assert.Empty(world.Bookings.Attempts);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // `25-39`: a tenant's own AcceptUnverifiedPhone setting, off by default. On, with a
+    // known phone: picking a slot completes the booking directly, no phone-form step shown at
+    // all. On, with no known phone: the phone step still shows, but without the verification
+    // requirement. Off: today's behaviour, entirely unchanged (every test above already proves
+    // that, since none of them pass the flag).
+    // ------------------------------------------------------------------------------------------
+
+    /// <summary>The Done-when's own words: "picking a slot completes the booking directly - no
+    /// phone-form step is shown at all, proven by a test asserting the reply to
+    /// HandleSlotChosenAsync is a completion/confirmation step, not PhoneForm."</summary>
+    [Fact]
+    public async Task HandleSlotChosen_WithSettingOnAndAKnownPhone_CompletesTheBookingDirectly_NoPhoneStepAtAll()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        var afterSlot = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
+            knownPhone: "+79990000013", acceptUnverifiedPhone: true);
+
+        Assert.True(afterSlot.IsSuccess);
+        Assert.True(afterSlot.Value.Complete);
+        Assert.Equal(ModuleStepKind.ConfirmationCard, afterSlot.Value.Step!.Kind);
+
+        // The booking write actually happened, with the known number and no verification instant -
+        // the record must say the phone was never verified, not silently treated as equivalent to a
+        // verified one (this item's own Done-when).
+        var attempt = Assert.Single(world.Bookings.Attempts);
+        Assert.Equal("+79990000013", attempt.Phone.Value);
+        Assert.Null(attempt.PhoneVerifiedAt);
+    }
+
+    /// <summary>The Done-when's own second case, named explicitly as the fallback rather than the
+    /// common path: no phone known yet, so the step still has to appear - but without the
+    /// verification requirement.</summary>
+    [Fact]
+    public async Task HandleSlotChosen_WithSettingOnAndNoKnownPhone_StillShowsThePhoneStep_ButWithoutVerification()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        var afterSlot = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
+            acceptUnverifiedPhone: true);
+
+        Assert.True(afterSlot.IsSuccess);
+        Assert.False(afterSlot.Value.Complete);
+        // Plain Form, not VerifiedPhoneForm - the kind that actually turns Chat's own verification
+        // gate off, not merely a hint (ModuleStepFactory.PhoneForm's own remarks).
+        Assert.Equal(ModuleStepKind.Form, afterSlot.Value.Step!.Kind);
+
+        // Completing from here needs no verification assertion at all - a typed number with no
+        // phoneVerifiedAt still books, unlike every VerifiedPhoneForm-kind test in this file.
+        var afterPhone = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.Form, "+79990000014", acceptUnverifiedPhone: true);
+
+        Assert.True(afterPhone.Value.Complete);
+        Assert.Equal(ModuleStepKind.ConfirmationCard, afterPhone.Value.Step!.Kind);
+        var attempt = Assert.Single(world.Bookings.Attempts);
+        Assert.Equal("+79990000014", attempt.Phone.Value);
+        Assert.Null(attempt.PhoneVerifiedAt);
+    }
+
+    /// <summary>The Done-when's own third case: off (the default), both of the above are unchanged
+    /// from today's behaviour - proven directly rather than only inferred from every other test in
+    /// this file never passing the flag.</summary>
+    [Fact]
+    public async Task HandleSlotChosen_WithTheSettingOff_BehavesExactlyAsBeforeEvenWithAKnownPhone()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        var afterSlot = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
+            knownPhone: "+79990000015", acceptUnverifiedPhone: false);
+
+        Assert.False(afterSlot.Value.Complete);
+        Assert.Equal(ModuleStepKind.VerifiedPhoneForm, afterSlot.Value.Step!.Kind);
+        Assert.Empty(world.Bookings.Attempts);
+    }
+
     [Fact]
     public async Task AFullWalkthrough_AllFiveSteps_EndsInACompletionCard()
     {
@@ -379,21 +612,26 @@ public class ChatModuleTaskHandlerTests
         /// tenant (the happy path every existing test in this file exercises); a caller passes a
         /// different value to prove resolution genuinely depends on it rather than on some other
         /// ambient state.</summary>
-        public Task<Ago.Platform.Kernel.Result<ModuleTaskStarted>> StartAsync(Guid? siteId = null) =>
+        public Task<Ago.Platform.Kernel.Result<ModuleTaskStarted>> StartAsync(Guid? siteId = null, string locale = "En") =>
             _startHandler.HandleAsync(
-                new StartModuleTask(Guid.NewGuid(), siteId ?? _tenantId.Value, Guid.NewGuid(), "/booking"),
+                new StartModuleTask(Guid.NewGuid(), siteId ?? _tenantId.Value, Guid.NewGuid(), "/booking", locale),
                 CancellationToken.None);
 
         /// <summary>`22-04`: <paramref name="credentialSiteId"/> defaults to this world's own tenant -
         /// the identical "credential proved this task's own tenant" happy path every existing test
         /// exercises - see <see cref="ReplyToModuleTask.CredentialSiteId"/>'s own remarks. A caller
-        /// passes a different value to prove the cross-tenant refusal.</summary>
+        /// passes a different value to prove the cross-tenant refusal. `25-37`/`25-38`/`25-39`:
+        /// <paramref name="locale"/>/<paramref name="knownPhone"/>/<paramref name="acceptUnverifiedPhone"/>
+        /// default to English/none-known/off - today's behaviour for every existing test in this file
+        /// that never mentions them.</summary>
         public Task<Ago.Platform.Kernel.Result<ModuleTaskReplied>> ReplyAsync(
             string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null,
-            Guid? credentialSiteId = null) =>
+            Guid? credentialSiteId = null, string locale = "En", string? knownPhone = null,
+            bool acceptUnverifiedPhone = false) =>
             _replyHandler.HandleAsync(
                 new ReplyToModuleTask(
-                    externalTaskId, Guid.NewGuid(), kind, value, phoneVerifiedAt, credentialSiteId ?? _tenantId.Value),
+                    externalTaskId, Guid.NewGuid(), kind, value, phoneVerifiedAt, credentialSiteId ?? _tenantId.Value,
+                    locale, knownPhone, acceptUnverifiedPhone),
                 CancellationToken.None);
     }
 }

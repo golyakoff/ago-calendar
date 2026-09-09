@@ -114,26 +114,34 @@ public sealed class ReplyToModuleTaskHandler(
         // have: the step for the state that value produced, without touching anything a second time.
         if (task.LastAppliedValue == command.Value)
         {
-            return await BuildStepForCurrentStateAsync(task, tenantPublicKey, cancellationToken);
+            return await BuildStepForCurrentStateAsync(
+                task, tenantPublicKey, command.Locale, command.KnownPhone, command.AcceptUnverifiedPhone,
+                cancellationToken);
         }
 
         return task.State switch
         {
             ChatBookingTaskState.AwaitingServiceChoice =>
-                await HandleServiceChosenAsync(task, tenantPublicKey, command.Value, now, cancellationToken),
+                await HandleServiceChosenAsync(
+                    task, tenantPublicKey, command.Value, command.Locale, now, cancellationToken),
             ChatBookingTaskState.AwaitingWorkerChoice =>
-                await HandleWorkerChosenAsync(task, tenantPublicKey, command.Value, now, cancellationToken),
+                await HandleWorkerChosenAsync(
+                    task, tenantPublicKey, command.Value, command.Locale, now, cancellationToken),
             ChatBookingTaskState.AwaitingSlotChoice =>
-                await HandleSlotChosenAsync(task, command.Value, now, cancellationToken),
+                await HandleSlotChosenAsync(
+                    task, tenantPublicKey, command.Value, command.Locale, command.KnownPhone,
+                    command.AcceptUnverifiedPhone, now, cancellationToken),
             ChatBookingTaskState.AwaitingPhone =>
                 await HandlePhoneProvidedAsync(
-                    task, tenantPublicKey, command.Value, command.PhoneVerifiedAt, now, cancellationToken),
+                    task, tenantPublicKey, command.Value, command.PhoneVerifiedAt, command.AcceptUnverifiedPhone,
+                    command.Locale, now, cancellationToken),
             _ => ChatModuleTaskErrors.AlreadyComplete(),
         };
     }
 
     private async Task<Result<ModuleTaskReplied>> HandleServiceChosenAsync(
-        ChatBookingTask task, string tenantPublicKey, string value, DateTimeOffset now, CancellationToken cancellationToken)
+        ChatBookingTask task, string tenantPublicKey, string value, string locale, DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(value, out var serviceId))
         {
@@ -154,11 +162,12 @@ public sealed class ReplyToModuleTaskHandler(
         // Empty is a real state, not special-cased - see ModuleStepFactory and the item's own report
         // for why this deliberately mirrors GetBookingSurfaceHandler's own precedent.
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value, locale), Complete: false));
     }
 
     private async Task<Result<ModuleTaskReplied>> HandleWorkerChosenAsync(
-        ChatBookingTask task, string tenantPublicKey, string value, DateTimeOffset now, CancellationToken cancellationToken)
+        ChatBookingTask task, string tenantPublicKey, string value, string locale, DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(value, out var workerId))
         {
@@ -179,7 +188,7 @@ public sealed class ReplyToModuleTaskHandler(
         await tasks.SaveAsync(task, cancellationToken);
 
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, locale), Complete: false));
     }
 
     /// <summary>`25-32`: the response to a detected replay - see <c>HandleAsync</c>'s own remarks.
@@ -190,15 +199,23 @@ public sealed class ReplyToModuleTaskHandler(
     /// same "ask the read side again" precedent <c>HandlePhoneProvidedAsync</c>'s own lost-race path
     /// already sets, not a new pattern.</summary>
     private async Task<Result<ModuleTaskReplied>> BuildStepForCurrentStateAsync(
-        ChatBookingTask task, string tenantPublicKey, CancellationToken cancellationToken) =>
+        ChatBookingTask task, string tenantPublicKey, string locale, string? knownPhone, bool acceptUnverifiedPhone,
+        CancellationToken cancellationToken) =>
         task.State switch
         {
             ChatBookingTaskState.AwaitingWorkerChoice =>
-                await RebuildWorkerChoiceAsync(task, tenantPublicKey, cancellationToken),
+                await RebuildWorkerChoiceAsync(task, tenantPublicKey, locale, cancellationToken),
             ChatBookingTaskState.AwaitingSlotChoice =>
-                await RebuildSlotChoiceAsync(task, tenantPublicKey, cancellationToken),
+                await RebuildSlotChoiceAsync(task, tenantPublicKey, locale, cancellationToken),
+            // `25-39`: rebuilt from the *current* call's own AcceptUnverifiedPhone/KnownPhone, the
+            // identical "never persisted, always resent" shape every other field on this request
+            // already takes - see ReplyToModuleTask.Locale's own remarks. In practice this branch is
+            // as unreachable as AwaitingServiceChoice's own (a phone-step reply's value is a typed
+            // phone number, never the eventId LastAppliedValue holds), but it is not asserted
+            // unreachable the way that one is, so it stays real rather than a placeholder.
             ChatBookingTaskState.AwaitingPhone =>
-                Result<ModuleTaskReplied>.Success(new ModuleTaskReplied(ModuleStepFactory.PhoneForm(), Complete: false)),
+                Result<ModuleTaskReplied>.Success(new ModuleTaskReplied(
+                    ModuleStepFactory.PhoneForm(locale, !acceptUnverifiedPhone, knownPhone), Complete: false)),
             // AwaitingServiceChoice can never get here - LastAppliedValue is still null the only time
             // the task is in that state, so it can never equal a real command.Value. Completed is
             // intercepted above, before KindMatches even runs. Refused rather than silently doing
@@ -207,7 +224,7 @@ public sealed class ReplyToModuleTaskHandler(
         };
 
     private async Task<Result<ModuleTaskReplied>> RebuildWorkerChoiceAsync(
-        ChatBookingTask task, string tenantPublicKey, CancellationToken cancellationToken)
+        ChatBookingTask task, string tenantPublicKey, string locale, CancellationToken cancellationToken)
     {
         var workers = await workersHandler.HandleAsync(
             new GetBookableWorkers(tenantPublicKey, task.CalendarId.Value, task.ServiceId!.Value.Value, Origin: null),
@@ -218,11 +235,11 @@ public sealed class ReplyToModuleTaskHandler(
         }
 
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value, locale), Complete: false));
     }
 
     private async Task<Result<ModuleTaskReplied>> RebuildSlotChoiceAsync(
-        ChatBookingTask task, string tenantPublicKey, CancellationToken cancellationToken)
+        ChatBookingTask task, string tenantPublicKey, string locale, CancellationToken cancellationToken)
     {
         var slots = await slotsHandler.HandleAsync(
             new GetOpenSlots(
@@ -235,11 +252,35 @@ public sealed class ReplyToModuleTaskHandler(
         }
 
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, locale), Complete: false));
     }
 
+    /// <summary>
+    /// `25-39`: the setting's own sharpened core. `ChooseSlot` already moves the task to
+    /// <see cref="ChatBookingTaskState.AwaitingPhone"/> below regardless of what happens next - that
+    /// transition is real either way, because <see cref="HandlePhoneProvidedAsync"/>'s own
+    /// <c>task.Complete</c>/<c>task.ReopenForSlotChoice</c> both require it. What differs is only
+    /// whether this method returns a <c>phone</c>-shaped <see cref="ModuleStep"/> for the visitor to
+    /// answer, or calls straight through to what that visitor's own answer would have triggered
+    /// anyway.
+    ///
+    /// <para><b>Two cases, named explicitly rather than left as one merged condition.</b> With
+    /// <paramref name="acceptUnverifiedPhone"/> on and <paramref name="knownPhone"/> already known
+    /// (`25-39`'s own "common path"), this calls <see cref="HandlePhoneProvidedAsync"/> directly with
+    /// that number and <c>phoneVerifiedAt: null</c> - no phone-form step is ever built, let alone
+    /// returned; the visitor who just picked a slot sees the booking complete. With the setting on but
+    /// nothing known yet (the item's own explicitly-named "fallback, not the common path"), the phone
+    /// step still renders, but as a plain <see cref="ModuleStepKind.Form"/> rather than
+    /// <see cref="ModuleStepKind.VerifiedPhoneForm"/> - see <see cref="ModuleStepFactory.PhoneForm"/>'s
+    /// own remarks for why that distinction is what actually turns Chat's own verification gate off,
+    /// not merely a hint. With the setting off (today's default for every tenant that has not asked for
+    /// it), neither case ever triggers: <c>!acceptUnverifiedPhone</c> is <see langword="true"/> and this
+    /// method's own condition below is false by construction, so the plain, unlocalized-behaviour-
+    /// change-free path this method always took stays exactly as it was.</para>
+    /// </summary>
     private async Task<Result<ModuleTaskReplied>> HandleSlotChosenAsync(
-        ChatBookingTask task, string value, DateTimeOffset now, CancellationToken cancellationToken)
+        ChatBookingTask task, string tenantPublicKey, string value, string locale, string? knownPhone,
+        bool acceptUnverifiedPhone, DateTimeOffset now, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(value, out var eventId))
         {
@@ -252,13 +293,20 @@ public sealed class ReplyToModuleTaskHandler(
         task.ChooseSlot(new EventId(eventId), now);
         await tasks.SaveAsync(task, cancellationToken);
 
+        if (acceptUnverifiedPhone && knownPhone is { } phone)
+        {
+            return await HandlePhoneProvidedAsync(
+                task, tenantPublicKey, phone, phoneVerifiedAt: null, acceptUnverifiedPhone, locale, now,
+                cancellationToken);
+        }
+
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.PhoneForm(), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.PhoneForm(locale, !acceptUnverifiedPhone, knownPhone), Complete: false));
     }
 
     private async Task<Result<ModuleTaskReplied>> HandlePhoneProvidedAsync(
-        ChatBookingTask task, string tenantPublicKey, string phone, DateTimeOffset? phoneVerifiedAt, DateTimeOffset now,
-        CancellationToken cancellationToken)
+        ChatBookingTask task, string tenantPublicKey, string phone, DateTimeOffset? phoneVerifiedAt,
+        bool acceptUnverifiedPhone, string locale, DateTimeOffset now, CancellationToken cancellationToken)
     {
         // Qualified, not a bare `new BookEvent(...)`: this file's `using` for the BookEvent use-case
         // folder brings in a namespace named BookEvent alongside the command record of the same
@@ -271,10 +319,20 @@ public sealed class ReplyToModuleTaskHandler(
         // own remarks). This handler does not re-check it; BookEventHandler is where a missing
         // assertion is refused, the same "the module never re-validates what the caller already
         // validated" split this file's own remarks draw for a reply's id.
+        //
+        // `25-39`: RequiresVerifiedPhone is `!acceptUnverifiedPhone`, not a hardcoded `true` - the one
+        // line that actually relaxes `20-09`'s gate for a tenant who asked for it, everywhere this
+        // method is reached from (a genuine phone-form reply, or HandleSlotChosenAsync's own direct
+        // call for the skip-the-step path). Never a silent "treat as verified": `phoneVerifiedAt`
+        // stays exactly what the caller passed - null on the skip path - so a booking taken this way
+        // is recorded with no verification instant at all, the same honest signal every other
+        // never-verified customer row already carries (BookingAttempt.PhoneVerifiedAt's own remarks on
+        // why this is never overwritten once set, in either direction).
         var outcome = await bookHandler.HandleAsync(
             new UseCases.BookEvent.BookEvent(
                 task.CalendarId, task.EventId!.Value, task.ServiceId!.Value, phone,
-                DisplayName: null, Origin: null, RequiresVerifiedPhone: true, PhoneVerifiedAt: phoneVerifiedAt),
+                DisplayName: null, Origin: null, RequiresVerifiedPhone: !acceptUnverifiedPhone,
+                PhoneVerifiedAt: phoneVerifiedAt),
             cancellationToken);
 
         if (outcome.Booking is { } booking)
@@ -284,7 +342,7 @@ public sealed class ReplyToModuleTaskHandler(
 
             var (serviceName, workerName) = await DescribeBookingAsync(task, booking, cancellationToken);
             var step = ModuleStepFactory.Confirmation(
-                serviceName, workerName, booking.Slot.StartsAt, booking.Slot.EndsAt);
+                serviceName, workerName, booking.Slot.StartsAt, booking.Slot.EndsAt, locale);
             return Result<ModuleTaskReplied>.Success(new ModuleTaskReplied(step, Complete: true));
         }
 
@@ -308,7 +366,7 @@ public sealed class ReplyToModuleTaskHandler(
         }
 
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, locale), Complete: false));
     }
 
     /// <summary>The names a confirmation card needs, which <see cref="BookingConfirmation"/> itself
@@ -338,9 +396,19 @@ public sealed class ReplyToModuleTaskHandler(
         ChatBookingTaskState.AwaitingServiceChoice => kind == ModuleStepKinds.ChoiceList,
         ChatBookingTaskState.AwaitingWorkerChoice => kind == ModuleStepKinds.ChoiceList,
         ChatBookingTaskState.AwaitingSlotChoice => kind == ModuleStepKinds.DateTimePicker,
-        // `20-09`: PhoneForm() now emits VerifiedPhoneForm, not plain Form - see ModuleStepFactory's
-        // own remarks.
-        ChatBookingTaskState.AwaitingPhone => kind == ModuleStepKinds.VerifiedPhoneForm,
+        // `20-09`: PhoneForm() emits VerifiedPhoneForm by default - see ModuleStepFactory's own
+        // remarks. `25-39`: also accepts plain Form - the kind PhoneForm emits instead when a
+        // tenant's own AcceptUnverifiedPhone setting is on and no phone was already known
+        // (ModuleStepFactory.PhoneForm's own remarks). Accepting both here does not weaken `20-09`'s
+        // guarantee: the real gate is HandlePhoneProvidedAsync's own `RequiresVerifiedPhone:
+        // !acceptUnverifiedPhone`, computed fresh from this same reply's own flag, and Chat's own
+        // separate gate (RouteConversationToModuleHandler.ContinueActiveTaskAsync) decides whether to
+        // demand `14-15` evidence from its own persisted LastStepKind - the actual kind this factory
+        // sent when the step was rendered, not a live setting a caller could otherwise race. This
+        // check only decides whether a reply's wire shape matches what this task is waiting on, which
+        // is legitimately either kind depending on the setting at render time.
+        ChatBookingTaskState.AwaitingPhone =>
+            kind == ModuleStepKinds.VerifiedPhoneForm || kind == ModuleStepKinds.Form,
         _ => false,
     };
 }

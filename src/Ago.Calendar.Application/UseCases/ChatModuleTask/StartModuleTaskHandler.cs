@@ -74,7 +74,10 @@ public sealed class StartModuleTaskHandler(
         // Empty is a real, legitimate state (GetBookingSurfaceHandler's own remarks: a calendar
         // published with nobody performing anything yet), not special-cased into an error here for
         // the same reason it is not special-cased there.
-        var step = ModuleStepFactory.ServiceChoice(services);
+        // `25-37`: the site's own configured widget language, handed straight through - see
+        // ModuleStepFactory's own remarks on why this is never stored on the new ChatBookingTask
+        // itself.
+        var step = ModuleStepFactory.ServiceChoice(services, command.Locale);
 
         return Result<ModuleTaskStarted>.Success(
             new ModuleTaskStarted(task.Id.Value.ToString(), step, Complete: false));

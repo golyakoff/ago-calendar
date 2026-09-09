@@ -79,6 +79,12 @@ public static class ServiceCollectionExtensions
         // DbContext its own transaction runs on.
         services.AddScoped<IWorkerQuotaGrantStore, WorkerQuotaGrantStore>();
 
+        // `23-88`/`adr/0165`: answers chat's own async impact-preview question over the identical
+        // outbox mechanism, in the opposite direction - the consumer's one write (the reply itself).
+        // Scoped like the rest, for the identical reason: it holds the DbContext its own
+        // SaveChangesAsync runs on.
+        services.AddScoped<IWorkerQuotaImpactAnswerer, WorkerQuotaImpactAnswerer>();
+
         // adr/0004's read side. Its own NpgsqlDataSource rather than the DbContext's connection: a
         // read model that shared a write context would inherit its change tracker and any ambient
         // transaction, and a queue screen has no business inside a write transaction. Singleton

@@ -73,6 +73,16 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<ContactCollectedConsumer>();
 
+// `23-88`/`adr/0165`: this product's fifth broker consumer, and the first that publishes back rather
+// than only applying an incoming fact - answers chat's own async worker-quota impact question
+// (`ModuleQuantityImpactRequested`) on this product's own outbox (`ModuleQuantityImpactComputed`),
+// same registration shape as every consumer above.
+builder.Services
+    .AddOptions<ModuleQuantityImpactRequestedConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(ModuleQuantityImpactRequestedConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<ModuleQuantityImpactRequestedConsumer>();
+
 var host = builder.Build();
 
 // `20-21`/`adr/0056`: the same guard Ago.Calendar.Api runs, in the same place - before anything can

@@ -102,8 +102,13 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         Assert.Equal(_seed.Worker.Id.Value.ToString(), workerAction.Value);
 
         var afterWorker = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
+        // `25-33`: the date round, not the flat slot list directly - one seeded day, one action.
         Assert.Equal(ModuleStepKinds.DateTimePicker, afterWorker.Step!.Kind);
-        var slotAction = Assert.Single(afterWorker.Step.Actions);
+        var dateAction = Assert.Single(afterWorker.Step.Actions);
+
+        var afterDate = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value);
+        Assert.Equal(ModuleStepKinds.DateTimePicker, afterDate.Step!.Kind);
+        var slotAction = Assert.Single(afterDate.Step.Actions);
 
         var afterSlot = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value);
         // `20-09`: the phone step's own kind, signalling to Chat that the reply must carry a verified
@@ -143,8 +148,14 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var afterWorker = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value, locale: "Ru");
         Assert.Equal(ModuleStepKinds.DateTimePicker, afterWorker.Step!.Kind);
-        Assert.Equal("Выберите время:", Prompt(afterWorker.Step));
-        var slotAction = Assert.Single(afterWorker.Step.Actions);
+        Assert.Equal("Выберите дату:", Prompt(afterWorker.Step));
+        var dateAction = Assert.Single(afterWorker.Step.Actions);
+
+        var afterDate = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value, locale: "Ru");
+        Assert.Equal(ModuleStepKinds.DateTimePicker, afterDate.Step!.Kind);
+        Assert.Contains("Выберите время на", Prompt(afterDate.Step), StringComparison.Ordinal);
+        var slotAction = Assert.Single(afterDate.Step.Actions);
 
         var afterSlot = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value, locale: "Ru");
@@ -168,7 +179,10 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var workerAction = Assert.Single(afterService.Step!.Actions);
 
         var afterWorker = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
-        var slotAction = Assert.Single(afterWorker.Step!.Actions);
+        var dateAction = Assert.Single(afterWorker.Step!.Actions);
+
+        var afterDate = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value);
+        var slotAction = Assert.Single(afterDate.Step!.Actions);
 
         var afterSlot = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value,
@@ -228,6 +242,61 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         Assert.NotEmpty(afterWorker.Step.Actions);
     }
 
+    /// <summary>`25-33`'s own Done-when, over a real HTTP round trip and a real Postgres row rather
+    /// than only the fake-backed proof in <c>Ago.Calendar.Application.Tests</c>: a second day's own
+    /// slot, seeded on top of this suite's default single-day slot, produces a date round with two
+    /// dates, and choosing one shows only that date's own time - never the other day's slot leaking
+    /// into it. Two independent tasks, not one exploring both dates: choosing a date commits that
+    /// task to it (<see cref="Domain.ChatBookingTask.ChooseDate"/>'s own <c>RequireState</c> guard),
+    /// so proving both dates' own time rounds needs two separate walkthroughs, each choosing a
+    /// different one of the two dates this calendar actually offers.</summary>
+    [Fact]
+    public async Task ASecondDaysSlot_ProducesTwoDateChoices_AndEachOwnTimeRoundStaysScopedToItsOwnDate()
+    {
+        var secondDaySlot = CalendarSeed.Slot(_seed, DateTimeOffset.UtcNow.AddDays(8));
+        await using (var db = fixture.CreateDbContext())
+        {
+            await new EventRepository(db).AddRangeAsync([secondDaySlot], CancellationToken.None);
+        }
+
+        var (probeTaskId, dateActions) = await StartToDateRoundAsync();
+        Assert.Equal(2, dateActions.Count);
+        // Chronological order, not insertion order - the earlier-seeded (InitializeAsync's own,
+        // day 7) date first.
+        var earlierDate = dateActions[0];
+        var laterDate = dateActions[1];
+        Assert.NotEqual(earlierDate.Value, laterDate.Value);
+
+        var afterEarlierDate = await ReplyAsync(probeTaskId, ModuleStepKinds.DateTimePicker, earlierDate.Value);
+        var earlierTimeAction = Assert.Single(afterEarlierDate.Step!.Actions);
+
+        // A second, independent task for the second date - the probe task above already committed
+        // to the earlier one (ChooseDate's own RequireState guard).
+        var (secondTaskId, _) = await StartToDateRoundAsync();
+        var afterLaterDate = await ReplyAsync(secondTaskId, ModuleStepKinds.DateTimePicker, laterDate.Value);
+        var laterTimeAction = Assert.Single(afterLaterDate.Step!.Actions);
+
+        // Each date's own time round names exactly one slot, and the two are not the same slot -
+        // the second day's row never leaked into the first day's time round or vice versa.
+        Assert.NotEqual(earlierTimeAction.Value, laterTimeAction.Value);
+    }
+
+    /// <summary>Walks a fresh task from <c>Start</c> through service and worker choice, returning
+    /// both its id and the date round's own actions - the setup every date-round assertion in this
+    /// suite's own `25-33` tests needs.</summary>
+    private async Task<(string TaskId, IReadOnlyList<ModuleActionDto> DateActions)> StartToDateRoundAsync()
+    {
+        var started = (await (await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking"))
+            .Content.ReadFromJsonAsync<ModuleTaskStartResponse>())!;
+        var afterService = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
+        var afterWorker = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList, Assert.Single(afterService.Step!.Actions).Value);
+
+        Assert.Equal(ModuleStepKinds.DateTimePicker, afterWorker.Step!.Kind);
+        return (started.ExternalTaskId, afterWorker.Step.Actions);
+    }
+
     [Fact]
     public async Task AFailedBookingAttempt_ReOffersFreshSlots_AndTheSecondAttemptCanStillSucceed()
     {
@@ -246,7 +315,11 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
         var afterWorker = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, Assert.Single(afterService.Step!.Actions).Value);
-        var offeredSlotValues = afterWorker.Step!.Actions.Select(a => a.Value).ToList();
+        // `25-33`: both seeded slots fall on the same day (two hours apart), so the date round offers
+        // exactly one date - the two slots themselves are the *time* round's own two actions.
+        var dateAction = Assert.Single(afterWorker.Step!.Actions);
+        var afterDate = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value);
+        var offeredSlotValues = afterDate.Step!.Actions.Select(a => a.Value).ToList();
         Assert.Equal(2, offeredSlotValues.Count);
 
         var afterSlot = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, offeredSlotValues[0]);
@@ -308,7 +381,9 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
         var afterWorker = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, Assert.Single(afterService.Step!.Actions).Value);
-        var slotValue = Assert.Single(afterWorker.Step!.Actions).Value;
+        var dateValue = Assert.Single(afterWorker.Step!.Actions).Value;
+        var afterDate = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, dateValue);
+        var slotValue = Assert.Single(afterDate.Step!.Actions).Value;
         var afterSlot = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, slotValue);
         Assert.Equal(ModuleStepKinds.VerifiedPhoneForm, afterSlot.Step!.Kind);
 

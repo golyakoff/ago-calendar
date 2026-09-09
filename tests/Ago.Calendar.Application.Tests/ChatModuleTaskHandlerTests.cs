@@ -1,4 +1,5 @@
-﻿using Ago.Calendar.Application.Abstractions;
+﻿using System.Globalization;
+using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Application.UseCases.ChatModuleTask;
 using Ago.Calendar.Application.UseCases.PublicBooking;
@@ -17,6 +18,13 @@ namespace Ago.Calendar.Application.Tests;
 /// </summary>
 public class ChatModuleTaskHandlerTests
 {
+    /// <summary>`25-33`: the wire value the date round's own action carries for
+    /// <see cref="BookingFixtures.LocalDate"/> - ISO 8601, the exact format
+    /// <c>ModuleStepFactory.FormatDateValue</c> produces and <c>ReplyToModuleTaskHandler.HandleDateChosenAsync</c>
+    /// parses. Every walkthrough test below replies with this between choosing a worker and choosing
+    /// a time, now that the flat slot list is two rounds instead of one.</summary>
+    private static readonly string DateValue = BookingFixtures.LocalDate.ToString("yyyy-MM-dd");
+
     [Fact]
     public async Task Start_OffersAChoiceListOfTheConfiguredCalendarsServices()
     {
@@ -54,6 +62,159 @@ public class ChatModuleTaskHandlerTests
     // integration suite is the level that already has a real database to seed a second tenant into.
 
     // ------------------------------------------------------------------------------------------
+    // `25-33`: date, then time - a visitor picks a date first, from dates that actually have
+    // availability, then picks a time within that date. Both rounds stay inside the existing
+    // date_time_picker kind (adr/0065 §4's closed vocabulary), and the pre-existing worker-choice
+    // step keeps its own placement, immediately before the date round.
+    // ------------------------------------------------------------------------------------------
+
+    private static OpenSlotRow SlotOnDate(DateOnly date, int hour = 9) =>
+        new(
+            new EventId(Guid.CreateVersion7(new DateTimeOffset(date, new TimeOnly(hour, 0), TimeSpan.Zero))),
+            BookingFixtures.WorkerId, "Alex",
+            new DateTimeOffset(date, new TimeOnly(hour, 0), TimeSpan.Zero),
+            new DateTimeOffset(date, new TimeOnly(hour, 0), TimeSpan.Zero).AddMinutes(45),
+            date);
+
+    /// <summary>The Done-when's own second case: a calendar with more than one worker offers a way
+    /// to choose one, and this test names exactly where - unconditionally, immediately before the
+    /// date round, the same placement `WorkerChoice` already had before this item and which this
+    /// item's own Scope says to leave alone rather than fold into the picker.</summary>
+    [Fact]
+    public async Task WorkerChoice_WithMultipleWorkers_OffersEachOne_ThenLeadsToTheDateRoundNext()
+    {
+        var world = new World();
+        world.ReadStore.Workers.Add(new BookableWorkerRow(new WorkerId(Guid.NewGuid()), "Sam"));
+
+        var start = await world.StartAsync();
+        var afterService = await world.ReplyAsync(
+            start.Value.ExternalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+
+        Assert.Equal(ModuleStepKind.ChoiceList, afterService.Value.Step!.Kind);
+        Assert.Equal(2, afterService.Value.Step!.Actions.Count);
+        var workerAction = afterService.Value.Step!.Actions.First(a => a.Value == BookingFixtures.WorkerId.Value.ToString());
+
+        var afterWorker = await world.ReplyAsync(
+            start.Value.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterWorker.Value.Step!.Kind);
+    }
+
+    /// <summary>The Done-when's own first case, first half: a visitor picks a date first, from
+    /// dates that actually have availability. Twelve slots across twelve distinct days, one per day,
+    /// prove both the grouping (one action per day, not per slot) and the page bound (the 10th day
+    /// is the last one offered - `ModuleStepFactory.DatePageSize`'s own remarks on why this reuses
+    /// the flat list's original numeric bound with a changed target).</summary>
+    [Fact]
+    public async Task HandleWorkerChosen_GroupsSlotsByDayAndOffersUpToTenDistinctDatesInOrder()
+    {
+        var world = new World();
+        world.ReadStore.Slots.Clear();
+        // Eleven distinct days, but the first one carries two slots (a second appointment that
+        // same morning) - twelve raw rows in total. Grouping by day is what makes this still ten
+        // *dates*, not eleven or twelve; a caller that forgot to group would either overcount or,
+        // worse, silently drop day[9] to stay within the page bound while double-counting day[0].
+        var days = Enumerable.Range(0, 11).Select(BookingFixtures.LocalDate.AddDays).ToList();
+        world.ReadStore.Slots.Add(SlotOnDate(days[0], hour: 8));
+        world.ReadStore.Slots.Add(SlotOnDate(days[0], hour: 10));
+        foreach (var day in days.Skip(1))
+        {
+            world.ReadStore.Slots.Add(SlotOnDate(day));
+        }
+
+        var start = await world.StartAsync();
+        var afterService = await world.ReplyAsync(
+            start.Value.ExternalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        var afterWorker = await world.ReplyAsync(
+            start.Value.ExternalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterWorker.Value.Step!.Kind);
+        Assert.Equal(10, afterWorker.Value.Step!.Actions.Count);
+        Assert.Equal(
+            days.Take(10).Select(d => d.ToString("yyyy-MM-dd")),
+            afterWorker.Value.Step!.Actions.Select(a => a.Value));
+    }
+
+    /// <summary>The Done-when's own first case, second half: picking a date then offers only that
+    /// date's own times - never the other eleven days' slots this fixture also seeded, and never
+    /// more than <c>ModuleStepFactory.TimeSlotPageSize</c> of them even though this single day alone
+    /// has twelve. Each label is time-only (no date, no year) - the prompt itself already named the
+    /// date once, and repeating it on every line is the wall of text `25-33` exists to remove.
+    /// </summary>
+    [Fact]
+    public async Task HandleDateChosen_OffersOnlyThatDatesOwnTimes_TimeOnlyLabels_CappedAtTen()
+    {
+        var world = new World();
+        world.ReadStore.Slots.Clear();
+        var targetDate = BookingFixtures.LocalDate;
+        // A slot the *day before* the target date, sorted ahead of every one of the target date's
+        // own eleven slots - if the time round ever forgot to filter by date, this is the row that
+        // would appear inside the first ten instead of the target date's own eleventh (last) slot.
+        var leakedSlot = SlotOnDate(targetDate.AddDays(-1), 9);
+        world.ReadStore.Slots.Add(leakedSlot);
+        for (var hour = 8; hour <= 18; hour++)
+        {
+            world.ReadStore.Slots.Add(SlotOnDate(targetDate, hour));
+        }
+
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        var afterWorker = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        var dateAction = afterWorker.Value.Step!.Actions.First(a => a.Value == targetDate.ToString("yyyy-MM-dd"));
+
+        var afterDate = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value);
+
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterDate.Value.Step!.Kind);
+        // Eleven slots seeded for this date (08:00-18:00); capped at ten.
+        Assert.Equal(10, afterDate.Value.Step!.Actions.Count);
+        // The day-before's own slot never leaked into this date's own time round.
+        Assert.DoesNotContain(
+            leakedSlot.EventId.Value.ToString(), afterDate.Value.Step!.Actions.Select(a => a.Value));
+        Assert.All(
+            afterDate.Value.Step!.Actions,
+            a =>
+            {
+                Assert.DoesNotContain(targetDate.Year.ToString(CultureInfo.InvariantCulture), a.Label, StringComparison.Ordinal);
+                Assert.Matches(@"^\d{2}:\d{2} - \d{2}:\d{2} UTC$", a.Label);
+            });
+    }
+
+    /// <summary>`25-32`'s own bug, reproduced for the new adjacent same-kind pair `25-33` introduces
+    /// (<c>AwaitingDateChoice</c>/<c>AwaitingSlotChoice</c>, both <c>date_time_picker</c>) rather than
+    /// merely reasoned about - the identical live-evidence-driven proof style the original
+    /// service/worker regression test already sets for its own pair.</summary>
+    [Fact]
+    public async Task ARetriedDateChoiceReply_ReplaysTheTimeRoundStep_RatherThanBeingMisappliedAsASlotChoice()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        var firstDelivery = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
+        Assert.Equal(ModuleStepKind.DateTimePicker, firstDelivery.Value.Step!.Kind);
+        var firstSlotAction = Assert.Single(firstDelivery.Value.Step!.Actions);
+        Assert.Equal(BookingFixtures.EventId.Value.ToString(), firstSlotAction.Value);
+
+        // The retry: byte-identical request, arriving after the first one already committed and
+        // moved the task into AwaitingSlotChoice.
+        var retried = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
+
+        Assert.True(retried.IsSuccess);
+        Assert.False(retried.Value.Complete);
+        // The bug this would reproduce: DateValue misread as an eventId GUID, handed to
+        // BookEventHandler's own claim path (Guid.TryParse would fail first, in fact, but a
+        // date-shaped string colliding with a real GUID is exactly the class of confusion this
+        // guards against structurally). Correct behaviour: the identical time-round step replayed.
+        Assert.Equal(ModuleStepKind.DateTimePicker, retried.Value.Step!.Kind);
+        var retriedSlotAction = Assert.Single(retried.Value.Step!.Actions);
+        Assert.Equal(BookingFixtures.EventId.Value.ToString(), retriedSlotAction.Value);
+        Assert.Empty(world.Bookings.Attempts);
+    }
+
+    // ------------------------------------------------------------------------------------------
     // `25-37`: locale - every ModuleStepFactory string renders in the tenant's configured
     // language, and English stays available for a tenant configured that way (every other test
     // in this file, none of which mentions locale at all).
@@ -89,8 +250,14 @@ public class ChatModuleTaskHandlerTests
 
         var afterWorker = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value, locale: "Ru");
-        Assert.Equal("Выберите время:", afterWorker.Value.Step!.Prompt);
-        var slotAction = Assert.Single(afterWorker.Value.Step!.Actions);
+        Assert.Equal("Выберите дату:", afterWorker.Value.Step!.Prompt);
+        var dateAction = Assert.Single(afterWorker.Value.Step!.Actions);
+        Assert.Equal(DateValue, dateAction.Value);
+
+        var afterDate = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value, locale: "Ru");
+        Assert.Contains("Выберите время на", afterDate.Value.Step!.Prompt, StringComparison.Ordinal);
+        var slotAction = Assert.Single(afterDate.Value.Step!.Actions);
 
         var afterSlot = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value, locale: "Ru");
@@ -142,6 +309,7 @@ public class ChatModuleTaskHandlerTests
         var externalTaskId = start.Value.ExternalTaskId;
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
 
         var afterSlot = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
@@ -163,6 +331,7 @@ public class ChatModuleTaskHandlerTests
         var externalTaskId = start.Value.ExternalTaskId;
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
 
         var afterSlot = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
@@ -182,6 +351,7 @@ public class ChatModuleTaskHandlerTests
         var externalTaskId = start.Value.ExternalTaskId;
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
             knownPhone: "+79990000012");
@@ -214,6 +384,7 @@ public class ChatModuleTaskHandlerTests
         var externalTaskId = start.Value.ExternalTaskId;
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
 
         var afterSlot = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
@@ -242,6 +413,7 @@ public class ChatModuleTaskHandlerTests
         var externalTaskId = start.Value.ExternalTaskId;
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
 
         var afterSlot = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
@@ -276,6 +448,7 @@ public class ChatModuleTaskHandlerTests
         var externalTaskId = start.Value.ExternalTaskId;
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
 
         var afterSlot = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString(),
@@ -304,8 +477,15 @@ public class ChatModuleTaskHandlerTests
 
         var afterWorker = await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
         Assert.True(afterWorker.IsSuccess);
+        // `25-33`: the date round, not the flat slot list directly.
         Assert.Equal(ModuleStepKind.DateTimePicker, afterWorker.Value.Step!.Kind);
-        var slotAction = Assert.Single(afterWorker.Value.Step!.Actions);
+        var dateAction = Assert.Single(afterWorker.Value.Step!.Actions);
+        Assert.Equal(DateValue, dateAction.Value);
+
+        var afterDate = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value);
+        Assert.True(afterDate.IsSuccess);
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterDate.Value.Step!.Kind);
+        var slotAction = Assert.Single(afterDate.Value.Step!.Actions);
         Assert.Equal(BookingFixtures.EventId.Value.ToString(), slotAction.Value);
 
         var afterSlot = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value);
@@ -341,6 +521,7 @@ public class ChatModuleTaskHandlerTests
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
 
@@ -349,6 +530,8 @@ public class ChatModuleTaskHandlerTests
 
         Assert.True(afterPhone.IsSuccess);
         Assert.False(afterPhone.Value.Complete);
+        // `25-33`: re-offered within the same date, not the date round again - ReopenForSlotChoice's
+        // own remarks.
         Assert.Equal(ModuleStepKind.DateTimePicker, afterPhone.Value.Step!.Kind);
 
         // The lost attempt still reached the store - losing is something only the write can decide -
@@ -389,6 +572,7 @@ public class ChatModuleTaskHandlerTests
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
 
@@ -450,9 +634,10 @@ public class ChatModuleTaskHandlerTests
         // double-advanced.
         var afterWorker = await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, retriedWorkerAction.Value);
         Assert.True(afterWorker.IsSuccess);
+        // `25-33`: the date round, not the flat slot list directly.
         Assert.Equal(ModuleStepKind.DateTimePicker, afterWorker.Value.Step!.Kind);
-        var slotAction = Assert.Single(afterWorker.Value.Step!.Actions);
-        Assert.Equal(BookingFixtures.EventId.Value.ToString(), slotAction.Value);
+        var dateAction = Assert.Single(afterWorker.Value.Step!.Actions);
+        Assert.Equal(DateValue, dateAction.Value);
     }
 
     [Fact]
@@ -518,6 +703,7 @@ public class ChatModuleTaskHandlerTests
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
         await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
         await world.ReplyAsync(

@@ -1,4 +1,5 @@
-﻿using Ago.Calendar.Application.Abstractions;
+﻿using System.Globalization;
+using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Application.UseCases.PublicBooking;
 using Ago.Calendar.Contracts;
@@ -50,12 +51,19 @@ public sealed class ReplyToModuleTaskHandler(
     BookEventHandler bookHandler,
     IClock clock)
 {
-    /// <summary>How many slots one <c>date_time_picker</c> step offers. Ten, not
-    /// <c>GetOpenSlotsHandler.MaxLimit</c> and not the widget's own <c>DefaultSlotLimit</c> of sixty:
-    /// this is a different renderer with a different ceiling, and the whole point of the closed
-    /// primitive vocabulary is that each one picks what it can survive - a text channel printing a
-    /// numbered list of sixty times is not a menu, it is a wall of text.</summary>
-    private const int SlotPageSize = 10;
+    /// <summary>`25-33`: how many raw slot rows to fetch from the read store before
+    /// <c>ModuleStepFactory</c> groups them by day (the worker-choice step) or filters them to one
+    /// already-chosen day (the date-choice step and every re-query of it). Reuses
+    /// <see cref="GetOpenSlotsHandler.MaxLimit"/> itself rather than inventing a second ceiling: that
+    /// constant's own reasoning ("bounded by the weakest renderer rather than the database") already
+    /// covers this case, and this fetch needs to be generous *precisely because* it is not what gets
+    /// rendered directly any more - <c>ModuleStepFactory.DateChoice</c>'s own page size is what
+    /// protects the text channel now, not this number. Before `25-33` this same constant (then named
+    /// <c>SlotPageSize</c>, fixed at ten) was both the query limit *and* the rendered page size in one
+    /// number, because the old shape had no grouping step to separate the two - the flat-list-only
+    /// reason it does not apply any more is exactly what the backlog item's own "revisit this
+    /// constant's reasoning" instruction asked to be stated rather than assumed.</summary>
+    private const int SlotQueryLimit = GetOpenSlotsHandler.MaxLimit;
 
     public async Task<Result<ModuleTaskReplied>> HandleAsync(
         ReplyToModuleTask command, CancellationToken cancellationToken)
@@ -127,6 +135,9 @@ public sealed class ReplyToModuleTaskHandler(
             ChatBookingTaskState.AwaitingWorkerChoice =>
                 await HandleWorkerChosenAsync(
                     task, tenantPublicKey, command.Value, command.Locale, now, cancellationToken),
+            ChatBookingTaskState.AwaitingDateChoice =>
+                await HandleDateChosenAsync(
+                    task, tenantPublicKey, command.Value, command.Locale, now, cancellationToken),
             ChatBookingTaskState.AwaitingSlotChoice =>
                 await HandleSlotChosenAsync(
                     task, tenantPublicKey, command.Value, command.Locale, command.KnownPhone,
@@ -165,6 +176,9 @@ public sealed class ReplyToModuleTaskHandler(
             new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value, locale), Complete: false));
     }
 
+    /// <summary>`25-33`: fetches broadly (<see cref="SlotQueryLimit"/>) rather than the old ten -
+    /// this reply now feeds the date round's own day-grouping, and a narrow fetch could cut the date
+    /// list short by never seeing a day past whichever slot happened to be the tenth row.</summary>
     private async Task<Result<ModuleTaskReplied>> HandleWorkerChosenAsync(
         ChatBookingTask task, string tenantPublicKey, string value, string locale, DateTimeOffset now,
         CancellationToken cancellationToken)
@@ -177,7 +191,7 @@ public sealed class ReplyToModuleTaskHandler(
         var slots = await slotsHandler.HandleAsync(
             new GetOpenSlots(
                 tenantPublicKey, task.CalendarId.Value, task.ServiceId!.Value.Value,
-                workerId, SlotPageSize, Origin: null),
+                workerId, SlotQueryLimit, Origin: null),
             cancellationToken);
         if (!slots.IsSuccess)
         {
@@ -188,7 +202,60 @@ public sealed class ReplyToModuleTaskHandler(
         await tasks.SaveAsync(task, cancellationToken);
 
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, locale), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.DateChoice(slots.Value, locale), Complete: false));
+    }
+
+    /// <summary>`25-33`: the date round's own reply - parses the ISO date
+    /// (<c>ModuleStepFactory.FormatDateValue</c>'s own remarks on the format), advances the task into
+    /// the time round for that date, and sends the time round's own step. A date that fails to parse
+    /// is <see cref="ChatModuleTaskErrors.InvalidReplyValue"/>, the identical treatment every other
+    /// malformed id-shaped value in this handler already gets.</summary>
+    private async Task<Result<ModuleTaskReplied>> HandleDateChosenAsync(
+        ChatBookingTask task, string tenantPublicKey, string value, string locale, DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        if (!DateOnly.TryParseExact(
+                value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+        {
+            return ChatModuleTaskErrors.InvalidReplyValue();
+        }
+
+        task.ChooseDate(date, now);
+        await tasks.SaveAsync(task, cancellationToken);
+
+        var slots = await GetSlotsForDateAsync(task, tenantPublicKey, date, cancellationToken);
+        if (!slots.IsSuccess)
+        {
+            return slots.Error!.Value;
+        }
+
+        return Result<ModuleTaskReplied>.Success(
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, date, locale), Complete: false));
+    }
+
+    /// <summary>`25-33`: the one place this handler re-queries a single date's own slots - the
+    /// worker-choice reply's own broad fetch (<see cref="HandleWorkerChosenAsync"/>) is never cached
+    /// anywhere, so every later step that needs "this date's slots" (the date round's own answer, a
+    /// retried-reply rebuild, a lost-race re-offer) asks fresh, the same "ask the read side again"
+    /// precedent this class's own <c>BuildStepForCurrentStateAsync</c> remarks already state for
+    /// <see cref="RebuildWorkerChoiceAsync"/>. Fetches the identical broad <see cref="SlotQueryLimit"/>
+    /// and filters client-side rather than adding a date parameter to <see cref="IBookingSurfaceReadStore.ListOpenSlotsAsync"/> -
+    /// that port is shared with the public widget, which has no day-grouping concept of its own to
+    /// justify widening its contract for this one caller.</summary>
+    private async Task<Result<IReadOnlyList<OpenSlotRow>>> GetSlotsForDateAsync(
+        ChatBookingTask task, string tenantPublicKey, DateOnly date, CancellationToken cancellationToken)
+    {
+        var slots = await slotsHandler.HandleAsync(
+            new GetOpenSlots(
+                tenantPublicKey, task.CalendarId.Value, task.ServiceId!.Value.Value,
+                task.WorkerId!.Value.Value, SlotQueryLimit, Origin: null),
+            cancellationToken);
+        if (!slots.IsSuccess)
+        {
+            return slots.Error!.Value;
+        }
+
+        return Result<IReadOnlyList<OpenSlotRow>>.Success([.. slots.Value.Where(s => s.LocalDate == date)]);
     }
 
     /// <summary>`25-32`: the response to a detected replay - see <c>HandleAsync</c>'s own remarks.
@@ -205,6 +272,14 @@ public sealed class ReplyToModuleTaskHandler(
         {
             ChatBookingTaskState.AwaitingWorkerChoice =>
                 await RebuildWorkerChoiceAsync(task, tenantPublicKey, locale, cancellationToken),
+            // `25-33`: AwaitingDateChoice can never get here, for the identical reason
+            // AwaitingServiceChoice (below) cannot - LastAppliedValue while in this state is the
+            // workerId that produced it, and a genuinely retried worker-choice reply always carries
+            // kind choice_list, which KindMatches already refuses against this state's own
+            // date_time_picker requirement before this switch is ever reached. AwaitingSlotChoice
+            // just below is the one genuinely reachable same-kind pairing - see
+            // ChatBookingTask.LastAppliedValue's own remarks on why a date-round replay and a
+            // genuine time-round answer can never be confused for each other regardless.
             ChatBookingTaskState.AwaitingSlotChoice =>
                 await RebuildSlotChoiceAsync(task, tenantPublicKey, locale, cancellationToken),
             // `25-39`: rebuilt from the *current* call's own AcceptUnverifiedPhone/KnownPhone, the
@@ -238,21 +313,23 @@ public sealed class ReplyToModuleTaskHandler(
             new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value, locale), Complete: false));
     }
 
+    /// <summary>`25-33`: rebuilds the time round for <see cref="ChatBookingTask.SelectedDate"/> - the
+    /// date the *original* application of this replayed value (a date-choice reply) already chose.
+    /// <c>SelectedDate</c> is never null here: the only way to reach <see cref="ChatBookingTaskState.AwaitingSlotChoice"/>
+    /// at all is through <see cref="ChatBookingTask.ChooseDate"/>, which sets it in the same
+    /// transition.</summary>
     private async Task<Result<ModuleTaskReplied>> RebuildSlotChoiceAsync(
         ChatBookingTask task, string tenantPublicKey, string locale, CancellationToken cancellationToken)
     {
-        var slots = await slotsHandler.HandleAsync(
-            new GetOpenSlots(
-                tenantPublicKey, task.CalendarId.Value, task.ServiceId!.Value.Value,
-                task.WorkerId!.Value.Value, SlotPageSize, Origin: null),
-            cancellationToken);
+        var date = task.SelectedDate!.Value;
+        var slots = await GetSlotsForDateAsync(task, tenantPublicKey, date, cancellationToken);
         if (!slots.IsSuccess)
         {
             return slots.Error!.Value;
         }
 
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, locale), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, date, locale), Complete: false));
     }
 
     /// <summary>
@@ -350,14 +427,15 @@ public sealed class ReplyToModuleTaskHandler(
         // these is BookEventHandler's own ordinary rejection (never an exception), and the backlog
         // item's own words are that the visitor must never see a dead end for it. Rather than surface
         // outcome.Error as a hard failure, re-offer fresh slots for the same worker.
+        //
+        // `25-33`: re-offered for the *same date* the visitor already picked, not the date round
+        // again - ReopenForSlotChoice's own remarks: only the slot that just lost the race needs
+        // re-picking, not the day or the worker.
         task.ReopenForSlotChoice(phone, now);
         await tasks.SaveAsync(task, cancellationToken);
 
-        var slots = await slotsHandler.HandleAsync(
-            new GetOpenSlots(
-                tenantPublicKey, task.CalendarId.Value, task.ServiceId!.Value.Value,
-                task.WorkerId!.Value.Value, SlotPageSize, Origin: null),
-            cancellationToken);
+        var date = task.SelectedDate!.Value;
+        var slots = await GetSlotsForDateAsync(task, tenantPublicKey, date, cancellationToken);
         if (!slots.IsSuccess)
         {
             // The configured calendar itself stopped resolving mid-task (unpublished under us,
@@ -366,7 +444,7 @@ public sealed class ReplyToModuleTaskHandler(
         }
 
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, locale), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, date, locale), Complete: false));
     }
 
     /// <summary>The names a confirmation card needs, which <see cref="BookingConfirmation"/> itself
@@ -395,6 +473,13 @@ public sealed class ReplyToModuleTaskHandler(
     {
         ChatBookingTaskState.AwaitingServiceChoice => kind == ModuleStepKinds.ChoiceList,
         ChatBookingTaskState.AwaitingWorkerChoice => kind == ModuleStepKinds.ChoiceList,
+        // `25-33`: the date round and the time round below share one wire kind - both are
+        // date_time_picker, the vocabulary's own answer to "two rounds, no fifth kind"
+        // (ChatBookingTaskState.AwaitingDateChoice's own remarks). A reply meant for one can never be
+        // mistaken for the other by KindMatches alone (both pass this check identically); what tells
+        // them apart is State itself, exactly as it already tells apart AwaitingWorkerChoice's own
+        // choice_list from AwaitingServiceChoice's.
+        ChatBookingTaskState.AwaitingDateChoice => kind == ModuleStepKinds.DateTimePicker,
         ChatBookingTaskState.AwaitingSlotChoice => kind == ModuleStepKinds.DateTimePicker,
         // `20-09`: PhoneForm() emits VerifiedPhoneForm by default - see ModuleStepFactory's own
         // remarks. `25-39`: also accepts plain Form - the kind PhoneForm emits instead when a

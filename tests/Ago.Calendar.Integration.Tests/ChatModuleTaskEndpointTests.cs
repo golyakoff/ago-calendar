@@ -123,6 +123,47 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         Assert.NotNull(stored.CustomerId);
     }
 
+    /// <summary>
+    /// `25-32`: the live bug, reproduced over a real HTTP round trip and a real Postgres row rather
+    /// than only the fake-backed proof in <c>Ago.Calendar.Application.Tests</c> - the level this item's
+    /// own Done-when asks for ("not only a fresh test fixture"). This suite's default seed is already
+    /// shaped like the live conversation this item names: one tenant, one calendar, exactly one worker,
+    /// real future <c>Available</c> events. `Ago.Chat.*`'s own <c>ModuleResiliencePipelines</c> retries
+    /// any exception on a reply call - including a timeout on a request Calendar already committed - so
+    /// the identical service-choice reply can legitimately reach this endpoint twice. Before this item's
+    /// fix, the second call landed on the just-advanced <c>AwaitingWorkerChoice</c> state (which reads
+    /// the same wire kind as <c>AwaitingServiceChoice</c>) and was misread as a worker id, producing a
+    /// real <c>date_time_picker</c> response with zero slots while "Who would you like to book with?"
+    /// was never sent at all.
+    /// </summary>
+    [Fact]
+    public async Task ARetriedServiceChoiceReply_OverRealHttpAndPostgres_ReplaysTheWorkerChoiceStep()
+    {
+        var started = (await (await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking"))
+            .Content.ReadFromJsonAsync<ModuleTaskStartResponse>())!;
+
+        var firstDelivery = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
+        Assert.Equal(ModuleStepKinds.ChoiceList, firstDelivery.Step!.Kind);
+        var firstWorkerAction = Assert.Single(firstDelivery.Step.Actions);
+        Assert.Equal(_seed.Worker.Id.Value.ToString(), firstWorkerAction.Value);
+
+        // The retry: byte-identical request, arriving after the database already committed the first
+        // one's advance to AwaitingWorkerChoice - a real row read back over a real connection, not a
+        // fake's in-memory dictionary.
+        var retried = await ReplyAsync(
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
+        Assert.Equal(ModuleStepKinds.ChoiceList, retried.Step!.Kind);
+        var retriedWorkerAction = Assert.Single(retried.Step.Actions);
+        Assert.Equal(_seed.Worker.Id.Value.ToString(), retriedWorkerAction.Value);
+
+        // Still genuinely usable afterwards: the real slot this suite seeded in InitializeAsync comes
+        // back, not an empty list.
+        var afterWorker = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, retriedWorkerAction.Value);
+        Assert.Equal(ModuleStepKinds.DateTimePicker, afterWorker.Step!.Kind);
+        Assert.NotEmpty(afterWorker.Step.Actions);
+    }
+
     [Fact]
     public async Task AFailedBookingAttempt_ReOffersFreshSlots_AndTheSecondAttemptCanStillSucceed()
     {

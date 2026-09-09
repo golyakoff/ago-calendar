@@ -99,6 +99,24 @@ public sealed class ReplyToModuleTaskHandler(
         var tenantPublicKey = tenant.PublicKey.Value;
         var now = clock.UtcNow;
 
+        // `25-32`: a retried SubmitReplyAsync call - ModuleResiliencePipelines retries every exception,
+        // including a timeout on a request Calendar already committed (that pipeline's own remarks
+        // assumed a reply carries an idempotency key it does not) - resends the exact value that already
+        // produced this task's *current* state. KindMatches, just below, cannot catch it: it checks the
+        // wire shape only, and AwaitingServiceChoice/AwaitingWorkerChoice both expect a plain
+        // choice_list, so the replayed value looks like a perfectly ordinary reply to the *next* step.
+        // Left unguarded, it is silently misapplied there - a service id fed to GetOpenSlotsHandler as
+        // if it were a worker id, producing a real date_time_picker step with genuinely zero slots,
+        // while the worker-choice step this reply actually answered is never regenerated (this item's
+        // own live evidence). ChatBookingTask.LastAppliedValue is the value that produced the state this
+        // task is in right now; an incoming value identical to it is the same request being replayed,
+        // not a fresh answer, so it is answered the same way the very first application already would
+        // have: the step for the state that value produced, without touching anything a second time.
+        if (task.LastAppliedValue == command.Value)
+        {
+            return await BuildStepForCurrentStateAsync(task, tenantPublicKey, cancellationToken);
+        }
+
         return task.State switch
         {
             ChatBookingTaskState.AwaitingServiceChoice =>
@@ -159,6 +177,62 @@ public sealed class ReplyToModuleTaskHandler(
 
         task.ChooseWorker(new WorkerId(workerId), now);
         await tasks.SaveAsync(task, cancellationToken);
+
+        return Result<ModuleTaskReplied>.Success(
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value), Complete: false));
+    }
+
+    /// <summary>`25-32`: the response to a detected replay - see <c>HandleAsync</c>'s own remarks.
+    /// Deliberately re-derives the step from the task's current fields rather than caching the original
+    /// response anywhere: every value it needs (<see cref="Domain.ChatBookingTask.ServiceId"/>,
+    /// <see cref="Domain.ChatBookingTask.WorkerId"/>) is already sitting on the aggregate this handler
+    /// just loaded, and re-running the same read handler the first, successful application ran is the
+    /// same "ask the read side again" precedent <c>HandlePhoneProvidedAsync</c>'s own lost-race path
+    /// already sets, not a new pattern.</summary>
+    private async Task<Result<ModuleTaskReplied>> BuildStepForCurrentStateAsync(
+        ChatBookingTask task, string tenantPublicKey, CancellationToken cancellationToken) =>
+        task.State switch
+        {
+            ChatBookingTaskState.AwaitingWorkerChoice =>
+                await RebuildWorkerChoiceAsync(task, tenantPublicKey, cancellationToken),
+            ChatBookingTaskState.AwaitingSlotChoice =>
+                await RebuildSlotChoiceAsync(task, tenantPublicKey, cancellationToken),
+            ChatBookingTaskState.AwaitingPhone =>
+                Result<ModuleTaskReplied>.Success(new ModuleTaskReplied(ModuleStepFactory.PhoneForm(), Complete: false)),
+            // AwaitingServiceChoice can never get here - LastAppliedValue is still null the only time
+            // the task is in that state, so it can never equal a real command.Value. Completed is
+            // intercepted above, before KindMatches even runs. Refused rather than silently doing
+            // nothing if either invariant is ever wrong.
+            _ => ChatModuleTaskErrors.KindMismatch(),
+        };
+
+    private async Task<Result<ModuleTaskReplied>> RebuildWorkerChoiceAsync(
+        ChatBookingTask task, string tenantPublicKey, CancellationToken cancellationToken)
+    {
+        var workers = await workersHandler.HandleAsync(
+            new GetBookableWorkers(tenantPublicKey, task.CalendarId.Value, task.ServiceId!.Value.Value, Origin: null),
+            cancellationToken);
+        if (!workers.IsSuccess)
+        {
+            return workers.Error!.Value;
+        }
+
+        return Result<ModuleTaskReplied>.Success(
+            new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value), Complete: false));
+    }
+
+    private async Task<Result<ModuleTaskReplied>> RebuildSlotChoiceAsync(
+        ChatBookingTask task, string tenantPublicKey, CancellationToken cancellationToken)
+    {
+        var slots = await slotsHandler.HandleAsync(
+            new GetOpenSlots(
+                tenantPublicKey, task.CalendarId.Value, task.ServiceId!.Value.Value,
+                task.WorkerId!.Value.Value, SlotPageSize, Origin: null),
+            cancellationToken);
+        if (!slots.IsSuccess)
+        {
+            return slots.Error!.Value;
+        }
 
         return Result<ModuleTaskReplied>.Success(
             new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value), Complete: false));

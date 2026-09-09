@@ -50,6 +50,19 @@ public sealed class ChatBookingTask
     /// the record of what this task collected, not re-validated a second time.</summary>
     public string? Phone { get; private set; }
 
+    /// <summary>`25-32`: the reply <c>value</c> that produced the *current* <see cref="State"/> - null
+    /// only before the first reply ever lands. Exists purely so <c>ReplyToModuleTaskHandler</c> can
+    /// recognise a retried reply for what it is: two adjacent states can expect the identical wire
+    /// <c>kind</c> (<see cref="ChatBookingTaskState.AwaitingServiceChoice"/> and
+    /// <see cref="ChatBookingTaskState.AwaitingWorkerChoice"/> both read as a plain <c>choice_list</c>),
+    /// so a caller-side timeout-then-retry of a request this aggregate already committed is
+    /// indistinguishable, by kind and state alone, from a fresh, legitimate reply to the *next* step -
+    /// see that handler's own remarks for the failure this produced before this field existed
+    /// (`docs/backlog/25-32-*.md`). An incoming value identical to this one is not proof by
+    /// construction, but the ids compared here are independently generated per entity
+    /// (<c>IIdGenerator</c>), so an accidental collision is not a real possibility to defend against.</summary>
+    public string? LastAppliedValue { get; private set; }
+
     public ChatBookingTaskState State { get; private set; }
 
     public DateTimeOffset CreatedAt { get; }
@@ -88,6 +101,7 @@ public sealed class ChatBookingTask
         RequireState(ChatBookingTaskState.AwaitingServiceChoice);
         ServiceId = serviceId;
         State = ChatBookingTaskState.AwaitingWorkerChoice;
+        LastAppliedValue = serviceId.Value.ToString();
         UpdatedAt = now;
     }
 
@@ -96,6 +110,7 @@ public sealed class ChatBookingTask
         RequireState(ChatBookingTaskState.AwaitingWorkerChoice);
         WorkerId = workerId;
         State = ChatBookingTaskState.AwaitingSlotChoice;
+        LastAppliedValue = workerId.Value.ToString();
         UpdatedAt = now;
     }
 
@@ -104,6 +119,7 @@ public sealed class ChatBookingTask
         RequireState(ChatBookingTaskState.AwaitingSlotChoice);
         EventId = eventId;
         State = ChatBookingTaskState.AwaitingPhone;
+        LastAppliedValue = eventId.Value.ToString();
         UpdatedAt = now;
     }
 
@@ -113,6 +129,7 @@ public sealed class ChatBookingTask
         RequireState(ChatBookingTaskState.AwaitingPhone);
         Phone = phone;
         State = ChatBookingTaskState.Completed;
+        LastAppliedValue = phone;
         UpdatedAt = now;
     }
 
@@ -130,6 +147,12 @@ public sealed class ChatBookingTask
         Phone = phone;
         EventId = null;
         State = ChatBookingTaskState.AwaitingSlotChoice;
+        // `25-32`: this transition's own driving value is the phone reply, not the slot that was just
+        // cleared - LastAppliedValue must move to it too, or the *previous* ChooseSlot's own eventId
+        // would still be sitting there, and a visitor re-offered (and re-picking) that exact same slot -
+        // ALostBookingRace_ReOffersFreshSlots_RatherThanADeadEnd's own path - would be misread as a
+        // retried duplicate of a step that, this time, is genuinely happening again.
+        LastAppliedValue = phone;
         UpdatedAt = now;
     }
 

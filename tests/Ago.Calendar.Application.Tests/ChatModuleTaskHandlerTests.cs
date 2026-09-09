@@ -174,6 +174,54 @@ public class ChatModuleTaskHandlerTests
         Assert.Empty(world.Bookings.Attempts);
     }
 
+    /// <summary>
+    /// `25-32`: the live bug, reproduced at this level rather than only inferred. `Ago.Chat.*`'s own
+    /// <c>ModuleResiliencePipelines</c> retries any exception on a reply call, including a timeout on a
+    /// request Calendar already committed - so the *same* service-choice reply can legitimately reach
+    /// this handler twice, once while the task is still <c>AwaitingServiceChoice</c> and once after it
+    /// has already advanced to <c>AwaitingWorkerChoice</c>. Both states read the identical wire kind
+    /// (<c>choice_list</c>), so before this item's fix the second call sailed past
+    /// <c>KindMatches</c> and was misread as an answer to the *worker*-choice step: the service id got
+    /// parsed as a worker id and handed to <c>GetOpenSlotsHandler</c>, which found no such worker and
+    /// answered with a real <c>date_time_picker</c> step carrying zero slots - the exact
+    /// `{"prompt":"Pick a time:","slots":[]}` this item's own live evidence shows, with the
+    /// "Who would you like to book with?" step never shown at all. The fixture's calendar has exactly
+    /// one worker, matching the live conversation this item names.
+    /// </summary>
+    [Fact]
+    public async Task ARetriedServiceChoiceReply_ReplaysTheWorkerChoiceStep_RatherThanCorruptingIt()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+
+        var firstDelivery = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        Assert.True(firstDelivery.IsSuccess);
+        Assert.Equal(ModuleStepKind.ChoiceList, firstDelivery.Value.Step!.Kind);
+        var firstWorkerAction = Assert.Single(firstDelivery.Value.Step!.Actions);
+        Assert.Equal(BookingFixtures.WorkerId.Value.ToString(), firstWorkerAction.Value);
+
+        // The retry: byte-identical request, arriving after the first one already committed.
+        var retried = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+
+        Assert.True(retried.IsSuccess);
+        Assert.False(retried.Value.Complete);
+        // The bug: this used to come back ModuleStepKind.DateTimePicker with an empty slots list.
+        Assert.Equal(ModuleStepKind.ChoiceList, retried.Value.Step!.Kind);
+        var retriedWorkerAction = Assert.Single(retried.Value.Step!.Actions);
+        Assert.Equal(BookingFixtures.WorkerId.Value.ToString(), retriedWorkerAction.Value);
+
+        // The flow is still genuinely usable afterwards - the replay did not leave the task stuck or
+        // double-advanced.
+        var afterWorker = await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, retriedWorkerAction.Value);
+        Assert.True(afterWorker.IsSuccess);
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterWorker.Value.Step!.Kind);
+        var slotAction = Assert.Single(afterWorker.Value.Step!.Actions);
+        Assert.Equal(BookingFixtures.EventId.Value.ToString(), slotAction.Value);
+    }
+
     [Fact]
     public async Task AReplyWithTheWrongKind_IsRejectedBeforeTheValueIsInterpreted()
     {

@@ -30,6 +30,11 @@ internal sealed class ChatBookingTaskConfiguration : IEntityTypeConfiguration<Ch
 
         builder.Property(t => t.State).HasColumnName("state").HasConversion<string>().HasMaxLength(24);
 
+        // `25-32`: the wire value that produced the *current* State - see the domain property's own
+        // remarks. 64 covers a canonical GUID string (36 chars) with room to spare; the only other
+        // shape this ever holds is a phone number, already capped at 32 by the column just above.
+        builder.Property(t => t.LastAppliedValue).HasColumnName("last_applied_value").HasMaxLength(64);
+
         builder.Property(t => t.CreatedAt).HasColumnName("created_at").HasColumnType("timestamptz");
         builder.Property(t => t.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamptz");
 

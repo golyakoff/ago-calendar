@@ -18,8 +18,21 @@
 /// credential proven for tenant A is refused outright against a task belonging to tenant B, the
 /// identical property <c>Ago.Faq.Application.UseCases.FaqModuleTask.ReplyToFaqModuleTask.CredentialSiteId</c>'s
 /// own remarks already prove for that module.</param>
+/// <param name="Locale">`25-37`: resent on every reply, not merely at task start
+/// (<see cref="StartModuleTask.Locale"/>'s own remarks) - this aggregate never stores it, so every
+/// step after the first re-reads it straight off the request that is answering the previous one. See
+/// <c>Ago.Calendar.Contracts.ModuleTaskReplyRequest.Locale</c>'s own remarks for why resending beats
+/// persisting here.</param>
+/// <param name="KnownPhone">`25-38`/`25-39`: the most recent phone number the visitor gave earlier in
+/// the conversation, self-reported and never proven reachable - <see langword="null"/> when nothing
+/// was ever recorded. See <c>Ago.Calendar.Contracts.ModuleTaskReplyRequest.KnownPhone</c>'s own
+/// remarks for what <see cref="ReplyToModuleTaskHandler"/> does with it.</param>
+/// <param name="AcceptUnverifiedPhone">`25-39`: this site's own temporary, off-by-default relaxation
+/// of the verified-phone requirement - see
+/// <c>Ago.Calendar.Contracts.ModuleTaskReplyRequest.AcceptUnverifiedPhone</c>'s own remarks.</param>
 public readonly record struct ReplyToModuleTask(
     string ExternalTaskId, Guid ChatTaskId, string Kind, string Value, DateTimeOffset? PhoneVerifiedAt = null,
-    Guid? CredentialSiteId = null);
+    Guid? CredentialSiteId = null, string Locale = "En", string? KnownPhone = null,
+    bool AcceptUnverifiedPhone = false);
 
 public readonly record struct ModuleTaskReplied(ModuleStep? Step, bool Complete);

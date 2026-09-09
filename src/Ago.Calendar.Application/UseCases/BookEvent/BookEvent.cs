@@ -19,17 +19,26 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// <param name="RequiresVerifiedPhone">
 /// `20-09`/`20-10`: whether *this calling surface* enforces the phone-verification gate at all - a fact
 /// about which caller is booking, not about whether verification happened to occur. <c>true</c> from
-/// both callers this command has today: the chat-originated flow
+/// both callers this command had until `25-39`: the chat-originated flow
 /// (<see cref="Ago.Calendar.Application.UseCases.ChatModuleTask.ReplyToModuleTaskHandler"/>), which
 /// obtains a real assertion via `14-15` and passes it directly as <see cref="PhoneVerifiedAt"/>; and,
 /// as of `20-10`, the public booking widget itself (<see cref="Ago.Calendar.Api.Booking.BookingEndpoints"/>),
 /// which has its own independent verification mechanism now (<c>PendingPhoneVerification</c>) instead of
 /// the self-asserted value that would have been the only alternative - see that item's own backlog file
 /// for why a universal gate had to wait for a real mechanism rather than either shipping a forgeable
-/// field or leaving the widget permanently unable to book. There is no longer a caller of this command
-/// that supplies <see langword="false"/>; this parameter has <b>no default</b> so that a future third
-/// caller cannot compile without deciding the question explicitly - the compiler enforces what used to
-/// be only a convention a reader of this doc comment had to notice and honour on their own.
+/// field or leaving the widget permanently unable to book.
+///
+/// <para><b>`25-39`: the chat-originated flow is no longer an unconditional <c>true</c>.</b> A tenant's
+/// own, off-by-default <c>WidgetConfig.AcceptUnverifiedPhone</c> makes
+/// <c>ReplyToModuleTaskHandler</c> pass <see langword="false"/> instead, for exactly as long as `14-15`
+/// has no live gateway account provisioned - see that handler's own remarks for the two shapes this
+/// takes (skip the step entirely with an already-known number, or show it without the requirement).
+/// The public widget (<see cref="Ago.Calendar.Api.Booking.BookingEndpoints"/>) is untouched by this and
+/// still always supplies <see langword="true"/> - `20-10`'s own mechanism gives it a real, independent
+/// way to satisfy the gate, so it never had `14-15`'s missing-vendor problem this item works around.
+/// This parameter still has <b>no default</b>, so a future third caller must still decide the question
+/// explicitly rather than inheriting a value by omission.
+/// </para>
 /// </param>
 /// <param name="Origin">
 /// The request's own <c>Origin</c> header, or null when there is none - `20-06`'s layer-2 check.

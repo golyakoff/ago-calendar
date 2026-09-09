@@ -62,16 +62,22 @@ public readonly record struct CalendarReadiness(
 public sealed class GetBookingReadinessHandler(
     IBookingReadinessReadStore readiness, IPermissionChecker permissions, IClock clock)
 {
-    /// <summary>`flows.md` 3.1's own stated order - calendar, worker, service, hours, schedule,
-    /// slots - the one order every caller sees, whether the tenant has a calendar or not.</summary>
+    /// <summary>`25-12`: fill order, not `flows.md` 3.1's list order. Five of the six facts are
+    /// already a valid dependency chain - worker before service (the funnel's own
+    /// <c>bool_or(has_service)</c> is scoped to a worker), service before hours, hours and service
+    /// both before schedule, schedule before slots (nothing else produces one). Only
+    /// <see cref="BookingPrecondition.CalendarPublished"/> was out of place: it depends on nothing and
+    /// nothing depends on it, so it was structurally free to sit anywhere, but leading with it read as
+    /// "fix this first" for the "go live" toggle a tenant flips *last*, once every other fact already
+    /// holds. Moved to the end; the other five keep the order they already had.</summary>
     private static readonly IReadOnlyList<BookingPrecondition> Order =
     [
-        BookingPrecondition.CalendarPublished,
         BookingPrecondition.WorkerOnCalendar,
         BookingPrecondition.ServiceOffered,
         BookingPrecondition.WorkingHoursConfigured,
         BookingPrecondition.ScheduleSaved,
         BookingPrecondition.SlotsMaterialized,
+        BookingPrecondition.CalendarPublished,
     ];
 
     private static readonly CalendarReadiness NothingConfigured = new(

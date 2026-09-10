@@ -35,15 +35,16 @@ namespace Ago.Calendar.Integration.Tests;
 /// <see cref="ModuleQuantityImpactRequestedWireContract"/> already asserts the same property names for
 /// the identical "default <c>JsonSerializer</c> options, no shared assembly" reason).</para>
 ///
-/// <para><b>The one gap: this product has no <c>OutboxDispatcher</c> yet</b> - `messaging.md`'s own
-/// Topics table says as much for `BookingConfirmed` ("None wired yet"), and it is equally true of
-/// every row this product's outbox has ever held; `ago-chat`'s own <c>Ago.Chat.Worker.OutboxDispatcher</c>
-/// has no counterpart here (`23-88`'s own scope does not build one - see the item's own report). So
-/// this suite proves the reply this consumer stages lands correctly in the real <c>outbox</c> table -
-/// exactly the fact <see cref="WorkerQuotaImpactAnswererTests"/> already proves for a direct call, now
-/// proven again reached correctly through a real broker delivery and the real consumer's own
-/// deserialize-and-filter logic - rather than also proving the second hop (outbox row to broker
-/// message) no code in this repository performs for any topic today.</para>
+/// <para><b>`25-44`: the gap this paragraph used to describe (`Ago.Calendar.Worker.OutboxDispatcher`
+/// did not exist, so nothing published a staged row to a real broker) is closed - see
+/// <see cref="OutboxDispatcherTests"/> for the proof that this exact reply is actually delivered, not
+/// only staged. This suite's own scope stays what it always was: the reply this consumer stages lands
+/// correctly in the real <c>outbox</c> table - exactly the fact
+/// <see cref="WorkerQuotaImpactAnswererTests"/> already proves for a direct call, now proven again
+/// reached correctly through a real broker delivery and the real consumer's own deserialize-and-filter
+/// logic. The second hop (outbox row to broker message) is <see cref="OutboxDispatcherTests"/>'s own
+/// job, not this suite's - each proves its own half of the pipeline once, rather than one suite
+/// re-proving the other's.</para>
 /// </summary>
 [Collection(ModuleQuantityGrantedWireCollection.Name)]
 public sealed class ModuleQuantityImpactRequestedWireTests(ModuleQuantityGrantedWireFixture fixture)

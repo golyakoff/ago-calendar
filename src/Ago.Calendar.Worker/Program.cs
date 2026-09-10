@@ -83,6 +83,18 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<ModuleQuantityImpactRequestedConsumer>();
 
+// `25-44`: this host's own outbox dispatcher - drains the `outbox` table to RabbitMQ, the identical
+// mechanism `Ago.Chat.Worker.OutboxDispatcher` already runs for chat. Every row this product stages
+// (`BookingConfirmed` since `20-04`, `ModuleQuantityImpactComputed` staged by the consumer just above)
+// committed correctly and then sat undelivered until this registration existed - see
+// `OutboxDispatcher`'s own remarks for why the port stops at the dispatch mechanism and does not also
+// invent metrics/tracing this repository has nowhere to export yet.
+builder.Services
+    .AddOptions<OutboxDispatcherOptions>()
+    .Bind(builder.Configuration.GetSection(OutboxDispatcherOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<OutboxDispatcher>();
+
 var host = builder.Build();
 
 // `20-21`/`adr/0056`: the same guard Ago.Calendar.Api runs, in the same place - before anything can

@@ -43,6 +43,14 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     private HttpClient _client = null!;
     private SeededTenant _seed = null!;
 
+    /// <summary>`25-45`: the single anchor `InitializeAsync`'s own first slot and
+    /// `AFailedBookingAttempt_ReOffersFreshSlots_AndTheSecondAttemptCanStillSucceed`'s own second slot
+    /// both build off, instead of each calling `DateTimeOffset.UtcNow.AddDays(7)` independently. See
+    /// that field's own remarks, set in `InitializeAsync`, for why two independent reads of the real
+    /// clock's own uncontrolled time-of-day was the actual, confirmed cause of `25-45`'s own flake.
+    /// </summary>
+    private DateTimeOffset _seedSlotsAnchor;
+
     /// <summary>The secret registered for <see cref="_seed"/>'s own tenant - see
     /// <see cref="RegisterChatModuleAsync"/>.</summary>
     private const string TestSharedSecret = "integration-test-shared-secret-of-sufficient-length";
@@ -60,7 +68,20 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         //
         // Far enough ahead that "starts_at > now" holds against the host's own real clock - this
         // test cannot inject a fake one, exactly like BookingEndpointTests' own slots.
-        var slot = CalendarSeed.Slot(_seed, DateTimeOffset.UtcNow.AddDays(7));
+        //
+        // `25-45`: the date component alone comes from the real clock (so this stays genuinely in
+        // the future no matter which real date the suite runs on); the time-of-day is a fixed 09:00
+        // UTC, not whatever real hour `DateTimeOffset.UtcNow` happens to return. CalendarSeed.Slot's
+        // own LocalDate is the UTC date component of its own startsAt, not a real conversion through
+        // the tenant's own timezone (the shortcut every directly-inserted slot in this project takes) -
+        // so a second slot built by adding a couple of hours to this anchor (the re-offer test's own
+        // secondSlot) can never roll into the next UTC date the way it could when both slots read
+        // DateTimeOffset.UtcNow independently: that read whatever hour the real clock happened to be
+        // at, and for roughly two hours out of every UTC day (22:00-24:00), a +2h offset crossed
+        // midnight and split one intended date into two - `25-45`'s own confirmed cause, reproduced by
+        // checking the real UTC hour at the moment the suite ran, not a guess.
+        _seedSlotsAnchor = new DateTimeOffset(DateTimeOffset.UtcNow.AddDays(7).Date, TimeSpan.Zero).AddHours(9);
+        var slot = CalendarSeed.Slot(_seed, _seedSlotsAnchor);
         await using (var db = fixture.CreateDbContext())
         {
             await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
@@ -301,8 +322,11 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     public async Task AFailedBookingAttempt_ReOffersFreshSlots_AndTheSecondAttemptCanStillSucceed()
     {
         // A second slot for the same worker, so there is something left to re-offer once the first
-        // is claimed out from under this task by somebody else.
-        var secondSlot = CalendarSeed.Slot(_seed, DateTimeOffset.UtcNow.AddDays(7).AddHours(2));
+        // is claimed out from under this task by somebody else. `25-45`: built off InitializeAsync's
+        // own _seedSlotsAnchor, not a second independent DateTimeOffset.UtcNow read - see that
+        // field's own remarks for why two independent reads were the actual, confirmed cause of this
+        // test's own flake.
+        var secondSlot = CalendarSeed.Slot(_seed, _seedSlotsAnchor.AddHours(2));
         await using (var db = fixture.CreateDbContext())
         {
             await new EventRepository(db).AddRangeAsync([secondSlot], CancellationToken.None);

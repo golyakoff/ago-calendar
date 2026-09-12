@@ -2,7 +2,9 @@
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
+using Ago.Calendar.Infrastructure.Postgres.Persistence;
 using Ago.Platform.Kernel;
+using Ago.Platform.Persistence.Postgres;
 using Microsoft.EntityFrameworkCore;
 
 namespace Ago.Calendar.Integration.Tests;
@@ -59,7 +61,8 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var result = await new RejectBookingHandler(
-                new EventRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(Now))
+                new EventRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+                new EfOutboxWriter<AgoCalendarDbContext>(db), new UuidV7Generator(), new FixedClock(Now))
             .HandleAsync(
                 new RejectBooking(world.FirstOperator, world.TenantId, onTheOtherCalendar.BookingId),
                 CancellationToken.None);

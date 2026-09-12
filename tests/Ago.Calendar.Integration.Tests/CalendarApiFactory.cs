@@ -47,16 +47,23 @@ internal class CalendarApiFactory(PostgresFixture fixture) : WebApplicationFacto
         builder.UseSetting("Operator:Authority", UnreachableAuthority);
         builder.UseSetting("ModuleProvisioning:Secret", TestProvisioningSecret);
 
-        // `22-05`/`adr/0093`: AddRabbitMqMessaging's own ValidateOnStart runs for every host that
-        // loads CalendarModule, this one included, even though the Api host never resolves
-        // IEventConsumer/IEventPublisher/RabbitMqConnection (RoleAssignmentsChangedConsumer is
-        // Ago.Calendar.Worker-only) - RabbitMqConnection connects lazily on first use, so a
-        // syntactically valid, never-dialled value satisfies validation without a broker container
-        // in this fixture, the same "Operator:Authority answers nothing and is never contacted"
-        // shape this class's own remarks already use above.
-        builder.UseSetting("Messaging:RabbitMq:HostName", "rabbitmq.invalid");
-        builder.UseSetting("Messaging:RabbitMq:UserName", "unused");
-        builder.UseSetting("Messaging:RabbitMq:Password", "unused");
+        // `22-05`/`adr/0093` named this setting for AddRabbitMqMessaging's own ValidateOnStart, back
+        // when nothing in Ago.Calendar.Api actually dialled the broker (RoleAssignmentsChangedConsumer
+        // is Ago.Calendar.Worker-only) - a syntactically valid, never-dialled "rabbitmq.invalid" value
+        // satisfied validation with no broker container in this fixture at all.
+        //
+        // `25-63`: that stopped being true. CalendarOperatorHub's own host-side wiring registers
+        // NodeDeliveryConsumer as a hosted service, and that service genuinely subscribes on this
+        // host's own startup - the first real dial. A fake host now fails fast enough that
+        // BackgroundService.StartAsync propagates it into the whole host's own StartAsync, which
+        // WebApplicationFactory surfaces as a torn-down IServiceProvider on every later call, not as
+        // a clean startup failure - found live running this project's own real HTTP suite, not
+        // designed in. Points at PostgresFixture's own real RabbitMQ container instead
+        // (see that fixture's own remarks on why it now has one).
+        builder.UseSetting("Messaging:RabbitMq:HostName", fixture.RabbitMq.Hostname);
+        builder.UseSetting("Messaging:RabbitMq:Port", fixture.RabbitMq.GetMappedPublicPort(5672).ToString());
+        builder.UseSetting("Messaging:RabbitMq:UserName", "ago-test");
+        builder.UseSetting("Messaging:RabbitMq:Password", "ago-test-local-dev");
 
         // Wide open, so a rate limit never interferes with a test that is about something else. The
         // limiter's own behaviour is proved separately, against a real Redis, in

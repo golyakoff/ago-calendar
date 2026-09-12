@@ -1,7 +1,29 @@
 ﻿using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Domain;
+using Ago.Platform.Abstractions;
+using Ago.Platform.Kernel;
 
 namespace Ago.Calendar.Application.Tests;
+
+/// <summary>`25-63`: records what was staged, without EfOutboxWriter's own DbContext/transaction
+/// behaviour - that guarantee is proven against real Postgres in
+/// Ago.Calendar.Integration.Tests (testing.md: never mock the database for a guarantee the schema
+/// itself provides). The same shape `Ago.Chat.Application.Tests.Fakes.FakeOutboxWriter` already
+/// establishes.</summary>
+internal sealed class FakeOutboxWriter : IOutboxWriter
+{
+    public List<EventEnvelope> Enqueued { get; } = [];
+
+    public void Enqueue(EventEnvelope envelope, string? traceContext = null) => Enqueued.Add(envelope);
+}
+
+/// <summary>A real Guid each call, deterministic enough for these tests (which assert shape, not a
+/// specific id) - the identical shape `Ago.Chat.Application.Tests.Fakes.FakeIdGenerator`
+/// establishes.</summary>
+internal sealed class FakeIdGenerator : IIdGenerator
+{
+    public Guid NewId(DateTimeOffset now) => Guid.NewGuid();
+}
 
 /// <summary>
 /// Permissive by default and denied by name - the shape these tests want, because every one of them

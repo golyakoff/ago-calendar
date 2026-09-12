@@ -1,7 +1,12 @@
 ﻿using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
+using Ago.Calendar.Infrastructure.Postgres.Persistence;
+using Ago.Platform.Kernel;
+using Ago.Platform.Persistence.Postgres;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Ago.Calendar.Integration.Tests;
 
@@ -52,6 +57,48 @@ public class BookingStoreTests(PostgresFixture fixture)
         Assert.Equal("+79990000010", card.Phone.Value);
         Assert.Equal("Anna", card.DisplayName);
         Assert.Equal(0, card.NoShowCount);
+    }
+
+    /// <summary>
+    /// `25-63`: the claim's own half of this item's one push, staged onto the real `outbox` table in
+    /// the same transaction as the claim itself - see BookingStore.TryBookAsync's own remarks for why
+    /// that transaction needed a real SaveChangesAsync added to it (this raw-SQL claim never called
+    /// one before). `BookingPendingFanoutEndToEndTests` (this same test project) proves the row this
+    /// test finds is actually delivered to a connected operator, over a real broker; this test proves
+    /// only that the row lands correctly, the identical split `ModuleQuantityImpactRequestedWireTests`'
+    /// own remarks draw between staging and delivery.
+    /// </summary>
+    [Fact]
+    public async Task ASuccessfulClaim_StagesABookingPendingStateChangedRow()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var confirmation = await BookAsync(seed, slot.Id, "+79990000011", "Boris");
+        Assert.NotNull(confirmation);
+
+        // Queried by partition_key, not id: unlike BookingConfirmedMapper (which reuses the booking's
+        // own id as the outbox row's id, since a booking can only ever be confirmed once),
+        // BookingPendingStateChangedMapper mints a fresh MessageId every time - this fact can be
+        // staged twice for the same booking (entering, then later leaving) - so the booking's own id
+        // lives only in partition_key, this mapper's own remarks explain why.
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "select type, partition_key, payload from outbox where partition_key = @partitionKey and type = @type",
+            connection);
+        command.Parameters.AddWithValue("partitionKey", slot.Id.Value.ToString());
+        command.Parameters.AddWithValue("type", nameof(BookingPendingStateChanged));
+        await using var reader = await command.ExecuteReaderAsync();
+
+        Assert.True(await reader.ReadAsync(), "No outbox row was staged for the claim.");
+        Assert.Equal(nameof(BookingPendingStateChanged), reader.GetString(0));
+        Assert.Equal(slot.Id.Value.ToString(), reader.GetString(1));
+
+        var contract = System.Text.Json.JsonSerializer.Deserialize<BookingPendingStateChanged>(reader.GetString(2))!;
+        Assert.Equal(seed.Tenant.Id.Value, contract.TenantId);
+        Assert.Equal("PendingConfirmation", contract.Status);
+
+        Assert.False(await reader.ReadAsync(), "Exactly one row per claim, not one per attempt.");
     }
 
     [Fact]
@@ -361,7 +408,7 @@ public class BookingStoreTests(PostgresFixture fixture)
     {
         var now = at ?? Now;
         await using var db = fixture.CreateDbContext();
-        return await new BookingStore(db).TryBookAsync(
+        return await new BookingStore(db, new EfOutboxWriter<AgoCalendarDbContext>(db), new UuidV7Generator()).TryBookAsync(
             new BookingAttempt(
                 seed.Tenant.Id,
                 seed.Calendar.Id,

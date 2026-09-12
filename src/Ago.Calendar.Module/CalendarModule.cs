@@ -13,6 +13,7 @@ using Ago.Calendar.Application.UseCases.Provisioning;
 using Ago.Calendar.Application.UseCases.PublicBooking;
 using Ago.Calendar.Application.UseCases.RecutSchedule;
 using Ago.Calendar.Application.UseCases.WorkerSlots;
+using Ago.Calendar.Application.UseCases.ResolveBookingPendingDelivery;
 using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Postgres.Schema;
 using Ago.Calendar.Infrastructure.Redis;
@@ -20,6 +21,7 @@ using Ago.Calendar.Infrastructure.Time;
 using Ago.Calendar.Module.PhoneVerification;
 using Ago.Platform.Hosting;
 using Ago.Platform.Messaging.RabbitMq;
+using Ago.Platform.Realtime;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -90,6 +92,18 @@ public sealed class CalendarModule : IProductModule
         // Worker publishes to - a deploy-time configuration fact, not something this module can assert.
         services.AddRabbitMqMessaging(configuration);
 
+        // `25-63`: this product's first SignalR hub - the same platform package `ago-chat`'s own
+        // OperatorHub/VisitorHub already depend on for the connection registry and the cross-node
+        // fan-out, consumed genuinely rather than reimplemented (docs/architecture/repositories.md,
+        // the item's own "AGO Calendar is additive" boundary). Registered for every host, the same
+        // "hosts differ in what they run, not in what the product is" shape AddCalendarRateLimiting/
+        // AddRabbitMqMessaging above already follow: only Ago.Calendar.Api ever holds a hub
+        // connection or resolves ConnectionHeartbeat/NodeDeliveryConsumer/ConnectionDrainCoordinator
+        // (that host's own Program.cs), but Ago.Calendar.Worker's own BookingPendingFanoutConsumer
+        // resolves ResolveBookingPendingDeliveryTargetsHandler below, which needs the
+        // INodeFanoutPublisher this same call registers.
+        services.AddConnectionRegistry(configuration);
+
         services.AddScoped<MaterializeAvailabilityHandler>();
         services.AddScoped<DeleteDayOffHandler>();
         services.AddScoped<EditDayBoundaryHandler>();
@@ -145,6 +159,11 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<CancelBookingHandler>();
         services.AddScoped<MarkNoShowHandler>();
         services.AddScoped<GetPendingBookingsForTenantHandler>();
+
+        // `25-63`: the fan-out's own resolve step - Ago.Calendar.Worker.BookingPendingFanoutConsumer
+        // is the one caller, resolving this per message the same "one DI scope per message" shape
+        // TeamChatFanoutConsumer/ConnectionFanoutConsumer already establish in ago-chat.
+        services.AddScoped<ResolveBookingPendingDeliveryTargetsHandler>();
 
         // `23-34`: what is actually booked, across every calendar - a read, never an action, so it
         // sits beside the queue's own registration rather than among the three transitions above it.

@@ -21,6 +21,12 @@ public class BookingLifecycleHandlerTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal(EventStatus.Cancelled, Assert.Single(world.Events.Saved).Status);
+
+        // `25-63`: leaving PendingConfirmation stages exactly one BookingPendingStateChanged row -
+        // the fact BookingPendingFanoutEndToEndTests (Ago.Calendar.Integration.Tests) proves actually
+        // reaches a connected operator, over a real broker.
+        var staged = Assert.Single(world.Outbox.Enqueued);
+        Assert.Equal(nameof(Ago.Calendar.Contracts.BookingPendingStateChanged), staged.Type);
     }
 
     [Fact]
@@ -49,6 +55,30 @@ public class BookingLifecycleHandlerTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal(EventStatus.Cancelled, Assert.Single(world.Events.Saved).Status);
+
+        // `25-63`: this booking was already Booked, never PendingConfirmation - it was not in the
+        // pending queue for this item's own push to report as having left, so nothing is staged. See
+        // CancelBookingHandler's own doc comment for why this is the one case its Cancel-driven push
+        // must decline, unlike Reject (whose Event.Reject only ever runs on a still-pending row).
+        Assert.Empty(world.Outbox.Enqueued);
+    }
+
+    [Fact]
+    public async Task Cancel_TransitionsAPendingBookingToCancelled_AndStagesTheSamePushAsReject()
+    {
+        var world = new World(BookingFixtures.PendingBooking());
+
+        var result = await world.CancelAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(EventStatus.Cancelled, Assert.Single(world.Events.Saved).Status);
+
+        // `25-63`: unlike cancelling an already-Booked booking above, this one really did leave
+        // PendingConfirmation - an operator can cancel a still-pending booking directly, without
+        // rejecting it first (CancelBookingHandler's own doc comment), and the queue's own push must
+        // fire for that path exactly as it does for Reject.
+        var staged = Assert.Single(world.Outbox.Enqueued);
+        Assert.Equal(nameof(Ago.Calendar.Contracts.BookingPendingStateChanged), staged.Type);
     }
 
     [Fact]
@@ -235,14 +265,21 @@ public class BookingLifecycleHandlerTests
             _routeEventId = routeEventId ?? BookingFixtures.EventId;
             var clock = new FakeClock(at ?? BookingFixtures.Now);
 
-            _reject = new RejectBookingHandler(Events, Permissions, clock);
-            _cancel = new CancelBookingHandler(Events, Permissions, clock);
+            _reject = new RejectBookingHandler(Events, Permissions, Outbox, IdGenerator, clock);
+            _cancel = new CancelBookingHandler(Events, Permissions, Outbox, IdGenerator, clock);
             _noShow = new MarkNoShowHandler(Events, Permissions, clock);
         }
 
         public FakeEventRepositoryWithSaves Events { get; }
 
         public FakePermissionChecker Permissions { get; } = new();
+
+        /// <summary>`25-63`: what Reject/Cancel staged, if anything - the unit-level half of the
+        /// proof that "leaving pending" pushes a real event; BookingPendingFanoutEndToEndTests
+        /// (Ago.Calendar.Integration.Tests) proves the rest of the path, over a real broker.</summary>
+        public FakeOutboxWriter Outbox { get; } = new();
+
+        public FakeIdGenerator IdGenerator { get; } = new();
 
         public Task<Ago.Platform.Kernel.Result> RejectAsync() =>
             _reject.HandleAsync(

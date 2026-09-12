@@ -168,6 +168,13 @@ public sealed class ExpiredBookingConfirmer(
             // otherwise stage three BookingConfirmed messages for one appointment, which `20-05`'s SMS
             // consumer would turn into three identical texts to one customer.
             outbox.Enqueue(BookingConfirmedMapper.ToEnvelope(anchorConfirmed!, idGenerator, groupEndsAt));
+
+            // `25-63`: the same booking, leaving PendingConfirmation the other way - the sweep's own
+            // half of this item's one push. Also once per booking, the identical reasoning as the
+            // BookingConfirmed row immediately above: the console's own queue counts bookings, not
+            // slots, and three pushes for one appointment would just mean three redundant re-reads.
+            outbox.Enqueue(BookingPendingStateChangedMapper.ToEnvelope(
+                anchorConfirmed!.EventId, tenantId, "Booked", now, idGenerator));
         }
 
         // One SaveChangesAsync for every row's transition and every group's outbox row together -

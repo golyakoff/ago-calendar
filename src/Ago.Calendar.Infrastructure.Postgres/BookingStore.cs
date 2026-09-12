@@ -1,6 +1,9 @@
 ﻿using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Application.Mapping;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres.Persistence;
+using Ago.Platform.Abstractions;
+using Ago.Platform.Kernel;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
@@ -8,7 +11,8 @@ using Npgsql;
 namespace Ago.Calendar.Infrastructure.Postgres;
 
 /// <summary>
-/// Two statements, one transaction, no reads that a decision depends on.
+/// Two raw statements plus, since `25-63`, one ordinary EF <c>SaveChangesAsync</c> staging the
+/// outbox row - all inside one transaction, no reads that a decision depends on.
 ///
 /// <para><b>Raw SQL, and the exact reason it is raw.</b> Both statements below are compare-and-set
 /// shaped, and EF Core cannot express either as one round trip. The claim's verdict *is* its
@@ -25,7 +29,8 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 /// future caller with an ambient transaction gets the same behaviour for free - the shape ago-chat's
 /// <c>OperatorCapacityStore</c> settled on after `4-02` needed exactly that.</para>
 /// </summary>
-public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
+public sealed class BookingStore(
+    AgoCalendarDbContext db, IOutboxWriter outbox, IIdGenerator idGenerator) : IBookingStore
 {
     /// <summary>
     /// The lead card, found-or-created in one statement.
@@ -173,6 +178,18 @@ public sealed class BookingStore(AgoCalendarDbContext db) : IBookingStore
             await transaction.RollbackAsync(cancellationToken);
             return null;
         }
+
+        // `25-63`: the booking just entered PendingConfirmation - the "entering" half of this item's
+        // one push, staged onto the outbox in the same transaction as the claim itself (CLAUDE.md
+        // rule 4). The two raw commands above never touch `db`'s own change tracker or call
+        // SaveChangesAsync, so `IOutboxWriter.Enqueue` staging a row onto that same tracker would sit
+        // there unflushed forever without the SaveChangesAsync below - ExpiredBookingConfirmer's own
+        // ClaimAnchorsSql/ClaimGroupMembersSql pair (also raw SQL under an explicit transaction) is
+        // the precedent for pairing a raw statement with one EF SaveChangesAsync on the identical
+        // ambient transaction rather than a second, separate one.
+        outbox.Enqueue(BookingPendingStateChangedMapper.ToEnvelope(
+            confirmation.Value.BookingId, attempt.TenantId, "PendingConfirmation", attempt.Now, idGenerator));
+        await db.SaveChangesAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
         return confirmation;

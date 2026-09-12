@@ -57,6 +57,10 @@
          broker connection, consuming a topic `ago-chat` publishes rather than one this product
          produces. Same pinned version as every other Ago.Platform.* package here. -->
     <PackageVersion Include="Ago.Platform.Messaging.RabbitMq" Version="0.20.0" />
+    <!-- `25-63`: CalendarOperatorHub's own connection registry/scale-out - the platform package
+         ago-chat's OperatorHub already depends on for the identical job, consumed here rather than
+         reimplemented. Same pinned version as every other Ago.Platform.* package here. -->
+    <PackageVersion Include="Ago.Platform.Realtime" Version="0.20.0" />
   </ItemGroup>
 
   <ItemGroup Label="Hosting">

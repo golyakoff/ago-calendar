@@ -8,6 +8,7 @@ using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Postgres.Persistence;
 using Ago.Calendar.Infrastructure.Time;
 using Ago.Platform.Kernel;
+using Ago.Platform.Persistence.Postgres;
 
 namespace Ago.Calendar.Integration.Tests;
 
@@ -136,7 +137,9 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
         ArgumentNullException.ThrowIfNull(seed);
 
         await using var db = fixture.CreateDbContext();
-        var cancelHandler = new CancelBookingHandler(new EventRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), Clock);
+        var cancelHandler = new CancelBookingHandler(
+            new EventRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+            new EfOutboxWriter<AgoCalendarDbContext>(db), new UuidV7Generator(), Clock);
         var handler = new RecutConfirmHandler(
             new BookingCalendarRepository(db),
             new WorkerRepository(db),

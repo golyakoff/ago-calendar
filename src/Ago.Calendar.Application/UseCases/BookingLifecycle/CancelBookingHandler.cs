@@ -1,5 +1,7 @@
 ﻿using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Application.Mapping;
 using Ago.Calendar.Domain;
+using Ago.Platform.Abstractions;
 using Ago.Platform.Kernel;
 
 namespace Ago.Calendar.Application.UseCases.BookingLifecycle;
@@ -19,10 +21,20 @@ namespace Ago.Calendar.Application.UseCases.BookingLifecycle;
 /// and nothing re-materialises a slot there, because the materialiser only ever fills days with no
 /// rows at all (adr/0053). Whether a cancellation should re-open the slot is a real product question
 /// and it is still nobody's yet; recorded here rather than answered.</para>
+///
+/// <para><b>`25-63`: a push only when this cancellation actually left PendingConfirmation.</b> Unlike
+/// <see cref="RejectBookingHandler"/>, whose <see cref="Event.Reject"/> only ever runs on a still-pending
+/// row, this handler's own <see cref="Event.Cancel"/> accepts <see cref="EventStatus.Booked"/> too - and
+/// a booking cancelled out of <c>Booked</c> was not in the pending queue for this item's own push to
+/// report as having left. <see cref="HandleAsync"/> reads the group's status before calling
+/// <see cref="Event.Cancel"/> for exactly this reason: after the call every row already reads
+/// <see cref="EventStatus.Cancelled"/>, which cannot distinguish the two starting states any more.</para>
 /// </summary>
 public sealed class CancelBookingHandler(
     IEventRepository events,
     IPermissionChecker permissions,
+    IOutboxWriter outbox,
+    IIdGenerator idGenerator,
     IClock clock)
 {
     public async Task<Result> HandleAsync(CancelBooking command, CancellationToken cancellationToken)
@@ -49,6 +61,11 @@ public sealed class CancelBookingHandler(
         // group before transitioning anything. A never-claimed row (BookingId null) is its own group
         // of one, which is also what Event.Cancel's own state check then correctly refuses.
         var group = await events.ListByBookingIdAsync(booking.BookingId ?? booking.Id, cancellationToken);
+        var now = clock.UtcNow;
+
+        // `25-63`: captured before Cancel() below overwrites it on every row - see this class's own
+        // remarks on why "was this group pending" has to be read here rather than after.
+        var wasPending = group.Count > 0 && group[0].Status == EventStatus.PendingConfirmation;
 
         try
         {
@@ -61,7 +78,7 @@ public sealed class CancelBookingHandler(
                 // machine. Every row of the run is cancelled together, in memory, before anything is
                 // saved - so a row that refuses (already cancelled by a previous partial attempt, say)
                 // aborts the whole group rather than leaving some rows transitioned and others not.
-                slot.Cancel(clock.UtcNow);
+                slot.Cancel(now);
             }
         }
         catch (InvalidEventStateException exception)
@@ -69,7 +86,15 @@ public sealed class CancelBookingHandler(
             return BookingLifecycleErrors.InvalidState(exception.Message);
         }
 
-        // See RejectBookingHandler for why EventCancelled is not staged to the outbox.
+        // See RejectBookingHandler for why EventCancelled itself is not staged to the outbox, and its
+        // own remarks (mirrored here) for the different, narrower BookingPendingStateChanged fact
+        // `25-63` does stage - only when it is true, per this class's own doc comment above.
+        if (wasPending)
+        {
+            outbox.Enqueue(BookingPendingStateChangedMapper.ToEnvelope(
+                booking.BookingId ?? booking.Id, command.TenantId, group[0].Status.ToString(), now, idGenerator));
+        }
+
         foreach (var slot in group)
         {
             slot.ClearDomainEvents();

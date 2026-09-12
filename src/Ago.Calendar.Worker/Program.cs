@@ -83,6 +83,19 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<ModuleQuantityImpactRequestedConsumer>();
 
+// `25-63`: this product's own first fan-out consumer - reacts to a booking entering or leaving
+// PendingConfirmation (staged by BookingStore/ExpiredBookingConfirmer/RejectBookingHandler/
+// CancelBookingHandler) by pushing every connected operator of the tenant a "re-read the queue"
+// signal over Ago.Calendar.Api's own CalendarOperatorHub. Same registration shape as every consumer
+// above; unlike them, its own recipient resolution needs no Ago.Calendar.Worker-specific wiring
+// beyond this - INodeFanoutPublisher/IConnectionRegistry both come from CalendarModule's own
+// AddConnectionRegistry call.
+builder.Services
+    .AddOptions<BookingPendingFanoutConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(BookingPendingFanoutConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<BookingPendingFanoutConsumer>();
+
 // `25-44`: this host's own outbox dispatcher - drains the `outbox` table to RabbitMQ, the identical
 // mechanism `Ago.Chat.Worker.OutboxDispatcher` already runs for chat. Every row this product stages
 // (`BookingConfirmed` since `20-04`, `ModuleQuantityImpactComputed` staged by the consumer just above)

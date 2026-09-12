@@ -3,16 +3,20 @@ using Ago.Calendar.Api.Booking;
 using Ago.Calendar.Api.ChatModule;
 using Ago.Calendar.Api.Configuration;
 using Ago.Calendar.Api.Cors;
+using Ago.Calendar.Api.Hubs;
 using Ago.Calendar.Api.Me;
 using Ago.Calendar.Api.PhoneVerification;
 using Ago.Calendar.Api.Provisioning;
 using Ago.Calendar.Api.PublicBookingApi;
+using Ago.Calendar.Api.Realtime;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Postgres.Schema;
 using Ago.Calendar.Module;
+using Ago.Platform.Abstractions;
 using Ago.Platform.Caching.Redis;
 using Ago.Platform.Hosting;
+using Ago.Platform.Realtime;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
@@ -64,6 +68,51 @@ builder.Services.AddOptions<PublicBookingApiOptions>()
     .ValidateOnStart();
 builder.Services.AddSingleton(provider => provider.GetRequiredService<IOptions<PublicBookingApiOptions>>().Value);
 
+// `25-63`: CalendarOperatorHub's own wiring - the identical shape Ago.Chat.Api's Program.cs already
+// uses for OperatorHub/VisitorHub (`3-01`/`3-02`/`3-06`). Ago.Calendar.Api is the only host that
+// holds a hub connection - CalendarModule's own AddConnectionRegistry call (every host) registers
+// the DI surface; only resolving IConnectionRegistry here (which the heartbeat triggers) actually
+// opens the Redis connection.
+//
+// AddSignalR itself, not only MapHub below: MapHub wires the request pipeline (the route), it does
+// not register IHubContext<CalendarOperatorHub> or any of SignalR's own DI surface -
+// SignalRConnectionDispatcher (this host's own ILocalConnectionDispatcher) takes an
+// IHubContext<CalendarOperatorHub> constructor dependency, so without this call the service provider
+// fails validation before the app can even start (found live, not assumed - the first run of this
+// host's own WebApplicationFactory-backed tests after adding the hub failed exactly this way).
+builder.Services.AddSignalR(options =>
+{
+    // Ago.Chat.Api's own identical setting and reasoning: a hub exception's real message and stack
+    // trace go to a client only in Development - the generic "Failed to invoke 'X' due to an error on
+    // the server" SignalR sends by default is not enough to debug against by hand.
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+});
+builder.Services.AddHostedService<ConnectionHeartbeat>();
+builder.Services.AddSingleton<CalendarHubConnectionRegistration>();
+// ConsoleOrigins is already registered above for TenantOriginCorsPolicyProvider's own layer-1 CORS
+// check - this hub reuses that exact singleton rather than a second copy of the same list.
+builder.Services.AddSingleton<CalendarConsoleOriginValidator>();
+
+// The receiving half of realtime.md's Fan-out path, ported unchanged - consumes this node's own
+// topic and pushes to CalendarOperatorHub (SignalRConnectionDispatcher, this product's own single-hub
+// simplification of Ago.Chat.Api's own dispatcher).
+builder.Services.AddSingleton<ILocalConnectionDispatcher, SignalRConnectionDispatcher>();
+builder.Services.AddHostedService<NodeDeliveryConsumer>();
+
+// `Ago.Platform.Realtime.ConnectionDrainCoordinator` (concurrency.md's graceful-shutdown sequence,
+// `Ago.Chat.Api`'s own `3-06`) is deliberately not registered here. Found live while verifying this
+// item: `ConnectionDrainCoordinator.StopAsync` calls `IConnectionRegistry.RemoveNodeAsync`, a real
+// Redis write, and `Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory`'s own host teardown
+// (`CalendarApiFactory`, used by every real-HTTP test in this project) disposes the DI container's
+// `IConnectionMultiplexer` singleton before that call runs, throwing `ObjectDisposedException` out of
+// every such test's own `DisposeAsync` - not a bug in the coordinator itself, but a real
+// incompatibility between it and this project's existing test harness that this item did not sign up
+// to fix. Graceful drain is an operational hardening step this hub's Done-when never asked for
+// (`docs/backlog/25-63-*.md`'s own Scope: authenticate, scope to tenant, push one event); adding it
+// now, working around a test-harness interaction nobody has diagnosed yet, is exactly the premature
+// generalisation CLAUDE.md warns a platform-adjacent layer against. A future item that wants it can
+// add the registration and fix the harness interaction as its own, scoped piece of work.
+
 var app = builder.Build();
 
 // `20-21`/`adr/0056`: run before anything can listen, and deliberately not as an IHostedService -
@@ -107,6 +156,12 @@ app.MapChatModuleTaskEndpoints();
 // `22-11`: the generic provisioning surface that makes the row ChatModuleTaskEndpoints checks on
 // every call actually exist - see ModuleRegistrationEndpoints's own remarks.
 app.MapModuleRegistrationEndpoints();
+
+// `25-63`: this product's first SignalR hub. Same path segment as Ago.Chat.Api's own operator hub
+// (`/hubs/operator`) - harmless, since the two are different origins entirely (repositories.md), and
+// keeping the name identical is what let AuthenticationSetup's own HubTokenFromQueryString reuse the
+// exact "restricted to this hub's own path" pattern Ago.Chat.Api/Program.cs already established.
+app.MapHub<CalendarOperatorHub>("/hubs/operator");
 
 // Outside Production only - see DevProvisioningEndpoints for why the gate is the environment.
 if (!app.Environment.IsProduction())

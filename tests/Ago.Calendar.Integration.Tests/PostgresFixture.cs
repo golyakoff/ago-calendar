@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Testcontainers.PostgreSql;
+using Testcontainers.RabbitMq;
 using Testcontainers.Redis;
 
 namespace Ago.Calendar.Integration.Tests;
@@ -14,8 +15,12 @@ namespace Ago.Calendar.Integration.Tests;
 /// </summary>
 public sealed class PostgresFixture : IAsyncLifetime
 {
+    private const string RabbitMqUsername = "ago-test";
+    private const string RabbitMqPassword = "ago-test-local-dev";
+
     private PostgreSqlContainer _container = null!;
     private RedisContainer _redis = null!;
+    private RabbitMqContainer _rabbitMq = null!;
     private IDisposable _dockerLock = null!;
 
     public NpgsqlDataSource DataSource { get; private set; } = null!;
@@ -30,16 +35,40 @@ public sealed class PostgresFixture : IAsyncLifetime
     /// not one per collection.</summary>
     public string RedisConnectionString { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// `25-63`: a real RabbitMQ - <c>CalendarOperatorHub</c>'s own host-side wiring
+    /// (<c>Ago.Calendar.Api/Program.cs</c>'s new <c>NodeDeliveryConsumer</c> hosted service) now
+    /// actively subscribes on this host's own startup, the first thing in <c>Ago.Calendar.Api</c>
+    /// that genuinely dials the broker rather than only registering DI services nothing resolves
+    /// (<c>CalendarModule</c>'s own long-standing "Ago.Calendar.Api never resolves IEventConsumer"
+    /// comment, true until this item).
+    ///
+    /// <para><b>Found live while verifying this item, not designed in from the start.</b> Every
+    /// <c>CalendarApiFactory</c>-backed test failed with a torn-down <c>IServiceProvider</c> the
+    /// moment this fixture's own previous "Messaging:RabbitMq:HostName" setting
+    /// (<c>rabbitmq.invalid</c>, deliberately never dialled) met a hosted service that actually
+    /// dials it: <c>BackgroundService.StartAsync</c> propagates that connection failure early enough
+    /// to abort the whole host's own <c>StartAsync</c>, before <c>WebApplicationFactory</c> ever
+    /// hands back a working client. A real, lightweight broker here is the honest fix - the identical
+    /// "a real dependency now exists, so the fixture must offer a real one" reason `20-03` already
+    /// added Redis for.</para>
+    /// </summary>
+    public RabbitMqContainer RabbitMq { get; private set; } = null!;
+
     public async Task InitializeAsync()
     {
         _dockerLock = await DockerResourceLock.AcquireAsync();
 
         _container = new PostgreSqlBuilder("postgres:17-alpine").Build();
         _redis = new RedisBuilder("redis:7-alpine").Build();
-        await Task.WhenAll(_container.StartAsync(), _redis.StartAsync());
+        _rabbitMq = new RabbitMqBuilder("rabbitmq:4-management")
+            .WithUsername(RabbitMqUsername).WithPassword(RabbitMqPassword)
+            .Build();
+        await Task.WhenAll(_container.StartAsync(), _redis.StartAsync(), _rabbitMq.StartAsync());
 
         ConnectionString = _container.GetConnectionString();
         RedisConnectionString = _redis.GetConnectionString();
+        RabbitMq = _rabbitMq;
         DataSource = new NpgsqlDataSourceBuilder(ConnectionString).Build();
 
         await using var db = CreateDbContext();
@@ -49,8 +78,7 @@ public sealed class PostgresFixture : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await DataSource.DisposeAsync();
-        await _redis.DisposeAsync();
-        await _container.DisposeAsync();
+        await Task.WhenAll(_redis.DisposeAsync().AsTask(), _container.DisposeAsync().AsTask(), _rabbitMq.DisposeAsync().AsTask());
         _dockerLock.Dispose();
     }
 

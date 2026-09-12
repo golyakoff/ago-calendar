@@ -15,4 +15,13 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
   </ItemGroup>
 
+  <!-- `25-63`: CalendarOperatorHub's own host-side wiring - ConnectionHeartbeat, NodeDeliveryConsumer,
+       ConnectionDrainCoordinator and DrainHealthCheck are all resolved directly in this host's own
+       Program.cs, the identical shape Ago.Chat.Api's Program.cs already uses for OperatorHub/
+       VisitorHub. Arrives transitively through Ago.Calendar.Module too (AddConnectionRegistry), named
+       here as well because Program.cs references these types by name, not only through DI. -->
+  <ItemGroup>
+    <PackageReference Include="Ago.Platform.Realtime" />
+  </ItemGroup>
+
 </Project>

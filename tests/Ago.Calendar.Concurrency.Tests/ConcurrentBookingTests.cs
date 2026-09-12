@@ -1,6 +1,9 @@
 ﻿using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
+using Ago.Calendar.Infrastructure.Postgres.Persistence;
+using Ago.Platform.Kernel;
+using Ago.Platform.Persistence.Postgres;
 using Microsoft.EntityFrameworkCore;
 
 namespace Ago.Calendar.Concurrency.Tests;
@@ -227,7 +230,7 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
         // compare-and-set is supposed to be tested across.
         await db.Database.OpenConnectionAsync();
 
-        var store = new BookingStore(db);
+        var store = new BookingStore(db, new EfOutboxWriter<AgoCalendarDbContext>(db), new UuidV7Generator());
         await gate.Task;
 
         return await store.TryBookAsync(

@@ -66,7 +66,11 @@ public sealed class OutboxDispatcherTests(ModuleQuantityGrantedWireFixture fixtu
         await using (var verify = fixture.CreateDbContext())
         {
             var staged = await verify.Set<OutboxMessage>().CountAsync(o => o.PublishedAt == null, CancellationToken.None);
-            Assert.Equal(2, staged); // both committed, neither published - the exact "sits there forever" this item fixes.
+            // `25-63`: three, not two, since ExpiredBookingConfirmer now also stages
+            // BookingPendingStateChanged ("Booked", the sweep's own half of that item's push)
+            // alongside BookingConfirmed, in the identical transaction - all three committed, none
+            // published yet, the exact "sits there forever" this item fixes.
+            Assert.Equal(3, staged);
         }
 
         var receivedBookingConfirmed = new ConcurrentBag<EventEnvelope>();

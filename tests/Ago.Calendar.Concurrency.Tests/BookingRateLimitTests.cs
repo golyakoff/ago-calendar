@@ -1,8 +1,10 @@
 ﻿using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
+using Ago.Calendar.Infrastructure.Postgres.Persistence;
 using Ago.Platform.Caching.Redis;
 using Ago.Platform.Kernel;
+using Ago.Platform.Persistence.Postgres;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Polly;
@@ -174,7 +176,7 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
             new WorkerRepository(db),
             new ServiceRepository(db),
             new WorkerScheduleRepository(db),
-            new BookingStore(db),
+            new BookingStore(db, new EfOutboxWriter<AgoCalendarDbContext>(db), new UuidV7Generator()),
             new RedisRateLimiter(
                 fixture.RedisMultiplexer,
                 new ResiliencePipelineBuilder().AddTimeout(TimeSpan.FromSeconds(5)).Build(),

@@ -2,6 +2,7 @@
 using Ago.Calendar.Domain;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Ago.Calendar.Api.Auth;
@@ -80,6 +81,14 @@ public static class AuthenticationSetup
                     // accepted-after-expiry is five minutes a revoked operator keeps working.
                     ClockSkew = TimeSpan.Zero,
                 };
+
+                // `25-63`: this product's first SignalR hub. A browser's WebSocket upgrade cannot
+                // carry an Authorization header, so `Ago.Calendar.Api/Realtime`'s console client
+                // passes the token as `?access_token=...` instead - the same standard ASP.NET Core
+                // SignalR pattern `Ago.Chat.Api/Program.cs`'s own `HubTokenFromQueryString` already
+                // uses, restricted to this hub's own path so an ordinary REST call's query string is
+                // never read as a bearer credential.
+                options.Events = HubTokenFromQueryString("/hubs/operator");
             });
 
         services.AddAuthorization(options =>
@@ -113,6 +122,26 @@ public static class AuthenticationSetup
 
         return services;
     }
+
+    /// <summary>`25-63`: this product's own copy of `Ago.Chat.Api/Program.cs`'s own local function of
+    /// the identical name - restricted to <paramref name="hubPath"/> so a token riding in a query
+    /// string is only ever honoured on the one path that genuinely needs it, never on an ordinary
+    /// authenticated REST call where a query-string bearer token would be a needless way to leak one
+    /// (into server logs, a browser's history, a referrer header) that this product's REST callers do
+    /// not use anyway.</summary>
+    private static JwtBearerEvents HubTokenFromQueryString(string hubPath) => new()
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            if (!string.IsNullOrEmpty(accessToken) && context.HttpContext.Request.Path.StartsWithSegments(hubPath))
+            {
+                context.Token = accessToken;
+            }
+
+            return Task.CompletedTask;
+        },
+    };
 }
 
 /// <summary>

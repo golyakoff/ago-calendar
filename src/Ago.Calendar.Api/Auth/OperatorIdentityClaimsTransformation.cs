@@ -82,6 +82,13 @@ public sealed class OperatorIdentityClaimsTransformation(
     /// </summary>
     public const string ActiveSiteHeaderName = "X-Ago-Active-Site";
 
+    /// <summary>`25-63`: the hub-handshake fallback - see <see cref="ReadRequestedTenantId"/>'s own
+    /// remarks. Spelled identically to `ago-chat`'s own
+    /// <c>OperatorIdentityClaimsTransformation.ActiveSiteQueryParameterName</c> ("activeSite") on
+    /// purpose - the same console sends both, and a second spelling for the identical concept would
+    /// be one more thing for it to remember which backend gets which.</summary>
+    public const string ActiveSiteQueryParameterName = "activeSite";
+
     public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)
     {
         ArgumentNullException.ThrowIfNull(principal);
@@ -129,12 +136,17 @@ public sealed class OperatorIdentityClaimsTransformation(
     /// <summary>
     /// `22-14`: the tenant this request asked to act in, or <see langword="null"/> for "did not ask".
     ///
-    /// <para><b>Header only - no query-string fallback</b>, unlike `ago-chat`'s equivalent. That
-    /// fallback exists there for one reason: a browser cannot attach a custom header to a WebSocket
-    /// upgrade, and `ago-chat` has a SignalR hub. This product has none (<c>AuthenticationSetup</c>'s
-    /// own "one scheme, not two" remarks - there is no visitor and no realtime surface here), so
-    /// adding a second place a caller could name a tenant would be a second thing to keep verified
-    /// for a client that does not exist.</para>
+    /// <para><b>`25-63` correction: header first, then a query-string fallback - the "no fallback"
+    /// claim this doc comment used to make here is no longer true.</b> It was written when this
+    /// product had no SignalR hub at all ("there is no visitor and no realtime surface here"); `25-63`
+    /// adds <c>CalendarOperatorHub</c>, and the identical constraint `ago-chat`'s own equivalent names
+    /// now applies here too - a browser cannot attach a custom header to a WebSocket upgrade, the same
+    /// reason this product's own bearer token already rides in the hub URL's query string instead of
+    /// an <c>Authorization</c> header (<c>AuthenticationSetup.HubTokenFromQueryString</c>). This reads
+    /// <see cref="ActiveSiteQueryParameterName"/> as a fallback when the header is absent, the same
+    /// two-form shape `ago-chat`'s <c>OperatorIdentityClaimsTransformation.ReadRequestedSiteId</c>
+    /// already uses and for the identical reason - `ago-console`'s own hub connection code is what
+    /// actually sets it that way for the hub URL.</para>
     ///
     /// <para>A value that is not a <see cref="Guid"/> reads as absent rather than as a refusal: it
     /// names no tenant, so it has selected none, and the ordinary single-tenancy resolution applies.
@@ -145,6 +157,11 @@ public sealed class OperatorIdentityClaimsTransformation(
     private TenantId? ReadRequestedTenantId()
     {
         var raw = httpContexts.HttpContext?.Request.Headers[ActiveSiteHeaderName].FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            raw = httpContexts.HttpContext?.Request.Query[ActiveSiteQueryParameterName].FirstOrDefault();
+        }
+
         return !string.IsNullOrWhiteSpace(raw) && Guid.TryParse(raw, out var tenantId)
             ? new TenantId(tenantId)
             : null;

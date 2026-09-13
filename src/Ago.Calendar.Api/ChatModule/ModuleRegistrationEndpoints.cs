@@ -2,6 +2,7 @@
 using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.UseCases.ChatModuleRegistration;
 using Ago.Calendar.Application.UseCases.TenantErasure;
+using Ago.Calendar.Application.UseCases.TenantExport;
 using Ago.Calendar.Domain;
 
 namespace Ago.Calendar.Api.ChatModule;
@@ -53,6 +54,11 @@ public static class ModuleRegistrationEndpoints
         // reasoning this route family already keeps rotate and revoke apart for (this file's own
         // opening remarks).
         group.MapDelete("/{tenantId:guid}/tenant-data", HandleEraseAsync).WithName("EraseChatModuleTenantData");
+        // `22-31`: a distinct verb on the identical path the DELETE just above uses - read, not
+        // destroy, authenticated the same way. See HandleExportAsync's own remarks for why this reuses
+        // the deployment-wide provisioning secret exactly as HandleEraseAsync's own remarks explain for
+        // that route.
+        group.MapGet("/{tenantId:guid}/tenant-data", HandleExportAsync).WithName("ExportChatModuleTenantData");
 
         return app;
     }
@@ -150,6 +156,51 @@ public static class ModuleRegistrationEndpoints
 
         var result = await handler.HandleAsync(new EraseTenantData(new TenantId(tenantId)), cancellationToken);
         return Results.Ok(new TenantErasureResponse(result.TenantExisted, result.Confirmed));
+    }
+
+    /// <summary>
+    /// `22-31`: `GET .../module-registrations/{tenantId}/tenant-data` - the read-only sibling of
+    /// <see cref="HandleEraseAsync"/> right above, on the identical path, authenticated the identical
+    /// way and for the identical reason that method's own remarks give: the deployment-wide
+    /// provisioning secret is what still answers for a tenant whose per-site `ModuleCredential` may be
+    /// revoked, lapsed, or never issued - exactly the reach this item's own backlog names as the reason
+    /// it depends on `22-30`.
+    ///
+    /// <para><b>Writes straight onto <see cref="HttpResponse.Body"/>, never buffers a response object
+    /// first.</b> Unlike every other handler in this class, this one has no value to wrap in
+    /// <c>Results.Ok(...)</c> - the whole response *is* the streamed archive
+    /// <see cref="ExportTenantDataHandler.HandleAsync"/> writes directly onto the body once headers are
+    /// set, which is what <see cref="ITenantDataExporter"/>'s own remarks call "never buffering the
+    /// result first" carried through to this endpoint. <c>Results.Empty</c> is returned only so this
+    /// method still fits the <c>Task&lt;IResult&gt;</c> shape Minimal API expects; nothing about it adds
+    /// its own content.</para>
+    ///
+    /// <para><b>The format version rides in a header, not the body.</b> The body is this product's own
+    /// opaque bytes end to end (<see cref="ITenantDataExporter"/>'s own remarks) - a version field
+    /// inside a JSON envelope would mean parsing the payload apart from its own format to read it, which
+    /// is exactly backwards for a value whose entire job is telling a reader how to parse everything
+    /// else. The header name, <c>X-Ago-Export-Format-Version</c>, must match
+    /// <c>Ago.Chat.Infrastructure.Modules.HttpModuleRegistrationGateway</c>'s own constant on the chat
+    /// side byte-for-byte - kept in sync only by convention across the two repositories (`adr/0093`: no
+    /// shared assembly), the same way every other wire shape in this file already is.</para>
+    /// </summary>
+    private static async Task<IResult> HandleExportAsync(
+        Guid tenantId,
+        ExportTenantDataHandler handler,
+        IModuleProvisioningAuthenticator authenticator,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (!authenticator.Authenticate(httpContext.Request.Headers[ProvisioningSecretHeaderName]))
+        {
+            return Results.Unauthorized();
+        }
+
+        httpContext.Response.ContentType = handler.ContentType;
+        httpContext.Response.Headers["X-Ago-Export-Format-Version"] = handler.FormatVersion.ToString();
+
+        await handler.HandleAsync(new ExportTenantData(new TenantId(tenantId)), httpContext.Response.Body, cancellationToken);
+        return Results.Empty;
     }
 
     private static async Task<IResult> HandleGetStatusAsync(

@@ -160,6 +160,10 @@ public static class ServiceCollectionExtensions
         // for why this is a separate port from ITenantRepository rather than a third method on it.
         services.AddScoped<ITenantErasureRepository, TenantErasureRepository>();
 
+        // `22-31`: the read-only sibling on the identical wire path - see ITenantDataExporter's own
+        // remarks for why this, too, is its own port rather than a third method on ITenantRepository.
+        services.AddScoped<ITenantDataExporter, TenantDataExportWriter>();
+
         // adr/0017: the platform's own generic outbox/inbox, bound to this product's context. The
         // tables exist from this migration onward; the first writer is `20-05`.
         services.AddOutboxInbox<AgoCalendarDbContext>();

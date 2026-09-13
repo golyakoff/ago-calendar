@@ -361,7 +361,8 @@ public static class ConsoleEndpoints
             await handler.HandleAsync(
                 new UpdateWorker(
                     principal.GetOperatorId(), principal.GetTenantId(), new WorkerId(workerId),
-                    request.LastName, request.FirstName, request.MiddleName, request.DisplayName, request.IsActive),
+                    request.LastName, request.FirstName, request.MiddleName, request.DisplayName, request.IsActive,
+                    request.ServiceIds ?? []),
                 cancellationToken),
             httpContext);
     }
@@ -462,7 +463,8 @@ public static class ConsoleEndpoints
         worker.DisplayNameIsCustom,
         worker.IsActive,
         worker.CreatedAt,
-        worker.UpdatedAt);
+        worker.UpdatedAt,
+        worker.ServiceIds);
 
     private static async Task<IResult> HandleAddWorkingHoursAsync(
         AddWorkingHoursRuleRequest request,

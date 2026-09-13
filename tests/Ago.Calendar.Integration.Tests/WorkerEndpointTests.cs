@@ -2,6 +2,7 @@
 using System.Net.Http.Json;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
+using Ago.Calendar.Infrastructure.Postgres;
 using Microsoft.EntityFrameworkCore;
 
 namespace Ago.Calendar.Integration.Tests;
@@ -48,12 +49,17 @@ public class WorkerEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.True(row.IsActive);
 
         var single = await GetAsync<WorkerResponse>($"/api/v1/console/workers/{seed.Worker.Id.Value}", seed);
-        Assert.Equal(row, single);
+        // `25-74`: not `Assert.Equal` - `WorkerResponse.ServiceIds` is a `List<Guid>` once round-tripped
+        // through JSON, and `List<T>` has no value equality, so two structurally-identical rows read
+        // through the list endpoint and the single-worker endpoint would never compare equal by
+        // reference. `Assert.Equivalent` compares every member structurally instead, which is what this
+        // assertion was always actually trying to prove.
+        Assert.Equivalent(row, single);
 
         // Rename before any custom display name is set - it keeps deriving.
         var afterRename = await SendAsync(
             HttpMethod.Put, $"/api/v1/console/workers/{seed.Worker.Id.Value}",
-            new UpdateWorkerRequest("Doe", "Alexandra", null, null, true), seed);
+            new UpdateWorkerRequest("Doe", "Alexandra", null, null, true, [seed.Service.Id.Value]), seed);
         Assert.Equal(HttpStatusCode.NoContent, afterRename.StatusCode);
         var renamed = await GetAsync<WorkerResponse>($"/api/v1/console/workers/{seed.Worker.Id.Value}", seed);
         Assert.Equal("Alexandra Doe", renamed.DisplayName);
@@ -63,7 +69,7 @@ public class WorkerEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         // custom value must win and freeze.
         var afterCustom = await SendAsync(
             HttpMethod.Put, $"/api/v1/console/workers/{seed.Worker.Id.Value}",
-            new UpdateWorkerRequest("Doeson", "Alexandra", "Petrovna", "Alexandra the Barber", false), seed);
+            new UpdateWorkerRequest("Doeson", "Alexandra", "Petrovna", "Alexandra the Barber", false, [seed.Service.Id.Value]), seed);
         Assert.Equal(HttpStatusCode.NoContent, afterCustom.StatusCode);
         var custom = await GetAsync<WorkerResponse>($"/api/v1/console/workers/{seed.Worker.Id.Value}", seed);
         Assert.Equal("Doeson", custom.LastName);
@@ -76,11 +82,50 @@ public class WorkerEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         // A further rename with no explicit display name must not un-freeze it.
         var afterFurtherRename = await SendAsync(
             HttpMethod.Put, $"/api/v1/console/workers/{seed.Worker.Id.Value}",
-            new UpdateWorkerRequest("Doeson", "Alexandra", "Petrovna", null, true), seed);
+            new UpdateWorkerRequest("Doeson", "Alexandra", "Petrovna", null, true, [seed.Service.Id.Value]), seed);
         Assert.Equal(HttpStatusCode.NoContent, afterFurtherRename.StatusCode);
         var stillCustom = await GetAsync<WorkerResponse>($"/api/v1/console/workers/{seed.Worker.Id.Value}", seed);
         Assert.Equal("Alexandra the Barber", stillCustom.DisplayName);
         Assert.True(stillCustom.IsActive);
+    }
+
+    /// <summary>
+    /// `25-74`'s own Done-when: "an operator can add a second service to an existing worker through
+    /// the console, and it is immediately offered at booking - proven end to end, not only that the
+    /// API call succeeds." The API call alone proves nothing about whether the booking surface
+    /// actually changed - <see cref="BookingSurfaceReadStore.ListWorkersAsync"/>, the same read the
+    /// public widget calls before offering a worker for a chosen service, is what this test checks
+    /// after the `PUT`, not the response status code.
+    /// </summary>
+    [Fact]
+    public async Task AddingASecondServiceThroughTheConsole_MakesTheWorkerBookableForIt()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var secondService = Service.Create(
+            new ServiceId(CalendarSeed.NewId()), seed.Tenant.Id, "Manicure", TimeSpan.FromMinutes(30));
+        await using (var db = fixture.CreateDbContext())
+        {
+            db.Services.Add(secondService);
+            await db.SaveChangesAsync();
+        }
+
+        var surface = new BookingSurfaceReadStore(fixture.DataSource);
+        Assert.Empty(await surface.ListWorkersAsync(seed.Calendar.Id, secondService.Id, CancellationToken.None));
+
+        var response = await SendAsync(
+            HttpMethod.Put, $"/api/v1/console/workers/{seed.Worker.Id.Value}",
+            new UpdateWorkerRequest(
+                "Doe", "Alex", null, null, true, [seed.Service.Id.Value, secondService.Id.Value]),
+            seed);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+
+        var bookable = await surface.ListWorkersAsync(seed.Calendar.Id, secondService.Id, CancellationToken.None);
+        var offering = Assert.Single(bookable);
+        Assert.Equal(seed.Worker.Id, offering.WorkerId);
+
+        // The original service is still offered too - this was an addition, not a replacement.
+        var stillOffersFirst = await surface.ListWorkersAsync(seed.Calendar.Id, seed.Service.Id, CancellationToken.None);
+        Assert.Single(stillOffersFirst, w => w.WorkerId == seed.Worker.Id);
     }
 
     [Fact]
@@ -186,7 +231,7 @@ public class WorkerEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 
         var response = await SendAsync(
             HttpMethod.Put, $"/api/v1/console/workers/{theirs.Worker.Id.Value}",
-            new UpdateWorkerRequest("Hacked", "Hacked", null, null, false), mine);
+            new UpdateWorkerRequest("Hacked", "Hacked", null, null, false, []), mine);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
 

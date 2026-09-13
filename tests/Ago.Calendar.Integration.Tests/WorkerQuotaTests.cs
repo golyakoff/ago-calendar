@@ -197,10 +197,11 @@ public sealed class WorkerQuotaTests(PostgresFixture fixture)
     {
         await using var db = fixture.CreateDbContext();
         var handler = new UpdateWorkerHandler(
-            new WorkerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(now));
+            new WorkerRepository(db), new ServiceRepository(db),
+            new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(now));
 
         return await handler.HandleAsync(
-            new UpdateWorker(seed.OperatorId, seed.Tenant.Id, workerId, lastName, firstName, null, null, isActive),
+            new UpdateWorker(seed.OperatorId, seed.Tenant.Id, workerId, lastName, firstName, null, null, isActive, []),
             CancellationToken.None);
     }
 

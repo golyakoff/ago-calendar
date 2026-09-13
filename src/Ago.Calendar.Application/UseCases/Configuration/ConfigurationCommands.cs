@@ -67,11 +67,18 @@ public readonly record struct CreateWorker(
     CalendarId CalendarId,
     IReadOnlyList<Guid> ServiceIds);
 
-/// <summary>`20-13`. Names, the optional custom display name, and the activity toggle - not the
-/// calendar or the services, which keep the surface they had: v1 is one calendar per worker and
-/// moving one is out of this item's scope (see the item's own "out of scope" section).</summary>
+/// <summary>`20-13`/`25-74`. Names, the optional custom display name, the activity toggle, and now
+/// the service list - not the calendar, which keeps the surface it had: v1 is one calendar per worker
+/// and moving one is still out of scope. <see cref="ServiceIds"/> broke this symmetry until `25-74`:
+/// <see cref="Worker.Offer"/> had exactly one call site, inside <c>CreateWorkerHandler</c>, so a
+/// service could be granted at creation and never again - see <see cref="UpdateWorkerHandler"/>'s own
+/// remarks for how this closes that gap.</summary>
 /// <param name="DisplayName">Non-null means a human edited the display-name field directly this
 /// call - see <see cref="CreateWorker.DisplayName"/> for the same rule at creation time.</param>
+/// <param name="ServiceIds">The worker's complete, desired set of services - replace semantics, the
+/// same shape <see cref="CreateWorker.ServiceIds"/> already uses, not a delta. A console screen holds
+/// checkboxes, not an add/remove pair, so the edit form always has the full set in hand and sending
+/// anything less would ask this handler to guess which absence was deliberate.</param>
 public readonly record struct UpdateWorker(
     OperatorId OperatorId,
     TenantId TenantId,
@@ -80,7 +87,8 @@ public readonly record struct UpdateWorker(
     string FirstName,
     string? MiddleName,
     string? DisplayName,
-    bool IsActive);
+    bool IsActive,
+    IReadOnlyList<Guid> ServiceIds);
 
 /// <summary>`20-13`. Refused - deleting nothing - if the worker has ever been booked; see
 /// <see cref="IWorkerRepository.DeleteIfNeverBookedAsync"/> for exactly what that means and why the

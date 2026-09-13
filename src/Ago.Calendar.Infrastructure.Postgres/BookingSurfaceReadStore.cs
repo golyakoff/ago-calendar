@@ -109,7 +109,10 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
     private const string OpenSlotsSql =
         """
         select e.id as "EventId", e.worker_id as "WorkerId", w.display_name as "WorkerDisplayName",
-               e.starts_at as "StartsAt", e.ends_at as "EndsAt", e.local_date as "LocalDate"
+               e.starts_at as "StartsAt",
+               e.starts_at + (run.slots_needed * wsc.slot_minutes
+                              + (run.slots_needed - 1) * wsc.buffer_minutes) * interval '1 minute' as "EndsAt",
+               e.local_date as "LocalDate"
         from events e
         join workers w on w.id = e.worker_id and w.is_active
         join worker_services ws on ws.worker_id = e.worker_id and ws.service_id = @ServiceId

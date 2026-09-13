@@ -22,9 +22,22 @@ namespace Ago.Calendar.Application.UseCases.Configuration;
 /// reactivation and refused for a quota it was never leaving. Gating every call where
 /// <c>command.IsActive</c> is true, without checking the transition, would refuse that ordinary edit
 /// the instant a tenant sits exactly at its quota - a real bug this comment exists to keep out.</para>
+///
+/// <para><b>`25-74`: the service list is reconciled by set difference, before any of the calls
+/// above can fail past the point of no return.</b> <see cref="UpdateWorker.ServiceIds"/> is the
+/// worker's whole desired set; this handler diffs it against <see cref="Worker.Services"/> already
+/// on the aggregate, calls <see cref="Worker.Offer"/> for what is new and
+/// <see cref="Worker.Withdraw"/> for what dropped out, and nothing else. A newly-offered id is
+/// resolved through <see cref="IServiceRepository"/> and tenant-checked the same way
+/// <c>CreateWorkerHandler</c> already does for the same reason - a service id typed by a caller, not
+/// chosen from a list the server itself rendered, must not be trusted on its tenant alone. This runs
+/// before <see cref="Worker.Reactivate"/>/<see cref="Worker.Deactivate"/> so a service NotFound
+/// refuses the whole call with nothing written, matching every other refusal in this
+/// handler.</para>
 /// </summary>
 public sealed class UpdateWorkerHandler(
     IWorkerRepository workers,
+    IServiceRepository services,
     IPermissionChecker permissions,
     IClock clock)
 {
@@ -54,6 +67,34 @@ public sealed class UpdateWorkerHandler(
             }
         }
         catch (ArgumentException exception)
+        {
+            return ConfigurationErrors.Invalid(exception.Message);
+        }
+
+        // `25-74`: set difference against the worker's own current offerings - see this class's own
+        // remarks for why this runs here, before either activity call below.
+        var requestedServiceIds = command.ServiceIds.Select(id => new ServiceId(id)).ToHashSet();
+        var currentServiceIds = worker.Services.Select(offering => offering.ServiceId).ToHashSet();
+
+        try
+        {
+            foreach (var serviceId in requestedServiceIds.Except(currentServiceIds))
+            {
+                var service = await services.GetByIdAsync(serviceId, cancellationToken);
+                if (service is null || service.TenantId != command.TenantId)
+                {
+                    return ConfigurationErrors.NotFound("service", serviceId.Value);
+                }
+
+                worker.Offer(service);
+            }
+
+            foreach (var serviceId in currentServiceIds.Except(requestedServiceIds))
+            {
+                worker.Withdraw(serviceId);
+            }
+        }
+        catch (TenantMismatchException exception)
         {
             return ConfigurationErrors.Invalid(exception.Message);
         }

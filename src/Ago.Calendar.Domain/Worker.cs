@@ -148,6 +148,21 @@ public sealed class Worker
         _services.Add(new ServiceOffering(Id, service.Id));
     }
 
+    /// <summary>
+    /// The symmetric write to <see cref="Offer"/> - `25-74`: an operator can revise which services a
+    /// worker performs, not only set them once at creation. Takes the id alone, not the whole
+    /// <see cref="Service"/> aggregate <see cref="Offer"/> requires: <see cref="Offer"/> needs the
+    /// aggregate to re-check the cross-tenant invariant on the way in, but withdrawing a service this
+    /// worker already lists needs no such check - the id is either already this worker's own
+    /// (removed) or it is not (no-op), and neither outcome can smuggle in another tenant's row. A
+    /// service this worker never offered is a no-op for the identical reason a re-offer already made
+    /// idempotent by <see cref="Offer"/> is: a retried or redundant caller should not fail.
+    /// </summary>
+    public void Withdraw(ServiceId serviceId)
+    {
+        _services.RemoveAll(offering => offering.ServiceId == serviceId);
+    }
+
     public bool WorksIn(CalendarId calendarId) =>
         _calendars.Exists(membership => membership.CalendarId == calendarId);
 

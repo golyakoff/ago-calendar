@@ -63,5 +63,19 @@ internal sealed class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         // by default, matching the domain constructor's own default for every existing row and every
         // freshly-registered one that has not yet been granted the add-on.
         builder.Property(t => t.WorkerQuota).HasColumnName("worker_quota").HasDefaultValue(0);
+
+        // `22-08`/`adr/0149` rule 1: the suspension lease - see Tenant.SuspensionValidUntil's own
+        // remarks. Nullable, no default needed: every row that predates this column reads back
+        // `null` - "no active lease" - with no backfill, the identical "additive nullable column"
+        // shape `worker_quota`'s own sibling columns on `sites` (ago-chat) already establish.
+        builder.Property(t => t.SuspensionValidUntil).HasColumnName("suspension_valid_until");
+
+        // The one read this column serves besides BookingStore.ClaimSlotSql's own live subquery -
+        // a future reconciliation or diagnostic sweep over currently-leased tenants, the identical
+        // "index the column a live comparison filters on" reasoning `ix_sites_suspended_until`
+        // (ago-chat) already states for its own analogous column.
+        builder.HasIndex(t => t.SuspensionValidUntil)
+            .HasDatabaseName("ix_tenants_suspension_valid_until")
+            .HasFilter("suspension_valid_until IS NOT NULL");
     }
 }

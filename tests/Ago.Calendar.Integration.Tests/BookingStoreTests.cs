@@ -422,4 +422,62 @@ public class BookingStoreTests(PostgresFixture fixture)
                 phoneVerifiedAt ?? now),
             CancellationToken.None);
     }
+
+    /// <summary>
+    /// `22-08`/`CLAUDE.md` rule 8: the load-bearing fix - a suspended tenant's own lease, read live
+    /// inside <c>ClaimSlotSql</c>'s own <c>WHERE</c> clause, refuses the claim. Against real Postgres,
+    /// not a fake: the guarantee is the SQL text's own subquery, exactly the reason this whole file's
+    /// class remarks give for testing the two statements against a real database at all.
+    /// </summary>
+    [Fact]
+    public async Task ASuspendedTenant_CannotClaimANewBooking()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        await SuspendTenantAsync(seed.Tenant.Id, Now.AddMinutes(5));
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var confirmation = await BookAsync(seed, slot.Id, "+79990000020", "Suspended Test");
+
+        Assert.Null(confirmation);
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events.SingleAsync(e => e.Id == slot.Id);
+        Assert.Equal(EventStatus.Available, stored.Status);
+    }
+
+    /// <summary>The mirror of the test above - once the lease instant itself has passed, the identical
+    /// tenant is bookable again with no manual step, the same "expiry is checked live, never swept"
+    /// property <c>Tenant.SuspensionValidUntil</c>'s own remarks state.</summary>
+    [Fact]
+    public async Task ATenantWhoseLeaseHasAlreadyExpired_CanClaimANewBooking()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        await SuspendTenantAsync(seed.Tenant.Id, Now.AddMinutes(-1));
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var confirmation = await BookAsync(seed, slot.Id, "+79990000021", "Expired Lease Test");
+
+        Assert.NotNull(confirmation);
+    }
+
+    /// <summary>Lifting a suspension (a <see langword="null"/> lease) restores bookings immediately -
+    /// no re-provisioning, no new credential, the identical fact a real claim against real Postgres is
+    /// the only honest way to prove.</summary>
+    [Fact]
+    public async Task ATenantWhoseSuspensionWasLifted_CanClaimANewBooking()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        await SuspendTenantAsync(seed.Tenant.Id, Now.AddMinutes(30));
+        await SuspendTenantAsync(seed.Tenant.Id, null);
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var confirmation = await BookAsync(seed, slot.Id, "+79990000022", "Lifted Test");
+
+        Assert.NotNull(confirmation);
+    }
+
+    private async Task SuspendTenantAsync(TenantId tenantId, DateTimeOffset? validUntil)
+    {
+        await using var db = fixture.CreateDbContext();
+        await new SuspensionLeaseStore(new TenantRepository(db)).ApplyAsync(tenantId, validUntil, CancellationToken.None);
+    }
 }

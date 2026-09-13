@@ -79,6 +79,11 @@ public static class ServiceCollectionExtensions
         // DbContext its own transaction runs on.
         services.AddScoped<IWorkerQuotaGrantStore, WorkerQuotaGrantStore>();
 
+        // `22-08`/`adr/0149` rule 1: applies `ago-chat`'s own suspension lease - the identical
+        // outbox-consumer shape, an ordinary single-aggregate write (ISuspensionLeaseStore's own
+        // remarks on why it needs no explicit transaction or row lock, unlike the quota above).
+        services.AddScoped<ISuspensionLeaseStore, SuspensionLeaseStore>();
+
         // `23-88`/`adr/0165`: answers chat's own async impact-preview question over the identical
         // outbox mechanism, in the opposite direction - the consumer's one write (the reply itself).
         // Scoped like the rest, for the identical reason: it holds the DbContext its own

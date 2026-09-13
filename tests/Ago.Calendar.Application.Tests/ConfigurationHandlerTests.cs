@@ -248,6 +248,71 @@ public class ConfigurationHandlerTests
         Assert.True(Assert.Single(world.Workers.Added).IsActive);
     }
 
+    // `25-74`: before this item, `UpdateWorker` carried no `ServiceIds` at all - `Worker.Offer`'s only
+    // call site was `CreateWorkerHandler`, so a worker's services could be set once and never again.
+    // These four prove the gap is closed: a service can be added after creation, withdrawn, both at
+    // once, and a foreign service is refused exactly the way `CreateWorkerHandler` already refuses one.
+
+    [Fact]
+    public async Task UpdatingAWorker_CanAddASecondService()
+    {
+        var world = new World();
+        world.Services.Added.Add(BookingFixtures.ManicureService());
+        var workerId = (await world.CreateWorkerAsync(serviceIds: [BookingFixtures.ServiceId.Value])).Value;
+
+        var result = await world.UpdateWorkerAsync(
+            workerId, serviceIds: [BookingFixtures.ServiceId.Value, BookingFixtures.SecondServiceId.Value]);
+
+        Assert.True(result.IsSuccess);
+        var worker = Assert.Single(world.Workers.Added);
+        Assert.True(worker.Offers(BookingFixtures.ServiceId));
+        Assert.True(worker.Offers(BookingFixtures.SecondServiceId));
+    }
+
+    [Fact]
+    public async Task UpdatingAWorker_CanWithdrawAService()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync(serviceIds: [BookingFixtures.ServiceId.Value])).Value;
+
+        var result = await world.UpdateWorkerAsync(workerId, serviceIds: []);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(Assert.Single(world.Workers.Added).Offers(BookingFixtures.ServiceId));
+    }
+
+    [Fact]
+    public async Task UpdatingAWorker_CanReplaceOneServiceWithAnother_InOneCall()
+    {
+        var world = new World();
+        world.Services.Added.Add(BookingFixtures.ManicureService());
+        var workerId = (await world.CreateWorkerAsync(serviceIds: [BookingFixtures.ServiceId.Value])).Value;
+
+        var result = await world.UpdateWorkerAsync(workerId, serviceIds: [BookingFixtures.SecondServiceId.Value]);
+
+        Assert.True(result.IsSuccess);
+        var worker = Assert.Single(world.Workers.Added);
+        Assert.False(worker.Offers(BookingFixtures.ServiceId));
+        Assert.True(worker.Offers(BookingFixtures.SecondServiceId));
+    }
+
+    [Fact]
+    public async Task UpdatingAWorker_WithAServiceThatIsNotThisTenants_IsNotFound_AndChangesNothing()
+    {
+        var world = new World();
+        var workerId = (await world.CreateWorkerAsync(serviceIds: [BookingFixtures.ServiceId.Value])).Value;
+        var foreignServiceId = Guid.NewGuid();
+
+        var result = await world.UpdateWorkerAsync(
+            workerId, serviceIds: [BookingFixtures.ServiceId.Value, foreignServiceId]);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.not_found", result.Error!.Value.Code);
+        var worker = Assert.Single(world.Workers.Added);
+        Assert.True(worker.Offers(BookingFixtures.ServiceId));
+        Assert.False(worker.Offers(new ServiceId(foreignServiceId)));
+    }
+
     [Fact]
     public async Task ReactivatingAWorker_PastTheQuota_IsRefused()
     {
@@ -529,13 +594,22 @@ public class ConfigurationHandlerTests
             string? displayName = null,
             bool isActive = true,
             TenantId? tenantId = null,
-            DateTimeOffset? now = null) =>
-            new UpdateWorkerHandler(Workers, Permissions, new FakeClock(now ?? BookingFixtures.Now))
+            DateTimeOffset? now = null,
+            // `25-74`: null means "leave the service list exactly as it is" - the default every test
+            // written before this item's own change gets for free, so none of them had to learn about
+            // services just to keep renaming a worker. A test that actually means to change the list
+            // passes it explicitly.
+            IReadOnlyList<Guid>? serviceIds = null) =>
+            new UpdateWorkerHandler(Workers, Services, Permissions, new FakeClock(now ?? BookingFixtures.Now))
                 .HandleAsync(
                     new UpdateWorker(
                         Actor, tenantId ?? BookingFixtures.TenantId, workerId,
-                        lastName, firstName, middleName, displayName, isActive),
+                        lastName, firstName, middleName, displayName, isActive,
+                        serviceIds ?? CurrentServiceIds(workerId)),
                     CancellationToken.None);
+
+        private IReadOnlyList<Guid> CurrentServiceIds(WorkerId workerId) =>
+            [.. Workers.Added.Find(w => w.Id == workerId)?.Services.Select(s => s.ServiceId.Value) ?? []];
 
         public Task<Result> DeleteWorkerAsync(WorkerId workerId, TenantId? tenantId = null) =>
             new DeleteWorkerHandler(Workers, Permissions)

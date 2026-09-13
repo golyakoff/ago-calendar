@@ -36,14 +36,24 @@ public sealed record CreateWorkerRequest(
     Guid CalendarId,
     IReadOnlyList<Guid> ServiceIds);
 
-/// <summary>`20-13`. See <see cref="CreateWorkerRequest.DisplayName"/> for what <c>null</c> means
-/// here too.</summary>
+/// <summary>`20-13`/`25-74`. See <see cref="CreateWorkerRequest.DisplayName"/> for what <c>null</c>
+/// means here too.</summary>
+/// <param name="ServiceIds">`25-74`: the worker's complete, desired set of services - replace
+/// semantics, matching <see cref="CreateWorkerRequest.ServiceIds"/>. Before this, editing a worker
+/// had no way to reach the service list at all - it could only be set once, at creation.</param>
 public sealed record UpdateWorkerRequest(
-    string LastName, string FirstName, string? MiddleName, string? DisplayName, bool IsActive);
+    string LastName,
+    string FirstName,
+    string? MiddleName,
+    string? DisplayName,
+    bool IsActive,
+    IReadOnlyList<Guid> ServiceIds);
 
 /// <summary>`20-13`: one worker, in full - the workers table's own row shape and the edit card's
 /// prefill, in one response so the console never needs a second request to open a card for a worker
 /// it has already listed.</summary>
+/// <param name="ServiceIds">`25-74`: what this worker offers today, so the edit form's checkbox set
+/// can pre-check the right boxes instead of always starting empty.</param>
 public sealed record WorkerResponse(
     Guid WorkerId,
     string LastName,
@@ -53,7 +63,8 @@ public sealed record WorkerResponse(
     bool DisplayNameIsCustom,
     bool IsActive,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    IReadOnlyList<Guid> ServiceIds);
 
 /// <param name="DayOfWeek">0 = Sunday, matching <see cref="System.DayOfWeek"/>. An integer rather
 /// than a name because a name would need a culture to parse and this is a machine boundary.</param>

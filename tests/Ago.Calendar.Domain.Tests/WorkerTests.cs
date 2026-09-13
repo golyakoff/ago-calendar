@@ -63,6 +63,37 @@ public class WorkerTests
         Assert.True(worker.Offers(service.Id));
     }
 
+    /// <summary>`25-74`: <see cref="Worker.Withdraw"/>'s own proof, mirroring <see cref="Offer_Twice_IsANoOp"/>
+    /// for its symmetric write - what `UpdateWorkerHandler` now calls when a service drops out of a
+    /// worker's requested set.</summary>
+    [Fact]
+    public void Withdraw_RemovesAnOfferedService()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var worker = CalendarFixtures.Worker(tenant);
+        var service = CalendarFixtures.Service(tenant);
+        worker.Offer(service);
+
+        worker.Withdraw(service.Id);
+
+        Assert.Empty(worker.Services);
+        Assert.False(worker.Offers(service.Id));
+    }
+
+    [Fact]
+    public void Withdraw_AServiceNeverOffered_IsANoOp()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var worker = CalendarFixtures.Worker(tenant);
+        var offered = CalendarFixtures.Service(tenant);
+        worker.Offer(offered);
+
+        worker.Withdraw(new ServiceId(Guid.NewGuid()));
+
+        Assert.Single(worker.Services);
+        Assert.True(worker.Offers(offered.Id));
+    }
+
     [Theory]
     [InlineData("   ", "Alex")]
     [InlineData("Doe", "   ")]

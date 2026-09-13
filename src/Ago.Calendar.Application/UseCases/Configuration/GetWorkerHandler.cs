@@ -8,6 +8,9 @@ namespace Ago.Calendar.Application.UseCases.Configuration;
 /// workers table renders. One shape for both - see <see cref="ListWorkersForTenantHandler"/>, which
 /// returns a list of the same record, so the console never needs a second round trip to open a card
 /// for a worker it already listed.</summary>
+/// <param name="ServiceIds">`25-74`: added so the edit form can pre-check the services this worker
+/// already offers before a human adds or removes one - without this, <c>WorkerCard</c>'s checkbox
+/// set has no way to know what is already true and every edit would start from empty.</param>
 public readonly record struct WorkerDetail(
     WorkerId WorkerId,
     string LastName,
@@ -17,7 +20,8 @@ public readonly record struct WorkerDetail(
     bool DisplayNameIsCustom,
     bool IsActive,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    IReadOnlyList<Guid> ServiceIds);
 
 /// <summary>`20-13`: <c>GET /workers/{id}</c>. Gated on the same <see cref="Permission.CalendarConfigure"/>
 /// every other configuration screen is - a worker's split name fields are not secret, but neither is
@@ -52,5 +56,6 @@ public sealed class GetWorkerHandler(IWorkerRepository workers, IPermissionCheck
         worker.DisplayNameIsCustom,
         worker.IsActive,
         worker.CreatedAt,
-        worker.UpdatedAt);
+        worker.UpdatedAt,
+        [.. worker.Services.Select(offering => offering.ServiceId.Value)]);
 }

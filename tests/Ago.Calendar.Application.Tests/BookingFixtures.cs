@@ -59,6 +59,14 @@ internal static class BookingFixtures
     public static Service HaircutService() =>
         Service.Create(ServiceId, TenantId, "Haircut", TimeSpan.FromMinutes(45));
 
+    /// <summary>`25-74`: a second, distinct service - the reconciliation tests in
+    /// <c>ConfigurationHandlerTests</c> need two real services in the same tenant to prove a worker
+    /// can be made to offer more than the one <see cref="HaircutService"/> it started with.</summary>
+    public static readonly ServiceId SecondServiceId = new(new Guid("77777777-7777-7777-7777-777777777777"));
+
+    public static Service ManicureService() =>
+        Service.Create(SecondServiceId, TenantId, "Manicure", TimeSpan.FromMinutes(30));
+
     public static Worker WorkerOffering(Service service, bool active = true)
     {
         var worker = Worker.Create(WorkerId, TenantId, "Doe", "Alex", null, Now);

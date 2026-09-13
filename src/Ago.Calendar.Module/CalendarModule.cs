@@ -214,6 +214,10 @@ public sealed class CalendarModule : IProductModule
         // here rather than in Ago.Calendar.Api's own Program.cs - see this file's own remarks just
         // above for RegisterChatModuleHandler and friends.
         services.AddScoped<Application.UseCases.TenantErasure.EraseTenantDataHandler>();
+        // `22-31`: the read-only sibling on the identical route family - see
+        // Application.Abstractions.ITenantDataExporter's own remarks for why it is a distinct port
+        // from ITenantErasureRepository rather than a third method on it.
+        services.AddScoped<Application.UseCases.TenantExport.ExportTenantDataHandler>();
 
         services.AddScoped<GetTenantConfigurationHandler>();
         services.AddScoped<GetBookingReadinessHandler>();

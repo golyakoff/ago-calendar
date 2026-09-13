@@ -68,6 +68,27 @@ public sealed class Tenant
     /// </summary>
     public int WorkerQuota { get; private set; }
 
+    /// <summary>
+    /// `22-08`/`adr/0149` rule 1/`adr/0166`: the account-wide enforcement freeze's own projection - the
+    /// identical "the module holds a lease with an expiry, checked live inside the transaction that
+    /// performs the write it gates" shape <see cref="WorkerQuota"/>'s own remarks already establish for
+    /// itself, applied to a second fact `ago-chat` grants rather than asks about at write time.
+    /// <see langword="null"/> means "no active lease" - a tenant never suspended, or one whose lease has
+    /// simply lapsed with nothing renewing it.
+    ///
+    /// <para><b>Not the owner-facing duration <c>ago-chat</c>'s own <c>suspended_until</c> holds - a
+    /// shorter, independently-bounded instant `ago-chat` computes as "now plus the lease length" every
+    /// time it publishes.</b> This column is compared against this product's own <c>IClock</c> **inside
+    /// <see cref="Infrastructure.Postgres.BookingStore.TryBookAsync"/>'s own claim transaction**, never
+    /// read beforehand and trusted - the identical "no write decision rests on a stale read" discipline
+    /// <see cref="WorkerQuota"/>'s own remarks state for the quota check inside
+    /// <c>IWorkerRepository.TryAddWithinQuotaAsync</c>. Renewed by <c>ago-chat</c> on a fixed cadence for
+    /// as long as the account stays suspended; a missed renewal or two changes nothing until this
+    /// instant itself passes, at which point a new booking is refused with no further signal needed -
+    /// fail-closed, by construction, with no sweep of this column ever required.</para>
+    /// </summary>
+    public DateTimeOffset? SuspensionValidUntil { get; private set; }
+
     private Tenant(
         TenantId id, string name, TenantPublicKey publicKey, IEnumerable<string> allowedOrigins, DateTimeOffset now,
         bool autoProvisioned)
@@ -142,6 +163,16 @@ public sealed class Tenant
         ArgumentOutOfRangeException.ThrowIfNegative(quota);
         WorkerQuota = quota;
     }
+
+    /// <summary>
+    /// `22-08`: sets the lease's own current value directly - never incremented, because
+    /// `TenantSuspensionChanged` (`ago-chat`'s own contract) carries the *current* lease instant, not a
+    /// delta, the identical "a snapshot, not a diff" reasoning <see cref="GrantWorkerQuota"/>'s own
+    /// remarks give for the quota. A redelivery (or `ago-chat`'s own periodic renewal, which republishes
+    /// the identical fact on a schedule by design) simply sets the identical or a slightly later value
+    /// both times - naturally idempotent, no special-casing needed.
+    /// </summary>
+    public void ApplySuspensionLease(DateTimeOffset? validUntil) => SuspensionValidUntil = validUntil;
 
     /// <summary>Replaces the whole list rather than adding one entry, because that is what an editor
     /// screen submits and because a set with an add but no remove grows forever.</summary>

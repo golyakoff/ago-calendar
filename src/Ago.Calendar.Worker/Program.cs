@@ -55,6 +55,15 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<ContactVisibilityChangedConsumer>();
 
+// `22-08`/`adr/0149` rule 1: this product's fourth broker consumer - projects `ago-chat`'s own
+// `TenantSuspensionChanged` lease instant into the local tenancy row, same shape as the three
+// consumers above (unfiltered by module key - TenantSuspensionChangedConsumer's own remarks).
+builder.Services
+    .AddOptions<TenantSuspensionChangedConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(TenantSuspensionChangedConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<TenantSuspensionChangedConsumer>();
+
 // `23-12`'s own retention: prunes `contact_phone_reveals` past its configured window, the same
 // bounded-batch-delete-on-a-schedule shape as `PendingBookingSweepJob`/`AvailabilityMaterializationJob`
 // above.

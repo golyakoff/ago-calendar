@@ -142,6 +142,19 @@ public sealed class BookingStore(
     /// <para>The statement never touches <c>no_show_count</c> or any other lead-card field: a
     /// booking is a fact about a slot, and conflating the two writes is how one contended statement
     /// grows a second reason to contend.</para>
+    ///
+    /// <para><b>`22-08`/`CLAUDE.md` rule 8: the suspension check lives here, inside this same
+    /// <c>WHERE</c> clause, and nowhere earlier.</b> <c>BookEventHandler</c> already loads
+    /// <c>tenant</c> for the origin check, before any database work this method does - and that read
+    /// is exactly the kind rule 8 forbids a write decision from resting on: it is taken outside this
+    /// transaction, milliseconds (or, under load, longer) before this statement runs, and a suspension
+    /// landing in that gap would be invisible to a decision made from it. The
+    /// <c>NOT EXISTS (...)</c> subquery re-reads <c>tenants.suspension_valid_until</c> live, evaluated
+    /// by Postgres as part of this exact statement's own execution - the identical "evaluating it and
+    /// acting on it are one operation" property every other condition in this <c>WHERE</c> clause
+    /// already has, extended to a fact about the tenant rather than the slot. A suspension that lands
+    /// mid-claim is caught by this statement the moment it commits, not by a read this handler took
+    /// before the race began.</para>
     /// </summary>
     private const string ClaimSlotSql =
         """
@@ -155,6 +168,12 @@ public sealed class BookingStore(
           AND calendar_id = @calendarId
           AND status = 'Available'
           AND starts_at > @now
+          AND NOT EXISTS (
+              SELECT 1 FROM tenants t
+              WHERE t.id = @tenantId
+                AND t.suspension_valid_until IS NOT NULL
+                AND t.suspension_valid_until > @now
+          )
         RETURNING id, worker_id, starts_at, ends_at, local_date
         """;
 
@@ -234,6 +253,9 @@ public sealed class BookingStore(
         command.Parameters.AddWithValue("serviceId", attempt.ServiceId.Value);
         command.Parameters.AddWithValue("deadline", attempt.ConfirmationDeadline);
         command.Parameters.AddWithValue("now", attempt.Now);
+        // `22-08`: the tenant the suspension subquery checks live, inside this same statement -
+        // ClaimSlotSql's own remarks state why this cannot be a pre-read instead.
+        command.Parameters.AddWithValue("tenantId", attempt.TenantId.Value);
 
         var rowsClaimed = 0;
         WorkerId? workerId = null;

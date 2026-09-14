@@ -10,8 +10,10 @@ using Ago.Calendar.Api.Provisioning;
 using Ago.Calendar.Api.PublicBookingApi;
 using Ago.Calendar.Api.Realtime;
 using Ago.Calendar.Contracts;
+using Ago.Calendar.Api.Owner;
 using Ago.Calendar.Infrastructure.Postgres;
 using Ago.Calendar.Infrastructure.Postgres.Schema;
+using Ago.Calendar.Infrastructure.TenantScopeDiagnostics;
 using Ago.Calendar.Module;
 using Ago.Platform.Abstractions;
 using Ago.Platform.Caching.Redis;
@@ -27,6 +29,12 @@ var builder = WebApplication.CreateBuilder(args);
 // (clean-architecture.md). AddPlatformKernel brings IClock/IIdGenerator in from the published
 // package; the module registers this product's own adapters, handlers and options.
 builder.Services.AddPlatformKernel();
+
+// `24-17`: registered here rather than in Ago.Calendar.Module - only this host's owner-only endpoint
+// (OwnerTenantScopeEndpoints) ever resolves ITenantScopeInspector; Ago.Calendar.Worker has no route
+// that would, and Module composes services every host shares. The same "explicit when actually used"
+// reasoning Ago.Chat.Api's own Program.cs follows for its identical registration.
+builder.Services.AddTenantScopeDiagnostics();
 
 IProductModule module = new CalendarModule();
 module.ConfigureServices(builder.Services, builder.Configuration);
@@ -156,6 +164,10 @@ app.MapChatModuleTaskEndpoints();
 // `22-11`: the generic provisioning surface that makes the row ChatModuleTaskEndpoints checks on
 // every call actually exist - see ModuleRegistrationEndpoints's own remarks.
 app.MapModuleRegistrationEndpoints();
+// `24-17`: the platform owner's own read of this deployment's live tenant-isolation figures - own
+// file, own Map call, gated by this product's first RequirePlatformOwner policy
+// (OwnerTenantScopeEndpoints' own remarks).
+app.MapOwnerTenantScopeEndpoint();
 
 // `25-63`: this product's first SignalR hub. Same path segment as Ago.Chat.Api's own operator hub
 // (`/hubs/operator`) - harmless, since the two are different origins entirely (repositories.md), and

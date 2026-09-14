@@ -105,6 +105,17 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<BookingPendingFanoutConsumer>();
 
+// `25-82`: this product's sixth broker consumer - reacts to `ago-chat`'s own `SiteErased` (a demo
+// tenant's site row hard-deleted with nothing else to signal it, `DemoTenantExpiryJob`'s own gap) by
+// draining every row this product still holds for that tenant, through the identical
+// EraseTenantDataHandler the HTTP-triggered module erasure endpoint already uses. Same registration
+// shape as every consumer above.
+builder.Services
+    .AddOptions<SiteErasedConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(SiteErasedConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<SiteErasedConsumer>();
+
 // `25-44`: this host's own outbox dispatcher - drains the `outbox` table to RabbitMQ, the identical
 // mechanism `Ago.Chat.Worker.OutboxDispatcher` already runs for chat. Every row this product stages
 // (`BookingConfirmed` since `20-04`, `ModuleQuantityImpactComputed` staged by the consumer just above)

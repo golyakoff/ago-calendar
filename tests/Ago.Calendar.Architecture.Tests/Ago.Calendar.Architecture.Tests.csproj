@@ -28,6 +28,9 @@
     <ProjectReference Include="..\..\src\Ago.Calendar.Contracts\Ago.Calendar.Contracts.csproj" />
     <ProjectReference Include="..\..\src\Ago.Calendar.Infrastructure.Postgres\Ago.Calendar.Infrastructure.Postgres.csproj" />
     <ProjectReference Include="..\..\src\Ago.Calendar.Infrastructure.Time\Ago.Calendar.Infrastructure.Time.csproj" />
+    <!-- `24-17`: proves CalendarTenantScopeInspector agrees with a direct CalendarTenantScopeRule
+         scan of the same assembly. -->
+    <ProjectReference Include="..\..\src\Ago.Calendar.Infrastructure.TenantScopeDiagnostics\Ago.Calendar.Infrastructure.TenantScopeDiagnostics.csproj" />
     <ProjectReference Include="..\..\src\Ago.Calendar.Module\Ago.Calendar.Module.csproj" />
     <!--
       `20-20`: the deployables. Until this item, no arch rule had anything to say about a host, so

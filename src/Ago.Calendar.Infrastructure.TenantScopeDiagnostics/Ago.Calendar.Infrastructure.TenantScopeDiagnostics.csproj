@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <!-- `24-17`: the same IL-reading library `Ago.Calendar.Architecture.Tests` already depends on
+         (for its own NetArchTest/assembly-reference rules) - reused here rather than adding a second
+         technology for the identical job. -->
+    <PackageReference Include="Mono.Cecil" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ago.Calendar.Application\Ago.Calendar.Application.csproj" />
+  </ItemGroup>
+
+</Project>

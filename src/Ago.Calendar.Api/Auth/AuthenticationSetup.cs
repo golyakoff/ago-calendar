@@ -2,6 +2,7 @@
 using Ago.Calendar.Domain;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.IdentityModel.Tokens;
 
@@ -106,7 +107,19 @@ public static class AuthenticationSetup
             options.AddPolicy(
                 CalendarClaims.IdentityPolicy,
                 policy => policy.RequireAuthenticatedUser());
+
+            // `24-17`: this product's first owner-only surface (`OwnerTenantScopeEndpoints`) - no
+            // `.AddAuthenticationSchemes` needed, unlike `ago-chat`'s own `RequirePlatformOwner`: this
+            // product registers exactly one scheme (the default `JwtBearerDefaults.AuthenticationScheme`
+            // above), so there is no second scheme this policy would need to disambiguate from. See
+            // `PlatformOwnerRealmRole`'s own remarks for why this is a copy of `ago-chat`'s mechanism
+            // rather than a shared package.
+            options.AddPolicy("RequirePlatformOwner", policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new PlatformOwnerRequirement()));
         });
+
+        services.AddSingleton<IAuthorizationHandler, PlatformOwnerAuthorizationHandler>();
 
         // `22-14`/`adr/0100`: OperatorIdentityClaimsTransformation reads the request's own
         // `X-Ago-Active-Site` header, and an IClaimsTransformation is handed a principal and nothing

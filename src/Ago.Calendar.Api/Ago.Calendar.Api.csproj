@@ -8,6 +8,10 @@
   <ItemGroup>
     <ProjectReference Include="..\Ago.Calendar.Module\Ago.Calendar.Module.csproj" />
     <ProjectReference Include="..\Ago.Calendar.Contracts\Ago.Calendar.Contracts.csproj" />
+    <!-- `24-17`: OwnerTenantScopeEndpoints calls AddTenantScopeDiagnostics/ITenantScopeInspector
+         directly - the same "explicit when actually used" reasoning Ago.Chat.Api.csproj's own
+         Infrastructure references already follow. -->
+    <ProjectReference Include="..\Ago.Calendar.Infrastructure.TenantScopeDiagnostics\Ago.Calendar.Infrastructure.TenantScopeDiagnostics.csproj" />
   </ItemGroup>
 
   <!-- `20-06`: adr/0022's OIDC bearer validation. Not in the shared framework, so it is named here. -->

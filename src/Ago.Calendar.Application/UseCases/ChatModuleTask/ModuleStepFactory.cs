@@ -268,8 +268,8 @@ internal static class ModuleStepFactory
             MonthBeforeDay: true);
 
         private static readonly Strings Russian = new(
-            WhichService: "Что вы хотите забронировать?",
-            WhichWorker: "С кем вы хотите записаться?",
+            WhichService: "Выберите услугу для записи:",
+            WhichWorker: "К кому вы хотите записаться?",
             PickADate: "Выберите дату:",
             PickATimeOnDate: "Выберите время на {0}:",
             PhoneFormPrompt: "Какой номер телефона лучше всего подходит, чтобы с вами связаться?",
@@ -278,7 +278,7 @@ internal static class ModuleStepFactory
                 "связаться? Это подтверждение номера именно для бронирования - отдельно от контактных " +
                 "данных, которые уже есть в системе. Напишите его ещё раз или укажите другой номер.",
             PhoneFieldLabel: "Номер телефона",
-            Booked: "Вы записаны!",
+            Booked: "✅ Готово!",
             ServiceLabel: "Услуга",
             WithLabel: "С кем",
             WhenLabel: "Когда",

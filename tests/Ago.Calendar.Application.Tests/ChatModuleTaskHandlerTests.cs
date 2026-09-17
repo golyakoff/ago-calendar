@@ -228,7 +228,7 @@ public class ChatModuleTaskHandlerTests
         var result = await world.StartAsync(locale: "Ru");
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("Что вы хотите забронировать?", result.Value.Step.Prompt);
+        Assert.Equal("Выберите услугу для записи:", result.Value.Step.Prompt);
     }
 
     /// <summary>The full walkthrough's own Russian twin - every step, in order, rendered in the
@@ -240,12 +240,12 @@ public class ChatModuleTaskHandlerTests
         var world = new World();
 
         var start = await world.StartAsync(locale: "Ru");
-        Assert.Equal("Что вы хотите забронировать?", start.Value.Step.Prompt);
+        Assert.Equal("Выберите услугу для записи:", start.Value.Step.Prompt);
         var externalTaskId = start.Value.ExternalTaskId;
 
         var afterService = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString(), locale: "Ru");
-        Assert.Equal("С кем вы хотите записаться?", afterService.Value.Step!.Prompt);
+        Assert.Equal("К кому вы хотите записаться?", afterService.Value.Step!.Prompt);
         var workerAction = Assert.Single(afterService.Value.Step!.Actions);
 
         var afterWorker = await world.ReplyAsync(
@@ -270,7 +270,7 @@ public class ChatModuleTaskHandlerTests
             locale: "Ru");
         Assert.True(afterPhone.Value.Complete);
         Assert.Equal(ModuleStepKind.ConfirmationCard, afterPhone.Value.Step!.Kind);
-        Assert.Equal("Вы записаны!", afterPhone.Value.Step!.ConfirmationTitle);
+        Assert.Equal("✅ Готово!", afterPhone.Value.Step!.ConfirmationTitle);
         Assert.Collection(
             afterPhone.Value.Step!.ConfirmationLines!,
             l => Assert.Equal("Услуга", l.Label),

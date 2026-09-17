@@ -158,12 +158,12 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var startResponse = await StartAsync(
             Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking", locale: "Ru");
         var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
-        Assert.Equal("Что вы хотите забронировать?", Prompt(started!.Step));
+        Assert.Equal("Выберите услугу для записи:", Prompt(started!.Step));
         var serviceAction = Assert.Single(started.Step.Actions);
 
         var afterService = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, serviceAction.Value, locale: "Ru");
-        Assert.Equal("С кем вы хотите записаться?", Prompt(afterService.Step!));
+        Assert.Equal("К кому вы хотите записаться?", Prompt(afterService.Step!));
         var workerAction = Assert.Single(afterService.Step!.Actions);
 
         var afterWorker = await ReplyAsync(

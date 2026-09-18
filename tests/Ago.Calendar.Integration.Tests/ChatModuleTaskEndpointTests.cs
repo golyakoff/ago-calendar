@@ -126,10 +126,18 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         // `25-33`: the date round, not the flat slot list directly - one seeded day, one action.
         Assert.Equal(ModuleStepKinds.DateTimePicker, afterWorker.Step!.Kind);
         var dateAction = Assert.Single(afterWorker.Step.Actions);
+        // `25-145`: full weekday, full month, four-digit year - proven over the real stack (real
+        // Postgres row for the calendar's own Europe/Moscow zone, real TimeZoneInfo resolution), not
+        // only the fake-backed proof in Ago.Calendar.Application.Tests.
+        Assert.Matches(@"^[A-Za-z]+, [A-Za-z]+ \d{1,2}, \d{4}$", dateAction.Label);
 
         var afterDate = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value);
         Assert.Equal(ModuleStepKinds.DateTimePicker, afterDate.Step!.Kind);
         var slotAction = Assert.Single(afterDate.Step.Actions);
+        // `25-145`: the calendar's own zone (Europe/Moscow), converted through the real
+        // SystemWallClockResolver and labelled "МСК" - never "UTC", the actual live defect this item
+        // fixes.
+        Assert.Matches(@"^\d{2}:\d{2} - \d{2}:\d{2} МСК$", slotAction.Label);
 
         var afterSlot = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value);
         // `20-09`: the phone step's own kind, signalling to Chat that the reply must carry a verified
@@ -140,6 +148,11 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
             started.ExternalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79997000001", phoneVerifiedAt: DateTimeOffset.UtcNow);
         Assert.True(afterPhone.Complete);
         Assert.Equal(ModuleStepKinds.ConfirmationCard, afterPhone.Step!.Kind);
+        // `25-145`'s own Done-when, over the real stack: full date, converted time, Russian
+        // abbreviation, never UTC.
+        var whenLine = ConfirmationLineValue(afterPhone.Step, "When");
+        Assert.Matches(@"^[A-Za-z]+, [A-Za-z]+ \d{1,2}, \d{4}, \d{2}:\d{2} - \d{2}:\d{2} МСК$", whenLine);
+        Assert.DoesNotContain("UTC", whenLine, StringComparison.Ordinal);
 
         // The real row, not a fake's own record of an attempt.
         await using var db = fixture.CreateDbContext();
@@ -635,6 +648,16 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     /// - this is the one place in this file that reads <c>payload.prompt</c> back out of it rather
     /// than only asserting the property exists.</summary>
     private static string Prompt(StepDto step) => ((JsonElement)step.Payload).GetProperty("prompt").GetString()!;
+
+    /// <summary>`25-145`: the same raw-<see cref="JsonElement"/> read <see cref="Prompt"/> already
+    /// takes, for a confirmation card's own <c>lines</c> array instead of a single <c>prompt</c>
+    /// field - finds the line by its label (<c>"When"</c>, for this item's own assertions) rather than
+    /// by position, so a reordering of <c>ModuleStepFactory.Confirmation</c>'s own line list would not
+    /// silently read the wrong value.</summary>
+    private static string ConfirmationLineValue(StepDto step, string label) =>
+        ((JsonElement)step.Payload).GetProperty("lines").EnumerateArray()
+            .First(line => line.GetProperty("label").GetString() == label)
+            .GetProperty("value").GetString()!;
 
     private async Task RegisterChatModuleAsync(TenantId tenantId, string secret)
     {

@@ -21,6 +21,12 @@ internal sealed class FakeBookingSurfaceReadStore : IBookingSurfaceReadStore
 
     public List<(ServiceId ServiceId, WorkerId? WorkerId, DateTimeOffset NotBefore, int Limit)> SlotQueries { get; } = [];
 
+    /// <summary>`25-145`: defaults to the identical zone <see cref="BookingFixtures.Calendar"/> itself
+    /// configures, so a test that never mentions time zones still exercises real Moscow-offset
+    /// conversion rather than a degenerate always-UTC one - the "the fixture that used to be implicit
+    /// is now explicit but unchanged" shape this file's own sibling fakes are already held to.</summary>
+    public CalendarTimeZone TimeZone { get; set; } = new("Europe/Moscow");
+
     public Task<IReadOnlyList<BookableServiceRow>> ListServicesAsync(
         CalendarId calendarId, CancellationToken cancellationToken)
     {
@@ -46,5 +52,11 @@ internal sealed class FakeBookingSurfaceReadStore : IBookingSurfaceReadStore
         AskedFor.Add(calendarId);
         SlotQueries.Add((serviceId, workerId, notBefore, limit));
         return Task.FromResult<IReadOnlyList<OpenSlotRow>>(Slots);
+    }
+
+    public Task<CalendarTimeZone> GetTimeZoneAsync(CalendarId calendarId, CancellationToken cancellationToken)
+    {
+        AskedFor.Add(calendarId);
+        return Task.FromResult(TimeZone);
     }
 }

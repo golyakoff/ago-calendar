@@ -49,7 +49,8 @@ public sealed class ReplyToModuleTaskHandler(
     GetOpenSlotsHandler slotsHandler,
     IBookingSurfaceReadStore surface,
     BookEventHandler bookHandler,
-    IClock clock)
+    IClock clock,
+    IWallClockResolver wallClock)
 {
     /// <summary>`25-33`: how many raw slot rows to fetch from the read store before
     /// <c>ModuleStepFactory</c> groups them by day (the worker-choice step) or filters them to one
@@ -229,8 +230,12 @@ public sealed class ReplyToModuleTaskHandler(
             return slots.Error!.Value;
         }
 
+        // `25-145`: the calendar's own zone, fetched fresh rather than cached on the task - the same
+        // "ask the read side again" precedent GetSlotsForDateAsync's own remarks already state for the
+        // slots beside it on this exact line.
+        var zone = await surface.GetTimeZoneAsync(task.CalendarId, cancellationToken);
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, date, locale), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, date, locale, zone, wallClock), Complete: false));
     }
 
     /// <summary>`25-33`: the one place this handler re-queries a single date's own slots - the
@@ -328,8 +333,9 @@ public sealed class ReplyToModuleTaskHandler(
             return slots.Error!.Value;
         }
 
+        var zone = await surface.GetTimeZoneAsync(task.CalendarId, cancellationToken);
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, date, locale), Complete: false));
+            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, date, locale, zone, wallClock), Complete: false));
     }
 
     /// <summary>
@@ -418,8 +424,12 @@ public sealed class ReplyToModuleTaskHandler(
             await tasks.SaveAsync(task, cancellationToken);
 
             var (serviceName, workerName) = await DescribeBookingAsync(task, booking, cancellationToken);
+            // `25-145`: the calendar's own zone, converted through IWallClockResolver before this
+            // card's own "When" line ever formats an instant - see ModuleStepFactory.DescribeRange's
+            // own remarks for why this reads in the calendar's local time, never UTC.
+            var zone = await surface.GetTimeZoneAsync(task.CalendarId, cancellationToken);
             var step = ModuleStepFactory.Confirmation(
-                serviceName, workerName, booking.Slot.StartsAt, booking.Slot.EndsAt, locale);
+                serviceName, workerName, booking.Slot.StartsAt, booking.Slot.EndsAt, locale, zone, wallClock);
             return Result<ModuleTaskReplied>.Success(new ModuleTaskReplied(step, Complete: true));
         }
 
@@ -443,8 +453,10 @@ public sealed class ReplyToModuleTaskHandler(
             return slots.Error!.Value;
         }
 
+        var reofferZone = await surface.GetTimeZoneAsync(task.CalendarId, cancellationToken);
         return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.SlotChoice(slots.Value, date, locale), Complete: false));
+            new ModuleTaskReplied(
+                ModuleStepFactory.SlotChoice(slots.Value, date, locale, reofferZone, wallClock), Complete: false));
     }
 
     /// <summary>The names a confirmation card needs, which <see cref="BookingConfirmation"/> itself

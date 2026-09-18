@@ -176,7 +176,9 @@ public class ChatModuleTaskHandlerTests
             a =>
             {
                 Assert.DoesNotContain(targetDate.Year.ToString(CultureInfo.InvariantCulture), a.Label, StringComparison.Ordinal);
-                Assert.Matches(@"^\d{2}:\d{2} - \d{2}:\d{2} UTC$", a.Label);
+                // `25-145`: the calendar's own zone abbreviation (Europe/Moscow -> "МСК"), never the
+                // literal word "UTC" - this suite's own World wires a Moscow-offset FakeWallClockResolver.
+                Assert.Matches(@"^\d{2}:\d{2} - \d{2}:\d{2} МСК$", a.Label);
             });
     }
 
@@ -509,6 +511,89 @@ public class ChatModuleTaskHandlerTests
         Assert.Equal("+79990000001", attempt.Phone.Value);
     }
 
+    // ------------------------------------------------------------------------------------------
+    // `25-145`: booking times render in the calendar's own zone, never UTC. This suite's own World
+    // defaults to Europe/Moscow (+3, no DST since 2014) on both ReadStore.TimeZone and the fixture
+    // calendar itself, so every assertion below is a real, non-trivial zone conversion rather than a
+    // UTC-equals-local coincidence: BookingFixtures.Slot (11:00Z-11:45Z) reads 14:00-14:45 Moscow.
+    // ------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task DateChoice_LabelsReadTheFullWeekdayMonthAndYear_NotTheOldThreeLetterAbbreviations()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        var afterService = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        var workerAction = Assert.Single(afterService.Value.Step!.Actions);
+
+        var afterWorker = await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
+
+        // BookingFixtures.LocalDate is 2026-05-04, a Monday - full weekday, full month, four-digit
+        // year, not the pre-`25-145` "Mon, May 4".
+        var dateAction = Assert.Single(afterWorker.Value.Step!.Actions);
+        Assert.Equal("Monday, May 4, 2026", dateAction.Label);
+    }
+
+    [Fact]
+    public async Task SlotChoice_LabelsConvertToTheCalendarsOwnZone_WithARussianAbbreviation()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        var afterDate = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
+
+        // 11:00Z-11:45Z, converted to Europe/Moscow (+3): 14:00-14:45, labelled "МСК" - never "UTC".
+        var slotAction = Assert.Single(afterDate.Value.Step!.Actions);
+        Assert.Equal("14:00 - 14:45 МСК", slotAction.Label);
+    }
+
+    [Fact]
+    public async Task Confirmation_WhenLineReadsTheFullConvertedDateAndTime_NotUtc()
+    {
+        var world = new World();
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, BookingFixtures.EventId.Value.ToString());
+
+        var afterPhone = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000020", phoneVerifiedAt: BookingFixtures.Now);
+
+        var whenLine = afterPhone.Value.Step!.ConfirmationLines!.Single(l => l.Label == "When");
+        // The Done-when's own worked example, in English: "20 сентября 2026, воскресенье, 16:00 МСК"
+        // for a Europe/Moscow calendar - this suite's own fixture date/time renders the identical
+        // shape: full date, converted time, Russian abbreviation, never "UTC".
+        Assert.Equal("Monday, May 4, 2026, 14:00 - 14:45 МСК", whenLine.Value);
+        Assert.DoesNotContain("UTC", whenLine.Value, StringComparison.Ordinal);
+    }
+
+    /// <summary>The item's own explicit fallback: a calendar outside the curated eleven Russian zones
+    /// never gets a guessed abbreviation - it reads a bare, unambiguous UTC-offset string instead. A
+    /// distinct <see cref="World"/> offset (+9, matching a real <c>Asia/Tokyo</c> reading) proves this
+    /// is genuinely computed from the conversion, not a hardcoded string.</summary>
+    [Fact]
+    public async Task ZoneAbbreviation_FallsBackToABareUtcOffsetString_ForACalendarOutsideTheCuratedElevenZones()
+    {
+        var world = new World(wallClockOffset: TimeSpan.FromHours(9));
+        world.ReadStore.TimeZone = new CalendarTimeZone("Asia/Tokyo");
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.WorkerId.Value.ToString());
+
+        var afterDate = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
+
+        var slotAction = Assert.Single(afterDate.Value.Step!.Actions);
+        Assert.Equal("20:00 - 20:45 +09:00", slotAction.Label);
+    }
+
     [Fact]
     public async Task ALostBookingRace_ReOffersFreshSlots_RatherThanADeadEnd()
     {
@@ -739,7 +824,14 @@ public class ChatModuleTaskHandlerTests
         private readonly ReplyToModuleTaskHandler _replyHandler;
         private readonly TenantId _tenantId;
 
-        public World()
+        /// <param name="wallClockOffset">`25-145`: the fixed offset <see cref="FakeWallClockResolver"/>
+        /// applies to every conversion - defaults to Moscow's own +3, matching
+        /// <see cref="ReadStore"/>'s own default zone. A caller proving the non-curated-zone fallback
+        /// passes a different offset alongside a differently-configured <see cref="ReadStore"/>'s own
+        /// <see cref="FakeBookingSurfaceReadStore.TimeZone"/> - the two are set together because this
+        /// fake resolver, unlike the real one, does not itself look at which zone it was asked to
+        /// convert.</param>
+        public World(TimeSpan? wallClockOffset = null)
         {
             var tenant = BookingFixtures.Tenant();
             _tenantId = tenant.Id;
@@ -782,8 +874,13 @@ public class ChatModuleTaskHandlerTests
             // resolves the tenant from the site id it is handed directly, and ReplyToModuleTaskHandler
             // resolves the tenant's public key itself, from the task's own TenantId.
             _startHandler = new StartModuleTaskHandler(tenantRepo, calendarRepo, ReadStore, Tasks, idGenerator, clock);
+            // `25-145`: Europe/Moscow's own fixed +3 offset by default - matches ReadStore.TimeZone's
+            // own default and BookingFixtures.Calendar's own configured zone, so this world's every
+            // rendered label reflects a real, non-trivial zone conversion rather than a UTC-equals-local
+            // coincidence.
+            var wallClock = new FakeWallClockResolver(wallClockOffset ?? TimeSpan.FromHours(3));
             _replyHandler = new ReplyToModuleTaskHandler(
-                Tasks, tenantRepo, workersHandler, slotsHandler, ReadStore, bookHandler, clock);
+                Tasks, tenantRepo, workersHandler, slotsHandler, ReadStore, bookHandler, clock, wallClock);
         }
 
         public FakeBookingSurfaceReadStore ReadStore { get; } = new();

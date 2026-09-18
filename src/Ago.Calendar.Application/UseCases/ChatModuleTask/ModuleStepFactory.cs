@@ -84,7 +84,13 @@ internal static class ModuleStepFactory
         return ModuleStep.DateTimePickerStep(
             strings.PickADate,
             [.. dates.Select(d => new SlotOption(FormatDateValue(d.Date), d.FirstStartsAt, strings.FormatDate(d.Date)))],
-            [.. dates.Select(d => new ModuleAction(strings.FormatDate(d.Date), FormatDateValue(d.Date)))]);
+            // `25-154`: the visible button label only - the author's own live-testing ask was that a
+            // full weekday name is too long for a button, not that the date round's other renderings
+            // (the `SlotOption.Label` line above, still unused by `ago-widget` today per
+            // `render.ts`'s own comment, and every other `FormatDate` caller in this file) should
+            // shorten too. See <see cref="Strings.FormatDateShort"/> for why this is a new method
+            // beside <see cref="Strings.FormatDate"/> rather than a parameter on it.
+            [.. dates.Select(d => new ModuleAction(strings.FormatDateShort(d.Date), FormatDateValue(d.Date)))]);
     }
 
     /// <summary>`25-33`: the picker's second round - the times available on the one date the visitor
@@ -324,6 +330,7 @@ internal static class ModuleStepFactory
         string PriceFromPrefix,
         string MinutesSuffix,
         IReadOnlyList<string> Weekdays,
+        IReadOnlyList<string> ShortWeekdays,
         IReadOnlyList<string> Months,
         bool MonthBeforeDay)
     {
@@ -358,6 +365,11 @@ internal static class ModuleStepFactory
             // three-letter abbreviations - the author's own reasoning, stated in the backlog item, is
             // that a full weekday name orients a client better than a bare day number.
             Weekdays: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+            // `25-154`: the exact three-letter forms this table itself carried before `25-145` grew
+            // `Weekdays` to full names - kept here for the one caller (the date-choice button) that
+            // still wants a short weekday, now that `Weekdays` itself means "full name" everywhere
+            // else in this file.
+            ShortWeekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
             Months:
             [
                 "January", "February", "March", "April", "May", "June", "July", "August", "September",
@@ -387,6 +399,11 @@ internal static class ModuleStepFactory
             // same way English needs no case distinction here at all. Getting this wrong is not a
             // rounding error the way a wrong abbreviation would be; it reads as broken Russian.
             Weekdays: ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"],
+            // `25-154`: the pre-`25-145` two-letter forms, capitalized - the old table
+            // (`git show 75221cd~1`) read lowercase ("вт") because it was the *only* form this record
+            // had; now that it sits beside the full `Weekdays` name, a button's own leading word reads
+            // capitalized, matching how the English `ShortWeekdays` entries were already cased.
+            ShortWeekdays: ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"],
             Months:
             [
                 "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
@@ -403,6 +420,26 @@ internal static class ModuleStepFactory
         public string FormatDate(DateOnly date)
         {
             var weekday = Weekdays[(int)date.DayOfWeek];
+            var month = Months[date.Month - 1];
+            return MonthBeforeDay
+                ? $"{weekday}, {month} {date.Day}, {date.Year}"
+                : $"{weekday}, {date.Day} {month} {date.Year}";
+        }
+
+        /// <summary>`25-154`: the date-choice button's own label - <see cref="ShortWeekdays"/> instead
+        /// of <see cref="Weekdays"/>, day/month/year exactly as <see cref="FormatDate"/> renders them.
+        /// A new method beside <see cref="FormatDate"/>, deliberately, rather than an
+        /// <c>abbreviateWeekday</c> parameter on it: <see cref="FormatDate"/> already has one caller
+        /// per round (<see cref="DescribeRange"/>, <see cref="DescribeTimeOnly"/>'s prompt via
+        /// <see cref="SlotChoice"/>) that must keep reading the full weekday name, and a boolean
+        /// parameter defaulting to <see langword="false"/> would still leave every one of those call
+        /// sites able to silently start passing <see langword="true"/> later with nothing at the call
+        /// site itself signalling "this is the one place that reads short". Naming the short form its
+        /// own method makes that impossible by construction - <see cref="DateChoice"/> is the only
+        /// caller, and it says so.</summary>
+        public string FormatDateShort(DateOnly date)
+        {
+            var weekday = ShortWeekdays[(int)date.DayOfWeek];
             var month = Months[date.Month - 1];
             return MonthBeforeDay
                 ? $"{weekday}, {month} {date.Day}, {date.Year}"

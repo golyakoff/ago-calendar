@@ -518,8 +518,13 @@ public class ChatModuleTaskHandlerTests
     // UTC-equals-local coincidence: BookingFixtures.Slot (11:00Z-11:45Z) reads 14:00-14:45 Moscow.
     // ------------------------------------------------------------------------------------------
 
+    /// <summary>`25-154`: the author's own live-testing ask, after `25-145` grew this button to a full
+    /// weekday name - too long for a button. The weekday abbreviates (`"Monday"` -> `"Mon"`); day,
+    /// month and year stay exactly as `25-145` left them. See
+    /// <see cref="Confirmation_WhenLineReadsTheFullConvertedDateAndTime_NotUtc"/> for this same
+    /// change's other call site, <c>DescribeRange</c>, proven unaffected.</summary>
     [Fact]
-    public async Task DateChoice_LabelsReadTheFullWeekdayMonthAndYear_NotTheOldThreeLetterAbbreviations()
+    public async Task DateChoice_LabelsAbbreviateTheWeekday_ButKeepFullDayMonthAndYear()
     {
         var world = new World();
         var start = await world.StartAsync();
@@ -530,10 +535,33 @@ public class ChatModuleTaskHandlerTests
 
         var afterWorker = await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
 
-        // BookingFixtures.LocalDate is 2026-05-04, a Monday - full weekday, full month, four-digit
-        // year, not the pre-`25-145` "Mon, May 4".
+        // BookingFixtures.LocalDate is 2026-05-04, a Monday - short weekday, full month, four-digit
+        // year: neither the pre-`25-145` "Mon, May 4" (no year) nor `25-145`'s own "Monday, May 4,
+        // 2026" (full weekday, too long for a button).
         var dateAction = Assert.Single(afterWorker.Value.Step!.Actions);
-        Assert.Equal("Monday, May 4, 2026", dateAction.Label);
+        Assert.Equal("Mon, May 4, 2026", dateAction.Label);
+    }
+
+    /// <summary>`25-154`'s Russian twin - the same abbreviated-weekday button, in the tenant's other
+    /// configured language. Capitalized ("Вт", not the pre-`25-145` table's lowercase "вт") since it
+    /// now leads a button label rather than being the only form this record had.</summary>
+    [Fact]
+    public async Task DateChoice_WithRussianLocale_AbbreviatesTheWeekdayAndCapitalizesIt()
+    {
+        var world = new World();
+        var start = await world.StartAsync(locale: "Ru");
+        var externalTaskId = start.Value.ExternalTaskId;
+        var afterService = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString(), locale: "Ru");
+        var workerAction = Assert.Single(afterService.Value.Step!.Actions);
+
+        var afterWorker = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value, locale: "Ru");
+
+        // BookingFixtures.LocalDate is 2026-05-04, a Monday - "Пн", not "Понедельник" (the full
+        // `Weekdays` entry) nor the old table's lowercase "пн".
+        var dateAction = Assert.Single(afterWorker.Value.Step!.Actions);
+        Assert.Equal("Пн, 4 мая 2026", dateAction.Label);
     }
 
     [Fact]
@@ -570,6 +598,12 @@ public class ChatModuleTaskHandlerTests
         // The Done-when's own worked example, in English: "20 сентября 2026, воскресенье, 16:00 МСК"
         // for a Europe/Moscow calendar - this suite's own fixture date/time renders the identical
         // shape: full date, converted time, Russian abbreviation, never "UTC".
+        //
+        // `25-154`: this is `DescribeRange`'s own call to `FormatDate` - the confirmation card's
+        // "When" line, unaffected by that item's `DateChoice`-only shortened weekday
+        // (`DateChoice_LabelsAbbreviateTheWeekday_ButKeepFullDayMonthAndYear`, above). Still the full
+        // "Monday", not "Mon" - proof the two call sites were kept independent, not that this
+        // assertion happens to predate the change.
         Assert.Equal("Monday, May 4, 2026, 14:00 - 14:45 МСК", whenLine.Value);
         Assert.DoesNotContain("UTC", whenLine.Value, StringComparison.Ordinal);
     }

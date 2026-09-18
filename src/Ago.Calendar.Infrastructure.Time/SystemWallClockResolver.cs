@@ -63,6 +63,13 @@ public sealed class SystemWallClockResolver : IWallClockResolver
     public DateOnly ToLocalDate(CalendarTimeZone zone, DateTimeOffset instant) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, Resolve(zone)).DateTime);
 
+    /// <summary>`25-145`: the same <c>ConvertTime</c> overload <see cref="ToLocalDate"/> already
+    /// calls, returned whole rather than trimmed down to its date component - <c>ConvertTime</c>'s own
+    /// <see cref="DateTimeOffset"/> overload already carries the destination zone's offset, so there is
+    /// nothing left for this method to compute beyond not throwing the rest of the value away.</summary>
+    public DateTimeOffset ToLocal(CalendarTimeZone zone, DateTimeOffset instant) =>
+        TimeZoneInfo.ConvertTime(instant, Resolve(zone));
+
     /// <summary>
     /// Returns the instant <b>normalised to UTC</b>, not carrying the zone's own offset.
     ///

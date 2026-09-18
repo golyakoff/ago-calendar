@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Domain;
 
 namespace Ago.Calendar.Application.UseCases.ChatModuleTask;
 
@@ -95,8 +96,18 @@ internal static class ModuleStepFactory
     /// (<see cref="DescribeTimeOnly"/>), not the full date-and-time <see cref="DescribeRange"/> the
     /// pre-`25-33` flat list used - the prompt itself already names the date, and repeating it on
     /// every one of up to <see cref="TimeSlotPageSize"/> lines is exactly the redundant wall of text
-    /// this redesign exists to remove.</summary>
-    public static ModuleStep SlotChoice(IReadOnlyList<OpenSlotRow> slotsForDate, DateOnly date, string locale)
+    /// this redesign exists to remove.
+    ///
+    /// <para><b>`25-145`: <paramref name="zone"/>/<paramref name="wallClock"/> convert every label into
+    /// the calendar's own local time</b> - see <see cref="DescribeTimeOnly"/>'s own remarks. The
+    /// prompt's own date name (<paramref name="date"/>, via <see cref="Strings.FormatDate"/>) needs no
+    /// such conversion: it is <see cref="OpenSlotRow.LocalDate"/>, already computed correctly in the
+    /// calendar's own zone at materialisation time (adr/0049) - converting it a second time here would
+    /// be double conversion, not a fix.</para>
+    /// </summary>
+    public static ModuleStep SlotChoice(
+        IReadOnlyList<OpenSlotRow> slotsForDate, DateOnly date, string locale, CalendarTimeZone zone,
+        IWallClockResolver wallClock)
     {
         var strings = Strings.For(locale);
         var prompt = string.Format(CultureInfo.InvariantCulture, strings.PickATimeOnDate, strings.FormatDate(date));
@@ -104,8 +115,8 @@ internal static class ModuleStepFactory
 
         return ModuleStep.DateTimePickerStep(
             prompt,
-            [.. page.Select(s => new SlotOption(s.EventId.Value.ToString(), s.StartsAt, DescribeTimeOnly(s)))],
-            [.. page.Select(s => new ModuleAction(DescribeTimeOnly(s), s.EventId.Value.ToString()))]);
+            [.. page.Select(s => new SlotOption(s.EventId.Value.ToString(), s.StartsAt, DescribeTimeOnly(s, zone, wallClock)))],
+            [.. page.Select(s => new ModuleAction(DescribeTimeOnly(s, zone, wallClock), s.EventId.Value.ToString()))]);
     }
 
     /// <summary>`20-09`: emits <see cref="ModuleStepKind.VerifiedPhoneForm"/> when
@@ -143,8 +154,12 @@ internal static class ModuleStepFactory
             : ModuleStep.FormStep(prompt, "phone", strings.PhoneFieldLabel);
     }
 
+    /// <summary>`25-145`: <paramref name="zone"/>/<paramref name="wallClock"/> convert the booking's own
+    /// instants into the calendar's local time before <see cref="DescribeRange"/> ever formats them -
+    /// see that method's own remarks for the shape.</summary>
     public static ModuleStep Confirmation(
-        string serviceName, string workerName, DateTimeOffset startsAt, DateTimeOffset endsAt, string locale)
+        string serviceName, string workerName, DateTimeOffset startsAt, DateTimeOffset endsAt, string locale,
+        CalendarTimeZone zone, IWallClockResolver wallClock)
     {
         var strings = Strings.For(locale);
         return ModuleStep.ConfirmationStep(
@@ -152,7 +167,7 @@ internal static class ModuleStepFactory
             [
                 new ConfirmationLine(strings.ServiceLabel, serviceName),
                 new ConfirmationLine(strings.WithLabel, workerName),
-                new ConfirmationLine(strings.WhenLabel, DescribeRange(startsAt, endsAt)),
+                new ConfirmationLine(strings.WhenLabel, DescribeRange(startsAt, endsAt, zone, wallClock, strings)),
             ]);
     }
 
@@ -186,20 +201,100 @@ internal static class ModuleStepFactory
         return isFrom ? $"{strings.PriceFromPrefix}{amount} RUB" : $"{amount} RUB";
     }
 
-    /// <summary>UTC, labelled - date-and-time.md rule 1: no IANA zone is known for the visitor on the
-    /// other end of a chat conversation, so this renders UTC rather than guessing one, exactly like a
-    /// renderer with no zone information is instructed to elsewhere in this codebase. `25-37`: stays
-    /// unlocalized on purpose - the backlog item's own instruction ("only the surrounding prose needs a
-    /// language") - so this is one of two strings in this file <see cref="Strings"/> does not own (the
-    /// other is <see cref="DescribeTimeOnly"/>, its own time-only sibling for the `25-33` time
-    /// round).</summary>
-    private static string DescribeRange(DateTimeOffset startsAt, DateTimeOffset endsAt) =>
-        $"{startsAt:yyyy-MM-dd HH:mm} UTC - {endsAt:HH:mm} UTC";
+    /// <summary>
+    /// `25-145`: the calendar's own zone, never UTC - date-and-time.md rule 1 says no visitor IANA
+    /// zone is knowable in a chat channel, but that rule is about *guessing the visitor's own*; the
+    /// zone this method renders in is a tenant-configured fact about the calendar
+    /// (<see cref="BookingCalendar.TimeZone"/>), not a guess, and rendering it as UTC - the pre-`25-145`
+    /// behaviour - was the actual live defect this item fixes, not a safe fallback for one. Full date
+    /// (<see cref="Strings.FormatDate"/>, itself grown a year and stopped abbreviating by this same
+    /// item) plus a start-end time range plus the zone's own abbreviation
+    /// (<see cref="ZoneAbbreviation"/>) - unlike <see cref="DescribeTimeOnly"/>'s time-only sibling,
+    /// this one names the date because a confirmation card is read on its own, with no surrounding
+    /// prompt that already said which day it is.
+    ///
+    /// <para>Still one of the two strings in this file <see cref="Strings"/> does not own (the other
+    /// is <see cref="DescribeTimeOnly"/>): the zone abbreviation table is genuinely zone data, not
+    /// language data - it renders identically whichever <paramref name="locale"/> chose <paramref
+    /// name="strings"/>, the same "an international technical abbreviation, not a translated word"
+    /// reasoning <c>ago-console</c>'s own <c>time/format.ts</c> already applies to its zone
+    /// labels.</para>
+    /// </summary>
+    private static string DescribeRange(
+        DateTimeOffset startsAt, DateTimeOffset endsAt, CalendarTimeZone zone, IWallClockResolver wallClock,
+        Strings strings)
+    {
+        var localStart = wallClock.ToLocal(zone, startsAt);
+        var localEnd = wallClock.ToLocal(zone, endsAt);
+        var abbreviation = ZoneAbbreviation(zone, localStart.Offset);
+        var date = strings.FormatDate(DateOnly.FromDateTime(localStart.DateTime));
+
+        return $"{date}, {localStart:HH:mm} - {localEnd:HH:mm} {abbreviation}";
+    }
 
     /// <summary>`25-33`: the time round's own label - time only, no date, because
-    /// <see cref="SlotChoice"/>'s own prompt already names the date once for the whole step. Still
-    /// UTC and still unlocalized, for the identical reason <see cref="DescribeRange"/> is.</summary>
-    private static string DescribeTimeOnly(OpenSlotRow slot) => $"{slot.StartsAt:HH:mm} - {slot.EndsAt:HH:mm} UTC";
+    /// <see cref="SlotChoice"/>'s own prompt already names the date once for the whole step. `25-145`:
+    /// the calendar's own zone, converted through <paramref name="wallClock"/> exactly like
+    /// <see cref="DescribeRange"/> - the two are the "confirmation card's own new format" pairing that
+    /// item's own Scope names explicitly, and both share <see cref="ZoneAbbreviation"/> so the two
+    /// surfaces can never render the same instant under two different zone labels.</summary>
+    private static string DescribeTimeOnly(OpenSlotRow slot, CalendarTimeZone zone, IWallClockResolver wallClock)
+    {
+        var localStart = wallClock.ToLocal(zone, slot.StartsAt);
+        var localEnd = wallClock.ToLocal(zone, slot.EndsAt);
+        var abbreviation = ZoneAbbreviation(zone, localStart.Offset);
+
+        return $"{localStart:HH:mm} - {localEnd:HH:mm} {abbreviation}";
+    }
+
+    /// <summary>
+    /// `25-145`: Russia's own regional time-zone abbreviation scheme, hand-written per zone rather than
+    /// derived from `TimeZoneInfo`'s own display name or any ICU table - the identical "closed set,
+    /// hand-written, no ICU/CultureInfo dependency" posture <see cref="Strings"/>'s weekday/month
+    /// tables already take, and for the same already-burned reason
+    /// (<see cref="SystemWallClockResolver"/>'s own remarks on `25-26`'s missing-tzdata incident): this
+    /// table trusts nothing about what the host's OS happens to have installed. Keyed by IANA id, the
+    /// identical eleven <c>ago-console</c>'s own <c>calendarFormat.tsx</c> timezone picker (`25-16`)
+    /// offers and <c>time/format.ts</c>'s own <c>RUSSIAN_ZONE_ABBREVIATIONS</c> already renders with -
+    /// the same table, independently re-typed here rather than shared, because the two live in
+    /// different repositories with no shared package between them (`docs/architecture/repositories.md`)
+    /// and the values are frozen government-assigned abbreviations, not something a translator edits.
+    /// A zone missing from this table (every one of the eleven is fixed-offset, no DST, since Russia's
+    /// 2014 return to permanent standard time - `24-17`) is deliberately not any zone this table could
+    /// misrender: it falls through to the bare offset instead of guessing a made-up abbreviation.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> RussianZoneAbbreviations =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Europe/Kaliningrad"] = "МСК-1",
+            ["Europe/Moscow"] = "МСК",
+            ["Europe/Samara"] = "МСК+1",
+            ["Asia/Yekaterinburg"] = "МСК+2",
+            ["Asia/Omsk"] = "МСК+3",
+            ["Asia/Krasnoyarsk"] = "МСК+4",
+            ["Asia/Irkutsk"] = "МСК+5",
+            ["Asia/Yakutsk"] = "МСК+6",
+            ["Asia/Vladivostok"] = "МСК+7",
+            ["Asia/Magadan"] = "МСК+8",
+            ["Asia/Kamchatka"] = "МСК+9",
+        };
+
+    /// <summary>The label a rendered instant's own zone gets: the curated Russian abbreviation above
+    /// when <paramref name="zone"/> is one of the eleven, or else a bare, unambiguous UTC-offset string
+    /// (<c>"+05:00"</c>) built from <paramref name="localOffset"/> itself - never a guessed
+    /// abbreviation for a zone this table does not name, and never the literal word "UTC" for a
+    /// calendar's own configured zone (that was the defect this item fixes).</summary>
+    private static string ZoneAbbreviation(CalendarTimeZone zone, TimeSpan localOffset)
+    {
+        if (RussianZoneAbbreviations.TryGetValue(zone.Value, out var abbreviation))
+        {
+            return abbreviation;
+        }
+
+        var magnitude = localOffset.Duration();
+        var sign = localOffset < TimeSpan.Zero ? '-' : '+';
+        return $"{sign}{magnitude:hh\\:mm}";
+    }
 
     /// <summary>`25-33`: the wire value a date round's own action carries - ISO 8601
     /// (<c>"yyyy-MM-dd"</c>), culture-invariant and unambiguous, the same format
@@ -253,17 +348,20 @@ internal static class ModuleStepFactory
             WhenLabel: "When",
             PriceFromPrefix: "from ",
             MinutesSuffix: " min",
-            // `25-33`: hand-written, not CultureInfo/ICU-derived - the identical "no third-party i18n,
-            // two fixed tables" posture this whole record already takes, and it sidesteps a real,
-            // already-burned risk in this exact codebase: the deployed base image's ICU data was only
-            // confirmed present after `25-26` found the *plain* chiseled tag shipped no tzdata at all
-            // (this Dockerfile's own comment) - trusting a *second* OS-provided data set (culture
-            // name tables) for locale text this factory already owns everywhere else would be the
-            // identical risk shape, not a new one.
-            Weekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+            // `25-33`/`25-145`: hand-written, not CultureInfo/ICU-derived - the identical "no
+            // third-party i18n, two fixed tables" posture this whole record already takes, and it
+            // sidesteps a real, already-burned risk in this exact codebase: the deployed base image's
+            // ICU data was only confirmed present after `25-26` found the *plain* chiseled tag shipped
+            // no tzdata at all (this Dockerfile's own comment) - trusting a *second* OS-provided data
+            // set (culture name tables) for locale text this factory already owns everywhere else would
+            // be the identical risk shape, not a new one. `25-145`: full names, not the pre-`25-145`
+            // three-letter abbreviations - the author's own reasoning, stated in the backlog item, is
+            // that a full weekday name orients a client better than a bare day number.
+            Weekdays: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
             Months:
             [
-                "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+                "January", "February", "March", "April", "May", "June", "July", "August", "September",
+                "October", "November", "December",
             ],
             MonthBeforeDay: true);
 
@@ -284,22 +382,31 @@ internal static class ModuleStepFactory
             WhenLabel: "Когда",
             PriceFromPrefix: "от ",
             MinutesSuffix: " мин",
-            Weekdays: ["вс", "пн", "вт", "ср", "чт", "пт", "сб"],
+            // `25-145`: full names, and the month table is genitive case ("сентября", not the
+            // dictionary-form "сентябрь") - Russian grammar for "18 <month>" demands the genitive, the
+            // same way English needs no case distinction here at all. Getting this wrong is not a
+            // rounding error the way a wrong abbreviation would be; it reads as broken Russian.
+            Weekdays: ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"],
             Months:
             [
-                "янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек",
+                "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября",
+                "октября", "ноября", "декабря",
             ],
             MonthBeforeDay: false);
 
-        /// <summary>`25-33`: this record's own hand-written weekday/month names, never
-        /// <c>CultureInfo</c>/ICU - see <see cref="Weekdays"/>'s own remarks on why. English reads
-        /// "Tue, Sep 15"; Russian reads "вт, 15 сен" - each language's own natural day/month order,
-        /// not one format forced onto both.</summary>
+        /// <summary>`25-33`/`25-145`: this record's own hand-written weekday/month names, never
+        /// <c>CultureInfo</c>/ICU - see <see cref="Weekdays"/>'s own remarks on why. `25-145` grew both
+        /// tables from three-letter abbreviations to full names and added the year: English reads
+        /// "Friday, September 18, 2026", Russian "пятница, 18 сентября 2026" - each language's own
+        /// natural weekday/day/month order and punctuation (English's comma before the year; Russian's
+        /// lack of one), not one format forced onto both.</summary>
         public string FormatDate(DateOnly date)
         {
             var weekday = Weekdays[(int)date.DayOfWeek];
             var month = Months[date.Month - 1];
-            return MonthBeforeDay ? $"{weekday}, {month} {date.Day}" : $"{weekday}, {date.Day} {month}";
+            return MonthBeforeDay
+                ? $"{weekday}, {month} {date.Day}, {date.Year}"
+                : $"{weekday}, {date.Day} {month} {date.Year}";
         }
 
         /// <summary>Anything but a recognised <c>"Ru"</c> (case-insensitive, matching how loosely every

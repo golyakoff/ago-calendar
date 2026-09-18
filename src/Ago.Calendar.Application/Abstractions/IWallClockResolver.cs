@@ -57,4 +57,24 @@ public interface IWallClockResolver
     /// <exception cref="UnknownCalendarTimeZoneException">The host's tz database has no such
     /// zone.</exception>
     DateOnly ToLocalDate(CalendarTimeZone zone, DateTimeOffset instant);
+
+    /// <summary>
+    /// `25-145`: the same instant, re-expressed with <paramref name="zone"/>'s own offset - a
+    /// rendering of the instant, not a different one. <see cref="DateTimeOffset.ToUniversalTime"/> and
+    /// this method are exact inverses of each other in spirit: one throws away everything but the
+    /// absolute instant, this one adds back the one zone a human reading a booking confirmation
+    /// actually cares about (the calendar's own, adr/0049 - never a guess at the visitor's).
+    ///
+    /// <para><b>Why a chat-facing renderer needs this at all, when everything else in this product
+    /// stays in absolute time.</b> <see cref="Event.LocalDate"/> is already computed once, at
+    /// materialisation time, by <see cref="ToLocalDate"/> - but the *time of day* a confirmation card
+    /// or a slot label prints was never carried forward the same way, because nothing before this item
+    /// rendered a time of day for a human at all (`25-33`'s own DescribeRange/DescribeTimeOnly hardcode
+    /// UTC). Rather than growing a third stored field next to <c>LocalDate</c>, the caller converts
+    /// on the way out, at render time, the same "compute it once you actually need it" posture
+    /// <see cref="ToInstantWindow"/> already takes for the opposite direction.</para>
+    /// </summary>
+    /// <exception cref="UnknownCalendarTimeZoneException">The host's tz database has no such
+    /// zone.</exception>
+    DateTimeOffset ToLocal(CalendarTimeZone zone, DateTimeOffset instant);
 }

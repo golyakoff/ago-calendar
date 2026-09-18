@@ -48,6 +48,26 @@ public interface IBookingSurfaceReadStore
         DateTimeOffset notBefore,
         int limit,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// `25-145`: the one field <see cref="ModuleStepFactory"/> needs and none of the rows above carry -
+    /// a calendar's own configured zone, for converting the instants those same rows already hold into
+    /// something a chat visitor reads as their own local time. Added here rather than resolving a full
+    /// <see cref="BookingCalendar"/> through <see cref="IBookingCalendarRepository"/>: this port's own
+    /// header already states the reason a caller reaches for it instead of that one - "rows shaped for
+    /// whatever is offering a customer a choice, never aggregates" - and materialising a whole
+    /// <see cref="BookingCalendar"/>, with its publish/worker invariants, to read one scalar column
+    /// would be the exact "four hundred slots do not need four hundred aggregates" antipattern this
+    /// port already exists to avoid, applied to a single row instead of four hundred. The alternative -
+    /// <see cref="ReplyToModuleTaskHandler"/> loading the aggregate itself, the way it already does
+    /// nowhere today but the write side (<c>BookEventHandler</c>) does - was the other option this
+    /// item's own scope named explicitly; this one wins because every other read
+    /// <see cref="ReplyToModuleTaskHandler"/> already performs for rendering (services, workers) goes
+    /// through this exact port, so a zone lookup joining them here keeps the handler's read side
+    /// uniform instead of mixing "read a row" and "load an aggregate" for two adjacent lines of the
+    /// same method.
+    /// </summary>
+    Task<CalendarTimeZone> GetTimeZoneAsync(CalendarId calendarId, CancellationToken cancellationToken);
 }
 
 /// <param name="DurationMinutes">Whole minutes - <see cref="Service"/> stores it that way for the

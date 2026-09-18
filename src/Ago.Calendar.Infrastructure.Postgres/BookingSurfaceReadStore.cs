@@ -149,6 +149,12 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
         limit @Limit
         """;
 
+    /// <summary>`25-145`: one column, by primary key - no join, no filter beyond the id
+    /// <see cref="ReplyToModuleTaskHandler"/> already trusts for every other read this class serves it
+    /// (<see cref="ListServicesAsync"/>/<see cref="ListWorkersAsync"/> take the identical calendar id
+    /// with no existence check of their own either).</summary>
+    private const string TimeZoneSql = "select time_zone from calendars where id = @CalendarId";
+
     public async Task<IReadOnlyList<BookableServiceRow>> ListServicesAsync(
         CalendarId calendarId, CancellationToken cancellationToken)
     {
@@ -209,6 +215,15 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
                 new DateTimeOffset(DateTime.SpecifyKind(row.EndsAt, DateTimeKind.Utc)),
                 row.LocalDate)),
         ];
+    }
+
+    public async Task<CalendarTimeZone> GetTimeZoneAsync(CalendarId calendarId, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        var value = await connection.QuerySingleAsync<string>(new CommandDefinition(
+            TimeZoneSql, new { CalendarId = calendarId.Value }, cancellationToken: cancellationToken));
+
+        return new CalendarTimeZone(value);
     }
 
     private sealed record ServiceRaw(

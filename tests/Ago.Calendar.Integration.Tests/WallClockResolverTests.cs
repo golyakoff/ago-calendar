@@ -136,6 +136,59 @@ public class WallClockResolverTests
         Assert.Equal(new DateOnly(2026, 7, 10), _resolver.ToLocalDate(NewYork, instant));
     }
 
+    /// <summary>`25-145`: <c>ToLocal</c> re-expresses the same instant with the destination zone's own
+    /// offset - New York in January is standard time (-05:00), so 12:00Z reads 07:00 local, and the
+    /// two <see cref="DateTimeOffset"/> values still compare equal as instants even though their own
+    /// <c>Offset</c>/<c>Hour</c> differ.</summary>
+    [Fact]
+    public void ToLocal_ReExpressesTheSameInstantWithTheZonesOwnOffset()
+    {
+        var instant = new DateTimeOffset(2026, 1, 15, 12, 0, 0, TimeSpan.Zero);
+
+        var local = _resolver.ToLocal(NewYork, instant);
+
+        Assert.Equal(instant, local);
+        Assert.Equal(TimeSpan.FromHours(-5), local.Offset);
+        Assert.Equal(7, local.Hour);
+    }
+
+    /// <summary>
+    /// `25-145`'s own explicit concern, checked live rather than assumed: `25-26` already found a
+    /// deployed base image shipping no tzdata at all, so a booking calendar's own configured zone
+    /// resolving successfully on a developer's machine proves nothing about a container image. Every
+    /// one of the eleven canonical Russian federal zones this item's own <c>ModuleStepFactory</c>
+    /// renders an abbreviation for (`25-16`'s own outcome; <c>ago-console</c>'s <c>calendarFormat.tsx</c>
+    /// names the identical eleven) must resolve through the exact same <see cref="SystemWallClockResolver"/>
+    /// this suite already exercises against <c>America/New_York</c> above - the same code path
+    /// <c>ReplyToModuleTaskHandler</c> calls in production, not a coincidentally-working substitute.
+    /// </summary>
+    [Theory]
+    [InlineData("Europe/Kaliningrad")]
+    [InlineData("Europe/Moscow")]
+    [InlineData("Europe/Samara")]
+    [InlineData("Asia/Yekaterinburg")]
+    [InlineData("Asia/Omsk")]
+    [InlineData("Asia/Krasnoyarsk")]
+    [InlineData("Asia/Irkutsk")]
+    [InlineData("Asia/Yakutsk")]
+    [InlineData("Asia/Vladivostok")]
+    [InlineData("Asia/Magadan")]
+    [InlineData("Asia/Kamchatka")]
+    public void EveryCanonicalRussianFederalZone_ResolvesLiveOnThisHost(string ianaId)
+    {
+        var zone = new CalendarTimeZone(ianaId);
+        var instant = new DateTimeOffset(2026, 6, 15, 12, 0, 0, TimeSpan.Zero);
+
+        var local = _resolver.ToLocal(zone, instant);
+
+        // No DST since 2014 (`24-17`): the offset is fixed, so any real value at all - not a specific
+        // one - is what proves FindSystemTimeZoneById resolved rather than silently falling through
+        // to a caught exception this test would otherwise never see (ToLocal has no fallback branch;
+        // an unresolvable zone throws UnknownCalendarTimeZoneException instead of reaching this line).
+        Assert.NotEqual(TimeSpan.Zero, local.Offset);
+        Assert.Equal(instant, local);
+    }
+
     [Fact]
     public void AZoneTheHostCannotResolve_IsAnInfrastructureFaultWithItsOwnName()
     {

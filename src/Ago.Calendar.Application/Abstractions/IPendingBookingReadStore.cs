@@ -67,10 +67,26 @@ public interface IPendingBookingReadStore
 /// <param name="CalendarId">Which calendar it belongs to - shown, not filtered on, because the queue
 /// spans all of them and an operator still needs to know which shop floor they are looking at.</param>
 /// <param name="WorkerId">Who the visit is with.</param>
+/// <param name="WorkerDisplayName">`26-50`: never gated - a worker's own name is the shop's own
+/// roster, not personal data about a customer, the identical reasoning
+/// <see cref="ConfirmedBookingRow.WorkerDisplayName"/> already states for its own sibling column.
+/// Never null, for the same reason that one is: a worker with any booking history cannot be deleted,
+/// only deactivated.</param>
 /// <param name="ServiceId">What was booked.</param>
-/// <param name="CustomerId">Resolves the lead card. The queue carries no name and no phone number -
-/// a list does not need them, and a read model that joined them would put personal data into every
-/// row of a screen an operator leaves open all day.</param>
+/// <param name="ServiceName">`26-50`: never gated, the identical reasoning
+/// <see cref="ConfirmedBookingRow.ServiceName"/> already states. Nullable only because the join is a
+/// defensive <c>left join</c>, the same caution that row's own remarks give.</param>
+/// <param name="CustomerId">Resolves the lead card. The queue's own <see cref="CustomerDisplayName"/>
+/// and <see cref="Phone"/> are the two fields personal data actually lives on - this id alone is a
+/// foreign key, never gated.</param>
+/// <param name="CustomerDisplayName">`26-50`: gated exactly the way <see cref="Phone"/> already is -
+/// <see langword="null"/> means either of the same two things <see cref="Phone"/>'s own remarks
+/// describe: the caller was never asked for it (<c>includeContactData: false</c>, so the query never
+/// joined to <c>customers</c> at all), or the customer has simply never had a name recorded. Unlike
+/// <see cref="Phone"/>, the second reason is reachable here - <see cref="Customer.DisplayName"/> is
+/// optional where <see cref="Customer.Phone"/> is not - so this field carries the two-reasons-for-null
+/// story <see cref="WorkerSlotRow.CustomerDisplayName"/> already has, rather than <see cref="Phone"/>'s
+/// simpler one.</param>
 /// <param name="StartsAt">When the visit is - the run's first slot.</param>
 /// <param name="EndsAt">Exclusive - the run's last slot, buffers between them included.</param>
 /// <param name="LocalDate">The business-local day, as the shop names it (adr/0049).</param>
@@ -100,8 +116,11 @@ public readonly record struct PendingBookingRow(
     EventId BookingId,
     CalendarId CalendarId,
     WorkerId WorkerId,
+    string WorkerDisplayName,
     ServiceId ServiceId,
+    string? ServiceName,
     CustomerId CustomerId,
+    string? CustomerDisplayName,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     DateOnly LocalDate,

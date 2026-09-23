@@ -131,12 +131,27 @@ public sealed record WorkingHoursRuleResponse(
 /// <param name="Masked">`23-12`: whether <see cref="Phone"/> above is the masked display form -
 /// meaningful only when <see cref="Phone"/> is non-null. The console must not infer this from the
 /// string's own shape.</param>
+/// <param name="WorkerDisplayName">`26-50`: never gated - a worker's own name is the shop's own
+/// roster, not personal data about a customer, the identical reasoning
+/// <see cref="ConfirmedBookingResponse.WorkerDisplayName"/> already states for its own sibling
+/// field.</param>
+/// <param name="ServiceName">`26-50`: never gated, the same reasoning
+/// <see cref="ConfirmedBookingResponse.ServiceName"/> already carries.</param>
+/// <param name="CustomerDisplayName">`26-50`: gated exactly the way <see cref="Phone"/> already is -
+/// <see langword="null"/> for a caller who does not hold <c>customer:read</c>, and also
+/// <see langword="null"/> for a customer who has simply never had a name recorded (unlike
+/// <see cref="Phone"/>, where the second reason cannot occur - see
+/// <c>PendingBookingRow.CustomerDisplayName</c>'s own remarks for why the two fields' null-stories
+/// differ). Never a display name invented from a phone number.</param>
 public sealed record PendingBookingResponse(
     Guid BookingId,
     Guid CalendarId,
     Guid WorkerId,
+    string WorkerDisplayName,
     Guid ServiceId,
+    string? ServiceName,
     Guid CustomerId,
+    string? CustomerDisplayName,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     DateOnly LocalDate,

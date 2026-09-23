@@ -138,6 +138,58 @@ public class SharedPendingQueueTests(PostgresFixture fixture)
         Assert.Equal(withAccess.Select(r => r.BookingId), withoutAccess.Select(r => r.BookingId));
     }
 
+    /// <summary>
+    /// `26-50`'s own Done-when: worker and service names are never gated, only the customer's name is -
+    /// the identical two-caller, one-booking shape the phone test above already proves for
+    /// <c>Phone</c>, restated for the two name fields this item adds.
+    /// </summary>
+    [Fact]
+    public async Task ACallerHoldingCustomerRead_SeesTheCustomerName_OneWithoutIt_DoesNot_ButBothSeeWorkerAndServiceNames()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            var customer = await db.Customers.SingleAsync(c => c.Id == seed.Customer.Id);
+            customer.Describe("Nina Petrova", notes: null);
+            await db.SaveChangesAsync();
+        }
+
+        await APendingBookingForExistingCustomerAsync(seed, seed.Customer.Id, Now.AddMinutes(15), Now.AddDays(3));
+
+        var stranger = await AnOperatorWithoutCustomerReadAsync(seed.Tenant.Id);
+
+        var withAccess = Assert.Single(await QueueAsync(seed.OperatorId, seed.Tenant.Id));
+        var withoutAccess = Assert.Single(await QueueAsync(stranger, seed.Tenant.Id));
+
+        // Never gated, for both callers - `26-50`'s own reasoning restated on PendingBookingRow.
+        Assert.False(string.IsNullOrEmpty(withAccess.WorkerDisplayName));
+        Assert.Equal(withAccess.WorkerDisplayName, withoutAccess.WorkerDisplayName);
+        Assert.NotNull(withAccess.ServiceName);
+        Assert.Equal(withAccess.ServiceName, withoutAccess.ServiceName);
+
+        // Gated exactly the way Phone already is - the one field that actually differs between the
+        // two callers on this identical booking.
+        Assert.Equal("Nina Petrova", withAccess.CustomerDisplayName);
+        Assert.Null(withoutAccess.CustomerDisplayName);
+    }
+
+    private async Task APendingBookingForExistingCustomerAsync(
+        SeededTenant seed, CustomerId customerId, DateTimeOffset deadline, DateTimeOffset startsAt)
+    {
+        var slot = Event.Materialize(
+            new EventId(CalendarSeed.NewId()), seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id,
+            new TimeSlot(startsAt, startsAt.AddMinutes(45)), DateOnly.FromDateTime(startsAt.UtcDateTime), Now);
+
+        await using var db = fixture.CreateDbContext();
+        db.Events.Add(slot);
+        await db.SaveChangesAsync();
+
+        slot.Claim(customerId, seed.Service.Id, Now, deadline);
+        slot.ClearDomainEvents();
+        await db.SaveChangesAsync();
+    }
+
     /// <summary>`22-05`/`adr/0093`: a second operator, narrower than <see cref="CalendarSeed"/>'s own
     /// seed - a projection row written directly, the same way the seed itself writes one, rather than
     /// a `Role`/`Operator` pair that no longer exists.</summary>

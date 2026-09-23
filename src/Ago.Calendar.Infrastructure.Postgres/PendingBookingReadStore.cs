@@ -54,19 +54,31 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
     /// <c>starts_at</c>/<c>ends_at</c> are the only two that genuinely differ row to row, so they are
     /// the only two aggregated - <c>min</c>/<c>max</c> - to produce the run's own whole span.
     /// </summary>
+    /// <summary>
+    /// `26-50`: <c>workers</c>/<c>services</c> are joined unconditionally here too, the identical
+    /// reasoning <c>ConfirmedBookingReadStore</c>'s own remarks give - naming what a booking is and who
+    /// it is with is never gated on <c>customer:read</c>, only <c>customers</c> is. <c>workers</c> is
+    /// an inner join (every <see cref="Domain.Event"/> in <c>PendingConfirmation</c> was claimed by a
+    /// worker who cannot have been deleted since, only deactivated); <c>services</c> stays a defensive
+    /// <c>left join</c>, the same caution <c>ConfirmedBookingReadStore</c> takes.
+    /// </summary>
     private const string SqlWithoutContactData =
         """
-        select booking_id as "EventId", calendar_id as "CalendarId", worker_id as "WorkerId",
-               service_id as "ServiceId", customer_id as "CustomerId",
-               min(starts_at) as "StartsAt", max(ends_at) as "EndsAt", local_date as "LocalDate",
-               confirmation_deadline as "ConfirmationDeadline",
-               (confirmation_deadline <= @Now) as "IsOverdue",
+        select e.booking_id as "EventId", e.calendar_id as "CalendarId", e.worker_id as "WorkerId",
+               w.display_name as "WorkerDisplayName", e.service_id as "ServiceId", s.name as "ServiceName",
+               e.customer_id as "CustomerId", null::text as "CustomerDisplayName",
+               min(e.starts_at) as "StartsAt", max(e.ends_at) as "EndsAt", e.local_date as "LocalDate",
+               e.confirmation_deadline as "ConfirmationDeadline",
+               (e.confirmation_deadline <= @Now) as "IsOverdue",
                null::text as "Phone"
-        from events
-        where tenant_id = @TenantId
-          and status = 'PendingConfirmation'
-        group by booking_id, calendar_id, worker_id, service_id, customer_id, local_date, confirmation_deadline
-        order by confirmation_deadline
+        from events e
+        join workers w on w.id = e.worker_id
+        left join services s on s.id = e.service_id
+        where e.tenant_id = @TenantId
+          and e.status = 'PendingConfirmation'
+        group by e.booking_id, e.calendar_id, e.worker_id, w.display_name, e.service_id, s.name,
+                 e.customer_id, e.local_date, e.confirmation_deadline
+        order by e.confirmation_deadline
         limit @Limit
         """;
 
@@ -82,17 +94,20 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
     private const string SqlWithContactData =
         """
         select e.booking_id as "EventId", e.calendar_id as "CalendarId", e.worker_id as "WorkerId",
-               e.service_id as "ServiceId", e.customer_id as "CustomerId",
+               w.display_name as "WorkerDisplayName", e.service_id as "ServiceId", s.name as "ServiceName",
+               e.customer_id as "CustomerId", c.display_name as "CustomerDisplayName",
                min(e.starts_at) as "StartsAt", max(e.ends_at) as "EndsAt", e.local_date as "LocalDate",
                e.confirmation_deadline as "ConfirmationDeadline",
                (e.confirmation_deadline <= @Now) as "IsOverdue",
                c.phone as "Phone"
         from events e
+        join workers w on w.id = e.worker_id
+        left join services s on s.id = e.service_id
         left join customers c on c.id = e.customer_id
         where e.tenant_id = @TenantId
           and e.status = 'PendingConfirmation'
-        group by e.booking_id, e.calendar_id, e.worker_id, e.service_id, e.customer_id, e.local_date,
-                 e.confirmation_deadline, c.phone
+        group by e.booking_id, e.calendar_id, e.worker_id, w.display_name, e.service_id, s.name,
+                 e.customer_id, c.display_name, e.local_date, e.confirmation_deadline, c.phone
         order by e.confirmation_deadline
         limit @Limit
         """;
@@ -116,12 +131,18 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         new EventId(row.EventId),
         new CalendarId(row.CalendarId),
         new WorkerId(row.WorkerId),
+        row.WorkerDisplayName,
         // Both are non-null on any PendingConfirmation row - Event.Claim sets them together with the
         // status, and no transition ever clears them. Asserted with `!` rather than defended with a
         // fallback: a null here would mean the state machine had been bypassed, and inventing an
         // empty id would hide that instead of surfacing it.
         new ServiceId(row.ServiceId!.Value),
+        row.ServiceName,
         new CustomerId(row.CustomerId!.Value),
+        // `26-50`: null when the query never selected the column at all (SqlWithoutContactData leaves
+        // this at its type default), the identical two-reasons-for-null story Phone below carries -
+        // never a second, separately-invented gate.
+        row.CustomerDisplayName,
         new DateTimeOffset(DateTime.SpecifyKind(row.StartsAt, DateTimeKind.Utc)),
         new DateTimeOffset(DateTime.SpecifyKind(row.EndsAt, DateTimeKind.Utc)),
         row.LocalDate,
@@ -144,8 +165,11 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         Guid EventId,
         Guid CalendarId,
         Guid WorkerId,
+        string WorkerDisplayName,
         Guid? ServiceId,
+        string? ServiceName,
         Guid? CustomerId,
+        string? CustomerDisplayName,
         DateTime StartsAt,
         DateTime EndsAt,
         DateOnly LocalDate,

@@ -241,6 +241,14 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<SaveWorkerScheduleHandler>();
 
         services.AddScoped<AddWorkingHoursRuleHandler>();
+
+        // `26-97`: the two verbs a mistyped rule needs. WorkingHoursReconciler is registered
+        // alongside them rather than folded into either, because both handlers ask it the same
+        // question and the answer is the item's whole design decision - see its own doc comment.
+        services.AddScoped<WorkingHoursReconciler>();
+        services.AddScoped<UpdateWorkingHoursRuleHandler>();
+        services.AddScoped<DeleteWorkingHoursRuleHandler>();
+
         services.AddScoped<SetAllowedOriginsHandler>();
         services.AddScoped<RegisterTenantHandler>();
 

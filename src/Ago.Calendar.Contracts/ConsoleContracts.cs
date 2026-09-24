@@ -97,6 +97,37 @@ public sealed record WorkerResponse(
 public sealed record AddWorkingHoursRuleRequest(
     Guid CalendarId, Guid WorkerId, int DayOfWeek, TimeOnly StartsAt, TimeOnly EndsAt);
 
+/// <summary>`26-97`: <c>PUT /working-hours/{ruleId}</c>. No calendar or worker id, unlike
+/// <see cref="AddWorkingHoursRuleRequest"/> - a rule is corrected where it is, never moved; see
+/// <c>WorkingHoursRule.ChangeTo</c>.</summary>
+/// <param name="DayOfWeek">0 = Sunday, the same convention
+/// <see cref="AddWorkingHoursRuleRequest.DayOfWeek"/> uses.</param>
+public sealed record UpdateWorkingHoursRuleRequest(int DayOfWeek, TimeOnly StartsAt, TimeOnly EndsAt);
+
+/// <summary>`26-97`: the answer to both <c>PUT</c> and <c>DELETE /working-hours/{ruleId}</c>.</summary>
+/// <param name="Rule">The rule as it now stands, or <see langword="null"/> when it was deleted.</param>
+public sealed record WorkingHoursRuleChangeResponse(
+    WorkingHoursRuleResponse? Rule, WorkingHoursReconciliationResponse Reconciliation);
+
+/// <summary>
+/// `26-97`: what the correction did <b>not</b> reach - the days this worker's schedule had already
+/// materialised from the old hours, which no edit to a rule can retroactively re-cut.
+///
+/// <para><b>Present on every successful edit and delete, including the ones with nothing in
+/// them.</b> A client that only ever saw this field when something was wrong would have no way to
+/// tell "nothing to do" from "this build does not send that field" - see
+/// <c>WorkingHoursReconciler</c> for why the whole point of this block is that the consequence is
+/// never silent.</para>
+/// </summary>
+/// <param name="RecutFrom">Feed it straight to <c>POST /workers/{id}/schedule/recut/preview</c>.
+/// <see langword="null"/> exactly when <paramref name="AlreadyCutDays"/> is empty.</param>
+/// <param name="AlreadyCutDays">Business-local dates, oldest first - the calendar's own zone, never
+/// UTC.</param>
+/// <param name="LiveBookingCount">Pending, confirmed and no-show bookings on those days. Zero means
+/// a re-cut would cancel nothing.</param>
+public sealed record WorkingHoursReconciliationResponse(
+    DateOnly? RecutFrom, IReadOnlyList<DateOnly> AlreadyCutDays, int LiveBookingCount);
+
 public sealed record SetAllowedOriginsRequest(IReadOnlyList<string> Origins);
 
 /// <param name="PublicKey">What the shop pastes into its own page's script tag. Shown only here.

@@ -82,6 +82,14 @@ public static class ConsoleEndpoints
 
         group.MapPost("/working-hours", HandleAddWorkingHoursAsync).WithName("AddWorkingHoursRule");
 
+        // `26-97`: until this item a rule could be added and never corrected - a mistyped 09:00 for
+        // 19:00 was permanent, and deleting the worker was the only remedy anywhere in the product.
+        // Both verbs answer with what the change did not reach; see `WorkingHoursReconciler`.
+        group.MapPut("/working-hours/{ruleId:guid}", HandleUpdateWorkingHoursAsync)
+            .WithName("UpdateWorkingHoursRule");
+        group.MapDelete("/working-hours/{ruleId:guid}", HandleDeleteWorkingHoursAsync)
+            .WithName("DeleteWorkingHoursRule");
+
         group.MapGet("/pending-bookings", HandlePendingBookingsAsync).WithName("GetPendingBookings");
 
         // `23-34`: what is actually booked, across every calendar - the queue above only ever holds
@@ -535,6 +543,71 @@ public static class ConsoleEndpoints
             ? Results.Created($"/api/v1/console/working-hours/{result.Value.Value}", new { ruleId = result.Value.Value })
             : result.Error!.Value.ToProblem(httpContext);
     }
+
+    private static async Task<IResult> HandleUpdateWorkingHoursAsync(
+        Guid ruleId,
+        UpdateWorkingHoursRuleRequest request,
+        ClaimsPrincipal principal,
+        UpdateWorkingHoursRuleHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        // The identical guard the add path carries, and it has to be repeated rather than shared:
+        // casting an out-of-range int to DayOfWeek produces a value the enum has no name for, which
+        // reaches the materialiser as a weekday that never matches anything.
+        if (request.DayOfWeek is < 0 or > 6)
+        {
+            return new Error("configuration.invalid", "A day of week is 0 (Sunday) to 6 (Saturday).")
+                .ToProblem(httpContext);
+        }
+
+        var result = await handler.HandleAsync(
+            new UpdateWorkingHoursRule(
+                principal.GetOperatorId(), principal.GetTenantId(), new WorkingHoursRuleId(ruleId),
+                (DayOfWeek)request.DayOfWeek, request.StartsAt, request.EndsAt),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        var updated = result.Value;
+        return Results.Ok(new WorkingHoursRuleChangeResponse(
+            new WorkingHoursRuleResponse(
+                updated.RuleId.Value, updated.WorkerId.Value, (int)updated.DayOfWeek,
+                updated.StartsAt, updated.EndsAt),
+            ToReconciliationResponse(updated.Reconciliation)));
+    }
+
+    private static async Task<IResult> HandleDeleteWorkingHoursAsync(
+        Guid ruleId,
+        ClaimsPrincipal principal,
+        DeleteWorkingHoursRuleHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new DeleteWorkingHoursRule(
+                principal.GetOperatorId(), principal.GetTenantId(), new WorkingHoursRuleId(ruleId)),
+            cancellationToken);
+
+        // 200 with a body, not the 204 a delete usually gets: the body is the point - it carries the
+        // days this deletion did not reach, and an operator who never sees it is exactly the silence
+        // `26-97` exists to remove.
+        return result.IsSuccess
+            ? Results.Ok(new WorkingHoursRuleChangeResponse(null, ToReconciliationResponse(result.Value)))
+            : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    private static WorkingHoursReconciliationResponse ToReconciliationResponse(
+        WorkingHoursReconciliation reconciliation) =>
+        new(reconciliation.RecutFrom, reconciliation.AlreadyCutDays, reconciliation.LiveBookingCount);
 
     private static async Task<IResult> HandlePendingBookingsAsync(
         int? limit,

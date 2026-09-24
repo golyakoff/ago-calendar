@@ -86,6 +86,144 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AWorkingHoursRule_CanBeCorrectedAndRemoved_AndBookingReadinessFollows()
+    {
+        // `26-97`'s first Done-when, end to end: until this item a mistyped 09:00-for-19:00 was
+        // permanent and deleting the worker was the only remedy in the product. Read back through the
+        // console's own configuration screen *and* through `booking-readiness`, because precondition 4
+        // is the one a removed rule has to stop satisfying - a delete that left the tenant "bookable"
+        // with no hours would be a worse defect than the one this item fixes.
+        var seed = await ProvisionAsync();
+
+        var ruleId = await CreatedIdAsync(
+            "/api/v1/console/working-hours",
+            new AddWorkingHoursRuleRequest(
+                seed.Calendar.Id.Value, seed.Worker.Id.Value, (int)DayOfWeek.Tuesday,
+                new TimeOnly(9, 0), new TimeOnly(9, 30)),
+            seed,
+            "ruleId");
+
+        Assert.True(await WorkingHoursConfiguredAsync(seed));
+
+        var corrected = await PutAsync(
+            $"/api/v1/console/working-hours/{ruleId}",
+            new UpdateWorkingHoursRuleRequest((int)DayOfWeek.Wednesday, new TimeOnly(10, 0), new TimeOnly(19, 0)),
+            seed);
+        Assert.Equal(HttpStatusCode.OK, corrected.StatusCode);
+
+        var body = (await corrected.Content.ReadFromJsonAsync<WorkingHoursRuleChangeResponse>())!;
+        Assert.Equal(ruleId, body.Rule!.RuleId);
+        Assert.Equal((int)DayOfWeek.Wednesday, body.Rule.DayOfWeek);
+        Assert.Equal(new TimeOnly(19, 0), body.Rule.EndsAt);
+
+        // The tenant's own screen agrees, through a real read of a real row - not the echo above.
+        var configuration = await GetConfigurationAsync(seed);
+        var stored = Assert.Single(
+            Assert.Single(configuration.Calendars, c => c.CalendarId == seed.Calendar.Id.Value).WorkingHours);
+        Assert.Equal((int)DayOfWeek.Wednesday, stored.DayOfWeek);
+        Assert.Equal(new TimeOnly(10, 0), stored.StartsAt);
+
+        var removed = await DeleteAsync($"/api/v1/console/working-hours/{ruleId}", seed);
+        Assert.Equal(HttpStatusCode.OK, removed.StatusCode);
+
+        Assert.Empty(
+            Assert.Single(
+                (await GetConfigurationAsync(seed)).Calendars, c => c.CalendarId == seed.Calendar.Id.Value)
+            .WorkingHours);
+        Assert.False(await WorkingHoursConfiguredAsync(seed));
+    }
+
+    [Fact]
+    public async Task AWorkingHoursRuleOfAnotherTenant_CanBeNeitherCorrectedNorRemoved()
+    {
+        // `26-97`'s tenant Done-when. The permission check passes - this operator holds
+        // calendar:configure in their own tenant - and what stops them is the check against the tenant
+        // on the rule's own calendar, which is exactly the boundary `WorkingHoursRule.For` already
+        // guards on the way in (TenantMismatchException) expressed as an HTTP refusal.
+        var mine = await ProvisionAsync();
+        var theirs = await ProvisionAsync();
+
+        var theirRuleId = await CreatedIdAsync(
+            "/api/v1/console/working-hours",
+            new AddWorkingHoursRuleRequest(
+                theirs.Calendar.Id.Value, theirs.Worker.Id.Value, (int)DayOfWeek.Tuesday,
+                new TimeOnly(9, 0), new TimeOnly(18, 0)),
+            theirs,
+            "ruleId");
+
+        var edit = await PutAsync(
+            $"/api/v1/console/working-hours/{theirRuleId}",
+            new UpdateWorkingHoursRuleRequest((int)DayOfWeek.Sunday, new TimeOnly(0, 1), new TimeOnly(23, 59)),
+            mine);
+        var delete = await DeleteAsync($"/api/v1/console/working-hours/{theirRuleId}", mine);
+
+        // Reported as absent, never as "you may not touch that one", which would confirm it exists.
+        Assert.Equal(HttpStatusCode.NotFound, edit.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, delete.StatusCode);
+
+        // **The code, not just the status** - the same reasoning the day-off test below gives for
+        // asserting on it: a handler with no tenant boundary at all would still 404 on some other
+        // path, and a test asserting only the status would pass against one.
+        Assert.Contains(
+            "configuration.not_found", await edit.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Contains(
+            "configuration.not_found", await delete.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        // And the row is untouched, read straight out of the database rather than inferred.
+        await using var db = fixture.CreateDbContext();
+        var row = await db.WorkingHoursRules.SingleAsync(rule => rule.Id == new WorkingHoursRuleId(theirRuleId));
+        Assert.Equal(DayOfWeek.Tuesday, row.DayOfWeek);
+        Assert.Equal(new TimeOnly(18, 0), row.EndsAt);
+    }
+
+    [Fact]
+    public async Task CorrectingARuleWithDaysAlreadyCut_ReportsThemAndTheLiveBookingOnThem()
+    {
+        // `26-97`'s materialisation Done-when, and the whole reason the answer is "always allow, never
+        // stay silent" rather than "refuse while a booking exists" - see `WorkingHoursReconciler` for
+        // the full decision. The edit succeeds; what comes back with it is the days already cut from
+        // the old hours, the live booking sitting on one of them, and the exact date to hand
+        // POST /workers/{id}/schedule/recut/preview.
+        var seed = await ProvisionAsync();
+        var today = TodayInSeededZone();
+
+        var ruleId = await CreatedIdAsync(
+            "/api/v1/console/working-hours",
+            new AddWorkingHoursRuleRequest(
+                seed.Calendar.Id.Value, seed.Worker.Id.Value, (int)today.DayOfWeek,
+                new TimeOnly(9, 0), new TimeOnly(9, 30)),
+            seed,
+            "ruleId");
+
+        // Two weeks already cut: the cursor sits past them, which is precisely what the materialiser
+        // will not go back below on its own (MaterializeAvailabilityHandler's forward-only rule).
+        await CalendarSeed.AddWeeklyScheduleAsync(
+            fixture, seed, horizonDays: 30, materializeFrom: today.AddDays(14));
+        await ABookingOnAsync(seed, today.AddDays(7));
+
+        var response = await PutAsync(
+            $"/api/v1/console/working-hours/{ruleId}",
+            new UpdateWorkingHoursRuleRequest((int)today.DayOfWeek, new TimeOnly(9, 0), new TimeOnly(19, 0)),
+            seed);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var reconciliation = (await response.Content.ReadFromJsonAsync<WorkingHoursRuleChangeResponse>())!
+            .Reconciliation;
+
+        Assert.Equal(today, reconciliation.RecutFrom);
+        Assert.Equal([today, today.AddDays(7)], reconciliation.AlreadyCutDays);
+        Assert.Equal(1, reconciliation.LiveBookingCount);
+
+        // The date it hands back is one the re-cut flow actually accepts - the point of pre-filling it
+        // rather than asking an operator to derive it from a cursor they cannot see.
+        var preview = await PostAsync(
+            $"/api/v1/console/workers/{seed.Worker.Id.Value}/schedule/recut/preview",
+            new RecutPreviewRequest(reconciliation.RecutFrom!.Value),
+            seed);
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+    }
+
+    [Fact]
     public async Task AServiceCreatedWithAPriceAndADescription_ReadsBackBothThroughTheRealStore()
     {
         // `23-35`'s own demonstration: not asserted, proved end to end - a real POST, a real Postgres
@@ -514,6 +652,56 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         return slot;
     }
 
+    /// <summary>`26-97`: precondition 4 of the six `booking-readiness` checks, for the seeded
+    /// calendar - the one a working-hours rule is the whole evidence for.</summary>
+    private async Task<bool> WorkingHoursConfiguredAsync(SeededTenant seed)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/console/booking-readiness");
+        request.Headers.Add(ConsoleApiFactory.SubjectHeader, seed.ExternalSubjectId);
+
+        var response = await _client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var calendars = (await response.Content.ReadFromJsonAsync<CalendarReadinessResponse[]>())!;
+        var calendar = Assert.Single(calendars, c => c.CalendarId == seed.Calendar.Id.Value);
+        return Assert.Single(calendar.Preconditions, p => p.Precondition == "WorkingHoursConfigured").IsMet;
+    }
+
+    /// <summary>`26-97`: today as the seeded calendar's own zone sees it, which is the only "today"
+    /// the reconciliation is computed against - a UTC date would be a day out for part of every day
+    /// in Europe/Moscow.</summary>
+    private static DateOnly TodayInSeededZone()
+    {
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Moscow");
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, zone).DateTime);
+    }
+
+    /// <summary>A claimed slot on one business-local day - the row the reconciliation has to notice,
+    /// written through the real aggregate and the real mappings rather than as raw SQL.</summary>
+    private async Task ABookingOnAsync(SeededTenant seed, DateOnly localDate)
+    {
+        // Stored as UTC, exactly as `timestamptz` demands (date-and-time.md) - the wall-clock 09:00
+        // is the calendar's own, and the conversion happens here rather than being written as an
+        // offset Npgsql refuses.
+        var startsAt = new DateTimeOffset(localDate, new TimeOnly(9, 0), TimeSpan.FromHours(3))
+            .ToUniversalTime();
+        var slot = Event.Materialize(
+            new EventId(CalendarSeed.NewId()),
+            seed.Tenant.Id,
+            seed.Calendar.Id,
+            seed.Worker.Id,
+            new TimeSlot(startsAt, startsAt.AddMinutes(45)),
+            localDate,
+            DateTimeOffset.UtcNow);
+
+        slot.Claim(seed.Customer.Id, seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2));
+        slot.ClearDomainEvents();
+
+        await using var db = fixture.CreateDbContext();
+        db.Events.Add(slot);
+        await db.SaveChangesAsync();
+    }
+
     private async Task<TenantConfigurationResponse> GetConfigurationAsync(SeededTenant seed)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/console/configuration");
@@ -568,6 +756,9 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
 
     private Task<HttpResponseMessage> PutAsync(string url, object content, SeededTenant seed) =>
         SendAsync(HttpMethod.Put, url, content, seed);
+
+    private Task<HttpResponseMessage> DeleteAsync(string url, SeededTenant seed) =>
+        SendAsync(HttpMethod.Delete, url, null, seed);
 
     private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method, string url, object? content, SeededTenant seed)

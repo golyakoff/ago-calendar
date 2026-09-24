@@ -144,6 +144,34 @@ public readonly record struct AddWorkingHoursRule(
     TimeOnly EndsAt);
 
 /// <summary>
+/// `26-97`: <c>PUT /working-hours/{ruleId}</c> - correcting a rule that was typed wrong. Until this
+/// item there was exactly one working-hours verb, <see cref="AddWorkingHoursRule"/>, and a mistyped
+/// 09:00-for-19:00 was permanent: the only remedy anywhere in the product was deleting the worker,
+/// which discards everything else about them.
+///
+/// <para><b>No <see cref="CalendarId"/> or <see cref="WorkerId"/> here, unlike
+/// <see cref="AddWorkingHoursRule"/>.</b> The rule already knows both, and
+/// <see cref="WorkingHoursRule.ChangeTo"/> refuses to move either - so accepting them on the wire
+/// would offer a caller a choice the aggregate does not honour. The three fields below are exactly
+/// the three a human types into a form.</para>
+/// </summary>
+public readonly record struct UpdateWorkingHoursRule(
+    OperatorId OperatorId,
+    TenantId TenantId,
+    WorkingHoursRuleId RuleId,
+    DayOfWeek DayOfWeek,
+    TimeOnly StartsAt,
+    TimeOnly EndsAt);
+
+/// <summary>`26-97`: <c>DELETE /working-hours/{ruleId}</c> - "this day is not a working day after
+/// all". Unlike <see cref="DeleteWorker"/> this is never refused on booking history; see
+/// <see cref="IWorkingHoursRuleRepository.DeleteAsync"/> and <see cref="WorkingHoursReconciliation"/>
+/// for why a rule's own deletion cannot reach an already-booked slot, and what is reported instead of
+/// refusing.</summary>
+public readonly record struct DeleteWorkingHoursRule(
+    OperatorId OperatorId, TenantId TenantId, WorkingHoursRuleId RuleId);
+
+/// <summary>
 /// Replaces the tenant's whole allowed-origin list.
 ///
 /// <para><b>`5-01` put this out of scope and named the reason: nothing but a seed script could give a

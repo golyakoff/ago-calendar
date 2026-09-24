@@ -288,4 +288,7 @@ internal sealed class FakeServiceRepository(Service? service) : IServiceReposito
 
     public Task AddAsync(Service service, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by BookEventHandler.");
+
+    public Task SaveAsync(Service service, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by BookEventHandler.");
 }

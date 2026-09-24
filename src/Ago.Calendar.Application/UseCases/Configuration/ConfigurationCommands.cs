@@ -45,6 +45,38 @@ public readonly record struct CreateService(
     OperatorId OperatorId, TenantId TenantId, string Name, int DurationMinutes,
     int? PriceMinorUnits = null, bool PriceIsFrom = false, string? Description = null);
 
+/// <summary>
+/// `26-96`: the edit <see cref="CreateService"/> had no counterpart for until this item - a service
+/// typed with the wrong duration or the wrong price could not be corrected anywhere in the product,
+/// and that price is what a stranger reads on the booking widget before booking.
+///
+/// <para>Carries <see cref="IsActive"/> alongside the five editable fields rather than splitting the
+/// flag onto an endpoint of its own, which is exactly the shape <see cref="UpdateCalendar"/> already
+/// has (a name and a publish switch in one command, <c>Reconfigure</c> then <c>Publish</c>/
+/// <c>Unpublish</c> inside one transaction) and <see cref="UpdateWorker"/> after it. The alternative -
+/// <c>POST /services/{id}/archive</c> - would let the two drift while a user watched, the same
+/// objection <see cref="UpdateCalendar.Publish"/>'s own remarks already state.</para>
+/// </summary>
+/// <param name="Name">Revalidated by <see cref="Service"/> exactly as at creation: an edit cannot
+/// reach a state a create would have refused.</param>
+/// <param name="DurationMinutes">Whole, positive minutes - see <see cref="CreateService.DurationMinutes"/>.
+/// Changing it changes how many slots a future booking of this service needs
+/// (<c>ConsecutiveRunFinder</c>); it does not touch a booking already taken, whose run was fixed when
+/// it was claimed.</param>
+/// <param name="IsActive"><see langword="false"/> takes the service out of rotation without deleting
+/// anything - see <see cref="Service.IsActive"/>'s own remarks for why this product archives rather
+/// than deletes, and for the four read models a delete would retroactively blank.</param>
+public readonly record struct UpdateService(
+    OperatorId OperatorId,
+    TenantId TenantId,
+    ServiceId ServiceId,
+    string Name,
+    int DurationMinutes,
+    int? PriceMinorUnits,
+    bool PriceIsFrom,
+    string? Description,
+    bool IsActive);
+
 /// <param name="MiddleName">Отчество - optional, unlike <paramref name="LastName"/> and
 /// <paramref name="FirstName"/>.</param>
 /// <param name="DisplayName">`20-13`. Non-null means the console's own display-name field was

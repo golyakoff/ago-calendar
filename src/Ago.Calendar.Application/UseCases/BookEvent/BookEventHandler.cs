@@ -138,7 +138,13 @@ public sealed class BookEventHandler(
         }
 
         var service = await services.GetByIdAsync(command.ServiceId, cancellationToken);
-        if (service is null || service.TenantId != calendar.TenantId)
+        // `26-96`: `!service.IsActive` joins the two checks this line already made, under the same
+        // refusal, because from a visitor's side they are the same fact - this is not something they
+        // can book. It is refused here and not only filtered out of BookingSurfaceReadStore's own
+        // list, for the reason that class's remarks state: a read model is a courtesy, never the
+        // guarantee. The deliberately vague wording is the public surface's own rule (BookingErrors'
+        // remarks): a stranger learns "not offered", never "archived on 14 October".
+        if (service is null || service.TenantId != calendar.TenantId || !service.IsActive)
         {
             return BookingOutcome.Rejected(BookingErrors.ServiceNotOffered());
         }

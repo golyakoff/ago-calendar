@@ -3,10 +3,10 @@
 namespace Ago.Calendar.Application.Abstractions;
 
 /// <summary>
-/// The write-side port for <see cref="Service"/>. Two methods, both with a real caller:
+/// The write-side port for <see cref="Service"/>. Three methods, all with a real caller:
 /// <see cref="GetByIdAsync"/> is how <c>Worker.Offer</c> gets an aggregate to check the tenant of
-/// rather than an id it cannot check, and <see cref="ListForTenantAsync"/> is the configuration
-/// screen's own list (`20-06`).
+/// rather than an id it cannot check, <see cref="ListForTenantAsync"/> is the configuration
+/// screen's own list (`20-06`), and <see cref="SaveAsync"/> is `26-96`'s edit.
 ///
 /// <para>No availability query here, and - even after `23-35` gave <see cref="Service"/> a price and a
 /// description - still no customer-facing pricing <i>query</i> either: a service is configuration, and
@@ -23,4 +23,16 @@ public interface IServiceRepository
     Task<IReadOnlyList<Service>> ListForTenantAsync(TenantId tenantId, CancellationToken cancellationToken);
 
     Task AddAsync(Service service, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// `26-96`: persists a change to an existing service - its five editable fields, or whether it is
+    /// still offered. The same name and shape <see cref="IBookingCalendarRepository.SaveAsync"/>
+    /// already uses for the identical job on the sibling aggregate.
+    ///
+    /// <para>There is deliberately no <c>DeleteAsync</c> beside it, and that is a decision rather
+    /// than an omission - <see cref="Service.IsActive"/>'s own remarks carry the reasoning, and
+    /// <see cref="IWorkerRepository.DeleteIfNeverBookedAsync"/> is the narrow exception this product
+    /// makes for a *worker*, which no read model resolves a historical booking's name through.</para>
+    /// </summary>
+    Task SaveAsync(Service service, CancellationToken cancellationToken);
 }

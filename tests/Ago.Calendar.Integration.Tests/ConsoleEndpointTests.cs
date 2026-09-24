@@ -1,5 +1,6 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
+using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
@@ -127,6 +128,87 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Null(created.PriceCurrencyCode);
         Assert.False(created.PriceIsFrom);
         Assert.Null(created.Description);
+    }
+
+    [Fact]
+    public async Task AService_CanBeCorrectedAfterTheFact()
+    {
+        // `26-96`'s first Done-when, end to end: the typo in a visitor-facing duration and price that
+        // was permanent in this product until this item. A real PUT, a real row, and the correction
+        // read back through the same GET both clients use.
+        var seed = await ProvisionAsync();
+        var serviceId = await CreatedIdAsync(
+            "/api/v1/console/services",
+            new CreateServiceRequest("Haicut", 4, PriceMinorUnits: 90000),
+            seed,
+            "serviceId");
+
+        var response = await PutAsync(
+            $"/api/v1/console/services/{serviceId}",
+            new UpdateServiceRequest(
+                "Haircut", 45, PriceMinorUnits: 150000, PriceIsFrom: true,
+                Description: "Wash and cut.", IsActive: true),
+            seed);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        var configuration = await GetConfigurationAsync(seed);
+        var corrected = Assert.Single(configuration.Services, service => service.ServiceId == serviceId);
+        Assert.Equal("Haircut", corrected.Name);
+        Assert.Equal(45, corrected.DurationMinutes);
+        Assert.Equal(150000, corrected.PriceMinorUnits);
+        Assert.True(corrected.PriceIsFrom);
+        Assert.Equal("Wash and cut.", corrected.Description);
+        Assert.True(corrected.IsActive);
+    }
+
+    [Fact]
+    public async Task EditingAService_RefusesExactlyWhereCreatingOneAlreadyRefuses()
+    {
+        // The API itself, not only the console's form - the same direct-call check
+        // AHorizonAboveOneEightyDays_IsRefusedByTheApiItself makes for a schedule.
+        var seed = await ProvisionAsync();
+        var serviceId = await CreatedIdAsync(
+            "/api/v1/console/services", new CreateServiceRequest("Haircut", 45), seed, "serviceId");
+
+        var response = await PutAsync(
+            $"/api/v1/console/services/{serviceId}",
+            new UpdateServiceRequest("Haircut", 0, null, false, null, IsActive: true),
+            seed);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("configuration.invalid", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnArchivedService_DisappearsFromTheBookingSurfaceAndStaysOnTheConsoleRead()
+    {
+        // `26-96`'s third Done-when, and the whole argument for option (a) over a DELETE, proved
+        // against real SQL rather than asserted: the seeded worker performs the seeded service, so
+        // archiving it has to leave the worker's own service list (and every booking that named it)
+        // able to resolve the name, while the visitor-facing surface stops offering it.
+        var seed = await ProvisionAsync();
+
+        var beforeArchiving = await BookableServicesAsync(seed);
+        Assert.Contains(beforeArchiving, service => service.ServiceId == seed.Service.Id);
+
+        var response = await PutAsync(
+            $"/api/v1/console/services/{seed.Service.Id.Value}",
+            new UpdateServiceRequest(seed.Service.Name, 45, null, false, null, IsActive: false),
+            seed);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+
+        var afterArchiving = await BookableServicesAsync(seed);
+        Assert.DoesNotContain(afterArchiving, service => service.ServiceId == seed.Service.Id);
+
+        var configuration = await GetConfigurationAsync(seed);
+        var archived = Assert.Single(
+            configuration.Services, service => service.ServiceId == seed.Service.Id.Value);
+        Assert.False(archived.IsActive);
+        Assert.Equal(seed.Service.Name, archived.Name);
+        Assert.Contains(
+            configuration.Workers,
+            worker => worker.WorkerId == seed.Worker.Id.Value
+                      && worker.ServiceIds.Contains(seed.Service.Id.Value));
     }
 
     [Fact]
@@ -441,6 +523,15 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return (await response.Content.ReadFromJsonAsync<TenantConfigurationResponse>())!;
     }
+
+    /// <summary>`26-96`: what a visitor would be offered on this tenant's own calendar, read through
+    /// the real <see cref="BookingSurfaceReadStore"/> against the real database rather than through
+    /// the public HTTP surface, which would need an allowed origin and an embed scope this test has
+    /// no opinion about. The SQL is the thing under test here - the <c>s.is_active</c> predicate -
+    /// and this is the shortest path to it that still runs the shipped query.</summary>
+    private async Task<IReadOnlyList<BookableServiceRow>> BookableServicesAsync(SeededTenant seed) =>
+        await new BookingSurfaceReadStore(fixture.DataSource)
+            .ListServicesAsync(seed.Calendar.Id, CancellationToken.None);
 
     private async Task<PendingBookingResponse[]> GetQueueAsync(SeededTenant seed)
     {

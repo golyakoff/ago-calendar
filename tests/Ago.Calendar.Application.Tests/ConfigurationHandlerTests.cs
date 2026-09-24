@@ -479,6 +479,129 @@ public class ConfigurationHandlerTests
         Assert.Empty(world.Services.Added);
     }
 
+    // `26-96`: a service typed wrong can be corrected, and one no longer offered can be taken out of
+    // rotation - without breaking anything that already references it.
+
+    [Fact]
+    public async Task UpdatingAService_RequiresCalendarConfigure()
+    {
+        var world = new World();
+        var created = await world.CreateServiceAsync();
+        world.Permissions.Deny(Permission.CalendarConfigure);
+
+        var result = await world.UpdateServiceAsync(created.Value, name: "Renamed");
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.forbidden", result.Error!.Value.Code);
+        Assert.Empty(world.Services.Saved);
+        Assert.Equal("Haircut", Assert.Single(world.Services.Added).Name);
+    }
+
+    [Fact]
+    public async Task UpdatingAService_ChangesAllFiveFields()
+    {
+        var world = new World();
+        var created = await world.CreateServiceAsync();
+
+        var result = await world.UpdateServiceAsync(
+            created.Value, name: "Colour", durationMinutes: 90, priceMinorUnits: 250000,
+            priceIsFrom: true, description: "Colour and cut.");
+
+        Assert.True(result.IsSuccess);
+        var saved = Assert.Single(world.Services.Saved);
+        Assert.Equal("Colour", saved.Name);
+        Assert.Equal(TimeSpan.FromMinutes(90), saved.Duration);
+        Assert.Equal(Money.Rubles(250000), saved.Price);
+        Assert.True(saved.PriceIsFrom);
+        Assert.Equal("Colour and cut.", saved.Description);
+    }
+
+    [Fact]
+    public async Task UpdatingAService_ClearingThePrice_AlsoClearsTheFromFlag()
+    {
+        // The two fields can never disagree about whether there is a price to qualify - Service's own
+        // normalisation, reached through the edit path this time rather than the create path.
+        var world = new World();
+        var created = await world.CreateServiceAsync(priceMinorUnits: 150000, priceIsFrom: true);
+
+        var result = await world.UpdateServiceAsync(created.Value, priceMinorUnits: null, priceIsFrom: true);
+
+        Assert.True(result.IsSuccess);
+        var saved = Assert.Single(world.Services.Saved);
+        Assert.Null(saved.Price);
+        Assert.False(saved.PriceIsFrom);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task UpdatingAService_RefusesADurationACreateWouldHaveRefused(int durationMinutes)
+    {
+        // The whole point of routing the edit through Service's own validators rather than a second,
+        // laxer set: a state that could never have been created must not be reachable by editing
+        // into it.
+        var world = new World();
+        var created = await world.CreateServiceAsync();
+
+        var result = await world.UpdateServiceAsync(created.Value, durationMinutes: durationMinutes);
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.invalid", result.Error!.Value.Code);
+        Assert.Empty(world.Services.Saved);
+    }
+
+    [Fact]
+    public async Task UpdatingAService_OfAnotherTenant_IsNotFoundRatherThanForbidden()
+    {
+        // An operator of tenant A learning that a service id exists in tenant B is a cross-tenant
+        // leak however politely worded - ConfigurationErrors' own rule.
+        var world = new World();
+        var created = await world.CreateServiceAsync();
+
+        var result = await world.UpdateServiceAsync(
+            created.Value, tenantId: new TenantId(Guid.CreateVersion7(BookingFixtures.Now)));
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("configuration.not_found", result.Error!.Value.Code);
+        Assert.Empty(world.Services.Saved);
+    }
+
+    [Fact]
+    public async Task ArchivingAService_LeavesTheRowAndItsFieldsIntact()
+    {
+        // Option (a), and the reason for it: a past booking resolves its service *name* through this
+        // row, so withdrawing a service must not be a delete. See Service.IsActive's own remarks.
+        var world = new World();
+        var created = await world.CreateServiceAsync(description: "Wash and cut.");
+
+        var result = await world.UpdateServiceAsync(created.Value, description: "Wash and cut.", isActive: false);
+
+        Assert.True(result.IsSuccess);
+        var saved = Assert.Single(world.Services.Saved);
+        Assert.False(saved.IsActive);
+        Assert.Equal("Haircut", saved.Name);
+        Assert.Equal("Wash and cut.", saved.Description);
+        Assert.Single(world.Services.Added);
+    }
+
+    [Fact]
+    public async Task ArchivingAService_IsReversible()
+    {
+        var world = new World();
+        var created = await world.CreateServiceAsync();
+        await world.UpdateServiceAsync(created.Value, isActive: false);
+
+        var result = await world.UpdateServiceAsync(created.Value, isActive: true);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(world.Services.Saved[^1].IsActive);
+    }
+
+    // "An archived service is still returned by GET /configuration" is asserted in
+    // Ago.Calendar.Integration.Tests.ConsoleEndpointTests instead of here: that read joins five
+    // repositories and its interesting half is the SQL, so a fake-backed version of it would pin the
+    // projection and miss the thing that can actually break.
+
     [Fact]
     public async Task SettingAllowedOrigins_RequiresCalendarConfigure()
     {
@@ -584,6 +707,25 @@ public class ConfigurationHandlerTests
                     new CreateService(
                         Actor, BookingFixtures.TenantId, name, durationMinutes,
                         priceMinorUnits, priceIsFrom, description),
+                    CancellationToken.None);
+
+        /// <summary>`26-96`. Defaults to <see langword="true"/> for <paramref name="isActive"/> so a
+        /// test that only means to correct a field does not have to know the flag exists - the same
+        /// courtesy <see cref="UpdateWorkerAsync"/>'s own defaults already extend.</summary>
+        public Task<Result> UpdateServiceAsync(
+            ServiceId serviceId,
+            string name = "Haircut",
+            int durationMinutes = 45,
+            int? priceMinorUnits = null,
+            bool priceIsFrom = false,
+            string? description = null,
+            bool isActive = true,
+            TenantId? tenantId = null) =>
+            new UpdateServiceHandler(Services, Permissions)
+                .HandleAsync(
+                    new UpdateService(
+                        Actor, tenantId ?? BookingFixtures.TenantId, serviceId, name, durationMinutes,
+                        priceMinorUnits, priceIsFrom, description, isActive),
                     CancellationToken.None);
 
         public Task<Result> UpdateWorkerAsync(
@@ -725,10 +867,17 @@ internal sealed class RecordingWorkerRepository : IWorkerRepository
 
 /// <summary>`23-35`'s own version of <see cref="RecordingCalendarRepository"/> - records what
 /// <see cref="CreateServiceHandler"/> actually wrote, so a refused call having written nothing is an
-/// assertion rather than an inference.</summary>
+/// assertion rather than an inference.
+///
+/// <para>`26-96`: <see cref="Saved"/> is the same idea for <see cref="UpdateServiceHandler"/>. The
+/// aggregate is mutated in place, so a test cannot tell "the handler edited it and saved" from "the
+/// handler edited it and returned early" by inspecting <see cref="Added"/> - counting the saves is
+/// what makes a refusal that wrote nothing an assertion.</para></summary>
 internal sealed class RecordingServiceRepository : IServiceRepository
 {
     public List<Service> Added { get; } = [];
+
+    public List<Service> Saved { get; } = [];
 
     public Task<Service?> GetByIdAsync(ServiceId id, CancellationToken cancellationToken) =>
         Task.FromResult(Added.Find(service => service.Id == id));
@@ -740,6 +889,12 @@ internal sealed class RecordingServiceRepository : IServiceRepository
     public Task AddAsync(Service service, CancellationToken cancellationToken)
     {
         Added.Add(service);
+        return Task.CompletedTask;
+    }
+
+    public Task SaveAsync(Service service, CancellationToken cancellationToken)
+    {
+        Saved.Add(service);
         return Task.CompletedTask;
     }
 }

@@ -224,6 +224,9 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<CreateCalendarHandler>();
         services.AddScoped<UpdateCalendarHandler>();
         services.AddScoped<CreateServiceHandler>();
+
+        // `26-96`: PUT /services/{id} - the edit and the archive switch this product had no route for.
+        services.AddScoped<UpdateServiceHandler>();
         services.AddScoped<CreateWorkerHandler>();
 
         // `20-13`: the rest of the worker CRUD surface - GET /workers, GET /workers/{id},

@@ -36,7 +36,13 @@ namespace Ago.Calendar.Api.Configuration;
 /// argument <c>Worker.IsActive</c>'s own remarks make for a worker applies to both, and deactivation/
 /// unpublishing are the reversible operations this product offers for them. `20-13` narrowed that
 /// rule for a worker specifically: one who has never been booked carries no history worth keeping,
-/// so <c>DELETE /workers/{id}</c> exists and every other worker still falls back to deactivation.</para>
+/// so <c>DELETE /workers/{id}</c> exists and every other worker still falls back to deactivation.
+/// `26-96` made the service half of that sentence true rather than merely stated: until it, a service
+/// had neither a delete *nor* a deactivation *nor* an edit, so a typo in a visitor-facing price was
+/// permanent. It now has <c>PUT /services/{id}</c>, carrying the five editable fields and
+/// <c>isActive</c> - and still no <c>DELETE</c>, because four read models resolve a historical
+/// booking's service name through <c>services</c> (<c>Service.IsActive</c>'s own remarks name
+/// them).</para>
 /// </summary>
 public static class ConsoleEndpoints
 {
@@ -58,6 +64,12 @@ public static class ConsoleEndpoints
         group.MapPost("/calendars", HandleCreateCalendarAsync).WithName("CreateCalendar");
         group.MapPut("/calendars/{calendarId:guid}", HandleUpdateCalendarAsync).WithName("UpdateCalendar");
         group.MapPost("/services", HandleCreateServiceAsync).WithName("CreateService");
+
+        // `26-96`: the edit `POST /services` had no counterpart for until this item - and still no
+        // DELETE beside it, for the reason this class's own "what is deliberately not here" paragraph
+        // gives and `Service.IsActive` now implements: the request body's own `isActive` is how a
+        // service is taken out of rotation.
+        group.MapPut("/services/{serviceId:guid}", HandleUpdateServiceAsync).WithName("UpdateService");
         group.MapPost("/workers", HandleCreateWorkerAsync).WithName("CreateWorker");
         group.MapGet("/workers", HandleListWorkersAsync).WithName("ListWorkers");
         group.MapGet("/workers/{workerId:guid}", HandleGetWorkerAsync).WithName("GetWorker");
@@ -167,7 +179,8 @@ public static class ConsoleEndpoints
                     service.PriceMinorUnits,
                     service.PriceCurrencyCode,
                     service.PriceIsFrom,
-                    service.Description)),
+                    service.Description,
+                    service.IsActive)),
             ],
             configuration.WorkerQuota));
     }
@@ -287,6 +300,33 @@ public static class ConsoleEndpoints
         return result.IsSuccess
             ? Results.Created($"/api/v1/console/services/{result.Value.Value}", new { serviceId = result.Value.Value })
             : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    /// <summary>`26-96`. <c>Complete</c>, not a <c>Created</c>-style body: this is a write against a
+    /// resource the caller already names, so a 204 and the caller's next <c>GET /configuration</c> is
+    /// the whole contract - the identical shape <see cref="HandleUpdateWorkerAsync"/> and
+    /// <see cref="HandleUpdateCalendarAsync"/> already have.</summary>
+    private static async Task<IResult> HandleUpdateServiceAsync(
+        Guid serviceId,
+        UpdateServiceRequest request,
+        ClaimsPrincipal principal,
+        UpdateServiceHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        return Complete(
+            await handler.HandleAsync(
+                new UpdateService(
+                    principal.GetOperatorId(), principal.GetTenantId(), new ServiceId(serviceId),
+                    request.Name, request.DurationMinutes, request.PriceMinorUnits, request.PriceIsFrom,
+                    request.Description, request.IsActive),
+                cancellationToken),
+            httpContext);
     }
 
     private static async Task<IResult> HandleCreateWorkerAsync(

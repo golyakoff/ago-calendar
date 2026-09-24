@@ -43,6 +43,14 @@ internal sealed class ServiceConfiguration : IEntityTypeConfiguration<Service>
         // case to false, so this column is never true with a null price sitting beside it.
         builder.Property(s => s.PriceIsFrom).HasColumnName("price_is_from").IsRequired();
 
+        // `26-96`. Non-nullable with a `true` default, mirroring `workers.is_active` exactly - the
+        // column every existing row is backfilled to on migration, because a service that existed
+        // before this concept did was, by definition, on offer. No index: the two queries that filter
+        // on it (BookingSurfaceReadStore's own service list, BookingReadinessReadStore's funnel) are
+        // already keyed by a calendar or a worker and see a handful of rows per tenant, so an index
+        // here would be a guess rather than a measurement (nfr.md's own rule 7).
+        builder.Property(s => s.IsActive).HasColumnName("is_active").IsRequired();
+
         builder.HasOne<Tenant>().WithMany().HasForeignKey(s => s.TenantId);
     }
 }

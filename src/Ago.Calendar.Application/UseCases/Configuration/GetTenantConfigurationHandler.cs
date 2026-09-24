@@ -24,6 +24,10 @@ public readonly record struct ConfiguredWorker(
 /// discipline `date-and-time.md` rule 11 already applies to a timestamp's own offset - even though v1
 /// only ever writes <see cref="Money.RubleCode"/>. <see langword="null"/> exactly when
 /// <paramref name="PriceMinorUnits"/> is.</param>
+/// <param name="IsActive">`26-96`. Archived services are returned here, deliberately - see
+/// <see cref="Service.IsActive"/>'s own remarks: this is the read a worker card and a past booking
+/// resolve a service's name through, so filtering them out here is what would actually break
+/// something. The public booking surface applies the opposite rule in its own SQL.</param>
 public readonly record struct ConfiguredService(
     ServiceId ServiceId,
     string Name,
@@ -31,7 +35,8 @@ public readonly record struct ConfiguredService(
     int? PriceMinorUnits,
     string? PriceCurrencyCode,
     bool PriceIsFrom,
-    string? Description);
+    string? Description,
+    bool IsActive);
 
 public readonly record struct ConfiguredWorkingHoursRule(
     WorkingHoursRuleId RuleId, WorkerId WorkerId, DayOfWeek DayOfWeek, TimeOnly StartsAt, TimeOnly EndsAt);
@@ -132,7 +137,8 @@ public sealed class GetTenantConfigurationHandler(
                     service.Price?.MinorUnits,
                     service.Price?.CurrencyCode,
                     service.PriceIsFrom,
-                    service.Description)),
+                    service.Description,
+                    service.IsActive)),
             ],
             tenant.WorkerQuota));
     }

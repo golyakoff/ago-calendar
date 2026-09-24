@@ -13,6 +13,17 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 /// <para>Every column is aliased to its row type's own parameter name. Dapper binds by name and knows
 /// nothing about snake_case, and without the aliases every row materialises silently empty - the
 /// lesson <see cref="PendingBookingReadStore"/> already carries.</para>
+///
+/// <para><b>`26-96`: all three queries below filter <c>s.is_active</c>.</b> The console's own
+/// <c>GET /configuration</c> deliberately keeps returning archived services - a worker card and a past
+/// booking both resolve a name through it - and this is the visitor-facing side, where "archived" has
+/// to mean *not offered* or the flag buys nothing at all. Filtered in all three rather than only in
+/// <see cref="ListServicesAsync"/>: a caller that
+/// already holds a service id - a stale widget session, a hand-made request - must not be able to
+/// walk past the list it was excluded from into the workers and slots behind it. The claim itself is
+/// still refused independently, in <c>BookEventHandler</c>, because a courtesy filter in a read model
+/// is never the guarantee (this class's own <see cref="OpenSlotsSql"/> remarks make the same point
+/// about a slot taken a second after it was listed).</para>
 /// </summary>
 public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBookingSurfaceReadStore
 {
@@ -54,8 +65,9 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
                          else ceil(s.duration_minutes::numeric / wsc.slot_minutes)
                     end)::int as slots_needed
         ) run
-        where wsc.worker_id is null
-           or (run.slots_needed * wsc.slot_minutes + (run.slots_needed - 1) * wsc.buffer_minutes) <= 1440
+        where s.is_active
+          and (wsc.worker_id is null
+               or (run.slots_needed * wsc.slot_minutes + (run.slots_needed - 1) * wsc.buffer_minutes) <= 1440)
         order by s.name
         """;
 
@@ -77,6 +89,7 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
                     end)::int as slots_needed
         ) run
         where w.is_active
+          and s.is_active
           and (wsc.worker_id is null
                or (run.slots_needed * wsc.slot_minutes + (run.slots_needed - 1) * wsc.buffer_minutes) <= 1440)
         order by w.display_name
@@ -127,6 +140,7 @@ public sealed class BookingSurfaceReadStore(NpgsqlDataSource dataSource) : IBook
         ) run
         where e.calendar_id = @CalendarId
           and e.status = 'Available'
+          and s.is_active
           and e.starts_at > @NotBefore
           and (@WorkerId is null or e.worker_id = @WorkerId)
           and (

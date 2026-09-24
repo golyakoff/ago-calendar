@@ -22,6 +22,29 @@ public sealed record CreateServiceRequest(
     bool PriceIsFrom = false,
     string? Description = null);
 
+/// <summary>
+/// `26-96`: <c>PUT /services/{serviceId}</c> - <see cref="CreateServiceRequest"/>'s own five fields
+/// plus the one thing a create has no opinion about. Before this the product had no way at all to
+/// correct a service, and the price it carries is visitor-facing.
+/// </summary>
+/// <param name="PriceMinorUnits">Kopecks, or <see langword="null"/> for "no stated price". Unlike
+/// <see cref="CreateServiceRequest"/>'s, this one has no default: an edit form always holds the whole
+/// record, and a defaulted field would let a caller that forgot to send it silently clear a price
+/// (replace semantics, the same objection <see cref="UpdateWorkerRequest.ServiceIds"/>'s own remarks
+/// raise against sending a delta).</param>
+/// <param name="IsActive"><see langword="false"/> withdraws the service - it stops being offered on
+/// the public booking surface and a claim naming it is refused, while every worker who performs it
+/// and every booking that used it keeps resolving its name. See
+/// <c>Ago.Calendar.Domain.Service.IsActive</c> for why this product has no <c>DELETE /services/{id}</c>
+/// at all.</param>
+public sealed record UpdateServiceRequest(
+    string Name,
+    int DurationMinutes,
+    int? PriceMinorUnits,
+    bool PriceIsFrom,
+    string? Description,
+    bool IsActive);
+
 /// <param name="MiddleName">Отчество - optional.</param>
 /// <param name="DisplayName">`20-13`. Non-null means the console's own display-name field was
 /// edited by hand before this request was sent; <see langword="null"/> means let the server derive
@@ -102,6 +125,11 @@ public sealed record ConfiguredWorkerResponse(
 /// stated no price.</param>
 /// <param name="PriceCurrencyCode"><see langword="null"/> exactly when <paramref name="PriceMinorUnits"/>
 /// is - stated rather than assumed, even though v1 only ever writes <c>"RUB"</c>.</param>
+/// <param name="IsActive">`26-96`. <see langword="false"/> means the tenant has taken this service
+/// out of rotation. Still returned by <c>GET /configuration</c> rather than filtered out, and that is
+/// the whole point of the flag: a worker card listing this service, and a past booking naming it,
+/// both resolve it through this list. It is the *public* surface that stops offering it
+/// (<c>BookingSurfaceReadStore</c>), never this one.</param>
 public sealed record ConfiguredServiceResponse(
     Guid ServiceId,
     string Name,
@@ -109,7 +137,8 @@ public sealed record ConfiguredServiceResponse(
     int? PriceMinorUnits,
     string? PriceCurrencyCode,
     bool PriceIsFrom,
-    string? Description);
+    string? Description,
+    bool IsActive);
 
 public sealed record WorkingHoursRuleResponse(
     Guid RuleId, Guid WorkerId, int DayOfWeek, TimeOnly StartsAt, TimeOnly EndsAt);

@@ -205,6 +205,83 @@ public class ServiceTests
         Assert.False(service.PriceIsFrom);
         Assert.Equal("Wash and cut.", service.Description);
     }
+
+    // `26-96`: archiving, and why it is not a delete - see Service's own remarks.
+
+    [Fact]
+    public void Create_MakesAServiceActive()
+    {
+        var tenant = CalendarFixtures.Tenant();
+
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45));
+
+        Assert.True(service.IsActive);
+    }
+
+    [Fact]
+    public void Deactivate_ThenReactivate_RoundTrips()
+    {
+        // Reversible by design: a seasonal service withdrawn in October comes back in May, and
+        // re-creating it would produce a second row with a second id that no historical booking
+        // points at.
+        var tenant = CalendarFixtures.Tenant();
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45));
+
+        service.Deactivate();
+        Assert.False(service.IsActive);
+
+        service.Reactivate();
+        Assert.True(service.IsActive);
+    }
+
+    [Fact]
+    public void Deactivate_IsIdempotent()
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45));
+
+        service.Deactivate();
+        service.Deactivate();
+
+        Assert.False(service.IsActive);
+    }
+
+    [Fact]
+    public void Reconfigure_DoesNotTouchIsActive()
+    {
+        // The split this aggregate borrows from BookingCalendar: "correct this text" and "stop
+        // offering this" are different decisions, so an edit form that forgot the flag cannot
+        // silently un-archive a service.
+        var tenant = CalendarFixtures.Tenant();
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45));
+        service.Deactivate();
+
+        service.Reconfigure("Haircut", TimeSpan.FromMinutes(60));
+
+        Assert.False(service.IsActive);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Reconfigure_RefusesADurationCreateWouldHaveRefused(int minutes)
+    {
+        var tenant = CalendarFixtures.Tenant();
+        var service = Service.Create(
+            new ServiceId(Guid.CreateVersion7(CalendarFixtures.Now)), tenant.Id, "Haircut",
+            TimeSpan.FromMinutes(45));
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => service.Reconfigure("Haircut", TimeSpan.FromMinutes(minutes)));
+    }
 }
 
 public class MoneyTests

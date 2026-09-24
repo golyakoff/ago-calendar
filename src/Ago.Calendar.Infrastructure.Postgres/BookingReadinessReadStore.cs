@@ -63,7 +63,12 @@ public sealed class BookingReadinessReadStore(NpgsqlDataSource dataSource) : IBo
                     select 1
                     from worker_services ws
                     join services s on s.id = ws.service_id
-                    where ws.worker_id = w.id
+                    -- `26-96`: an archived service is not something anybody can book, so a worker
+                    -- whose only service has been withdrawn fails this precondition rather than
+                    -- passing it and leaving the tenant to discover the empty booking surface
+                    -- themselves. The same rule BookingSurfaceReadStore applies, stated here too
+                    -- because this funnel is the screen that explains *why* nobody can book.
+                    where ws.worker_id = w.id and s.is_active
                 ) as has_service,
                 (
                     exists (

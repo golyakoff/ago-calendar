@@ -28,6 +28,29 @@
 /// every renderer prefixes the number with "от" ("from"). <see cref="PriceIsFrom"/> is meaningless
 /// while <see cref="Price"/> is <see langword="null"/> and is normalised to <see langword="false"/>
 /// in that case, so the two fields can never disagree about whether there is a price to qualify.</para>
+///
+/// <para><b>`26-96`: <see cref="IsActive"/>, and why this product archives a service rather than
+/// deleting one.</b> Until this item a service could be created and never corrected or withdrawn -
+/// a typo in a duration or a price was permanent, and that price is what a stranger reads on the
+/// booking widget before booking. Correcting it is <see cref="Reconfigure"/>. Withdrawing it is this
+/// flag, not a <c>DELETE</c>, and the reason is in the schema rather than in taste: a booking row
+/// keeps <c>events.service_id</c> forever (cancelled and no-show rows included), and four read
+/// models resolve a booking's *service name* through <c>left join services s on s.id =
+/// e.service_id</c> - <c>PendingBookingReadStore</c>, <c>ConfirmedBookingReadStore</c>,
+/// <c>WorkerSlotReadStore</c>, <c>CustomerMergePreviewReadStore</c>. Deleting the row would blank
+/// the service name on every past booking that ever used it, retroactively, in every screen that
+/// renders one. Refusing the delete instead ("option (b)") sounds safer and is worse: because those
+/// rows are never purged, a service booked even once could then never be withdrawn at all, which is
+/// the exact gap this item exists to close. So: the row stays, <see cref="IsActive"/> says whether
+/// it is still on offer, and the two surfaces read it in opposite directions - the console's own
+/// configuration read returns archived services (so a worker card and a booking can still name
+/// theirs), while the public booking surface and the claim path refuse them.</para>
+///
+/// <para><b>A boolean, not an <c>archivedAt</c> timestamp</b> - <see cref="Worker.IsActive"/> is
+/// already exactly this concept on the sibling aggregate, rendered in the same console next to this
+/// one; a second spelling for one idea would make "inactive" mean two shapes on one screen. A
+/// timestamp would also claim to record *when*, and a re-archived service would overwrite the first
+/// answer, so it would be a worse record, not a richer one.</para>
 /// </summary>
 public sealed class Service
 {
@@ -60,6 +83,14 @@ public sealed class Service
     /// type's own remarks.</summary>
     public bool PriceIsFrom { get; private set; }
 
+    /// <summary>`26-96`. An archived service keeps every row that references it - a worker still
+    /// lists it, a past booking still resolves its name through it - and simply stops being offered:
+    /// the public booking surface does not list it, and <c>BookEventHandler</c> refuses a claim that
+    /// names it. Reversible by design (<see cref="Reactivate"/>): a seasonal service withdrawn in
+    /// October comes back in May, and re-creating it would produce a second row with a second id that
+    /// every historical booking would still not point at.</summary>
+    public bool IsActive { get; private set; }
+
     private Service(
         ServiceId id, TenantId tenantId, string name, TimeSpan duration,
         Money? price, bool priceIsFrom, string? description)
@@ -71,6 +102,7 @@ public sealed class Service
         Price = price;
         PriceIsFrom = price is null ? false : priceIsFrom;
         Description = description;
+        IsActive = true;
     }
 
     // EF Core materialization only - never called by domain code.
@@ -85,6 +117,20 @@ public sealed class Service
             id, tenantId, ValidateName(name), Validate(duration),
             price, priceIsFrom, ValidateDescription(description));
 
+    /// <summary>
+    /// `26-96`: the correction path, and it validates exactly what <see cref="Create"/> validates -
+    /// the same three private helpers, not a second, laxer set. A duration that could never have been
+    /// created must not be reachable by editing into it.
+    ///
+    /// <para>Deliberately silent about <see cref="IsActive"/>, which moves only through
+    /// <see cref="Deactivate"/>/<see cref="Reactivate"/> - the identical split
+    /// <see cref="BookingCalendar.Reconfigure"/> and <see cref="BookingCalendar.Publish"/> already
+    /// draw on the sibling aggregate, and for the same reason: "correct this text" and "stop offering
+    /// this" are different decisions, and a single setter taking both would let an edit form that
+    /// forgot one field silently reverse the other. A caller that means both says both - see
+    /// <c>UpdateServiceHandler</c>, which is one transaction over the two calls exactly as
+    /// <c>UpdateCalendarHandler</c> is.</para>
+    /// </summary>
     public void Reconfigure(
         string name, TimeSpan duration,
         Money? price = null, bool priceIsFrom = false, string? description = null)
@@ -95,6 +141,15 @@ public sealed class Service
         PriceIsFrom = price is null ? false : priceIsFrom;
         Description = ValidateDescription(description);
     }
+
+    /// <summary>`26-96`: take this service out of rotation - see the type's own remarks for why this
+    /// is what "delete a service" means in this product. Idempotent: archiving an already-archived
+    /// service is a no-op rather than a refusal, so a retried request never fails.</summary>
+    public void Deactivate() => IsActive = false;
+
+    /// <summary>`26-96`: put it back on offer. Idempotent for the same reason
+    /// <see cref="Deactivate"/> is.</summary>
+    public void Reactivate() => IsActive = true;
 
     private static string ValidateName(string name)
     {

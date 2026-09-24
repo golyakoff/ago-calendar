@@ -22,4 +22,10 @@ public sealed class ServiceRepository(AgoCalendarDbContext db) : IServiceReposit
         db.Services.Add(service);
         await db.SaveChangesAsync(cancellationToken);
     }
+
+    public async Task SaveAsync(Service service, CancellationToken cancellationToken)
+    {
+        db.Services.Update(service);
+        await db.SaveChangesAsync(cancellationToken);
+    }
 }

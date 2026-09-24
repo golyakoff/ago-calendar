@@ -246,7 +246,8 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
         ZipArchive archive, NpgsqlConnection connection, TenantId tenantId, CancellationToken cancellationToken)
     {
         const string sql = """
-            select id, name, duration_minutes, description, price_minor_units, price_currency_code, price_is_from
+            select id, name, duration_minutes, description, price_minor_units, price_currency_code,
+                   price_is_from, is_active
             from services
             where tenant_id = @tenantId
             order by id
@@ -266,7 +267,8 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetInt64(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.GetBoolean(6));
+                reader.GetBoolean(6),
+                reader.GetBoolean(7));
             await writer.WriteLineAsync(JsonSerializer.Serialize(row, JsonOptions));
         }
     }
@@ -362,9 +364,12 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
     private sealed record WorkingHoursRuleExportRow(
         Guid Id, Guid WorkerId, Guid CalendarId, string DayOfWeek, TimeOnly StartsAt, TimeOnly EndsAt);
 
+    /// <summary>`26-96`: <c>IsActive</c> travels with the rest, the same way
+    /// <see cref="WorkerExportRow"/>'s own already does - an export that showed a withdrawn service
+    /// as though it were still on offer would misstate the tenant's own record.</summary>
     private sealed record ServiceExportRow(
         Guid Id, string Name, int DurationMinutes, string? Description, long? PriceMinorUnits,
-        string? PriceCurrencyCode, bool PriceIsFrom);
+        string? PriceCurrencyCode, bool PriceIsFrom, bool IsActive);
 
     private sealed record CustomerExportRow(
         Guid Id, string Phone, string Source, Guid? SourceContactId, string? DisplayName, string? Notes,

@@ -71,6 +71,16 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// (<c>PendingPhoneVerification.IsProofValid</c> refuses it against any phone number other than the one
 /// it was issued for).
 /// </param>
+/// <param name="PersonId">
+/// `26-136`/`adr/0184`: the account-scoped person this booking is for, when the caller already knows it -
+/// the chat-originated flow passes chat's own visitor id here (<c>ReplyToModuleTaskHandler</c>). Null on
+/// the dormant public/operator path, which has no chat origin; <see cref="BookEventHandler"/> mints one
+/// locally in that case so every <see cref="Event"/> ends up with a person id (`adr/0184` decision 2).
+/// </param>
+/// <param name="OriginConversationId">
+/// `26-136`/`adr/0184`: the originating chat conversation, or null for a booking with no chat origin -
+/// stamped opaquely onto the <see cref="Event"/>, never interpreted here.
+/// </param>
 public readonly record struct BookEvent(
     CalendarId CalendarId,
     EventId EventId,
@@ -81,4 +91,6 @@ public readonly record struct BookEvent(
     string? Origin = null,
     DateTimeOffset? PhoneVerifiedAt = null,
     Guid? PhoneVerificationId = null,
-    string? PhoneVerificationProofToken = null);
+    string? PhoneVerificationProofToken = null,
+    Guid? PersonId = null,
+    Guid? OriginConversationId = null);

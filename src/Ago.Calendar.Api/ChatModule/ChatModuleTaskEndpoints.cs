@@ -140,7 +140,8 @@ public static class ChatModuleTaskEndpoints
         var result = await handler.HandleAsync(
             new ReplyToModuleTask(
                 externalTaskId, request.ChatTaskId, request.Kind, request.Value, request.PhoneVerifiedAt, auth.SiteId,
-                request.Locale, request.KnownPhone, request.AcceptUnverifiedPhone),
+                request.Locale, request.KnownPhone, request.AcceptUnverifiedPhone, request.PersonId,
+                request.OriginConversationId),
             cancellationToken);
 
         if (!result.IsSuccess)

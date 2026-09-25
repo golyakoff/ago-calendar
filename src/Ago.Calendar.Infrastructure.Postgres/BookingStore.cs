@@ -134,6 +134,15 @@ public sealed class BookingStore(
     /// stronger guarantee besides: it holds for every future caller of this port by construction, not
     /// only for the one caller that happens to remember a runtime check.</para>
     ///
+    /// <para><b>`26-136`/`adr/0184`: <c>person_id</c> and <c>origin_conversation_id</c> are written onto
+    /// every row of the run</b>, from <see cref="BookingAttempt.PersonId"/>/<see cref="BookingAttempt.OriginConversationId"/> -
+    /// the same "identical value onto every touched row" shape <c>booking_id</c> already has.
+    /// <c>person_id</c> is always non-null by the time it reaches here (the handler mints one when the
+    /// request carries none); <c>origin_conversation_id</c> is null for a booking with no chat origin.
+    /// They are deliberately <em>not</em> added to <c>RETURNING</c>: <see cref="BookingConfirmation"/> has
+    /// no consumer for either id (a confirmation card quotes the booking, not the person), so returning
+    /// them would only read back columns this statement already knows and nothing downstream reads.</para>
+    ///
     /// <para><c>RETURNING</c> hands back what the confirmation needs, from the write itself, one row
     /// per slot claimed. A follow-up <c>SELECT</c> would be a second round trip reading rows that
     /// `20-04`'s sweep could already have moved on - the values below are the ones this statement
@@ -163,7 +172,9 @@ public sealed class BookingStore(
             customer_id = @customerId,
             service_id = @serviceId,
             confirmation_deadline = @deadline,
-            booking_id = @bookingId
+            booking_id = @bookingId,
+            person_id = @personId,
+            origin_conversation_id = @originConversationId
         WHERE id = ANY(@eventIds)
           AND calendar_id = @calendarId
           AND status = 'Available'
@@ -256,6 +267,10 @@ public sealed class BookingStore(
         // `22-08`: the tenant the suspension subquery checks live, inside this same statement -
         // ClaimSlotSql's own remarks state why this cannot be a pre-read instead.
         command.Parameters.AddWithValue("tenantId", attempt.TenantId.Value);
+        // `26-136`/`adr/0184`: the opaque person id (always present here) and the origin conversation id
+        // (null when the booking has no chat origin), written onto every claimed row.
+        command.Parameters.AddWithValue("personId", attempt.PersonId);
+        command.Parameters.AddWithValue("originConversationId", (object?)attempt.OriginConversationId ?? DBNull.Value);
 
         var rowsClaimed = 0;
         WorkerId? workerId = null;

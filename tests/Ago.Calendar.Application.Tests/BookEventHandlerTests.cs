@@ -39,6 +39,40 @@ public class BookEventHandlerTests
         Assert.Equal(BookingFixtures.Now, attempt.Now);
     }
 
+    /// <summary>`26-136`/`adr/0184`: a chat-origin booking carries chat's own person id and originating
+    /// conversation id straight onto the attempt the store writes - opaque, passed through unchanged.</summary>
+    [Fact]
+    public async Task AChatOriginBooking_CarriesThePersonIdAndOriginConversationId_OntoTheAttempt()
+    {
+        var world = new World();
+        var personId = Guid.NewGuid();
+        var conversationId = Guid.NewGuid();
+
+        var outcome = await world.HandleAsync(
+            BookingFixtures.Command(personId: personId, originConversationId: conversationId));
+
+        Assert.True(outcome.IsSuccess);
+        var attempt = Assert.Single(world.Bookings.Attempts);
+        Assert.Equal(personId, attempt.PersonId);
+        Assert.Equal(conversationId, attempt.OriginConversationId);
+    }
+
+    /// <summary>`26-136`/`adr/0184` decision 2: a booking with no chat origin (no person id on the
+    /// command - the dormant public/operator path) mints a person id locally so the attempt always
+    /// carries one, and leaves the origin conversation id null.</summary>
+    [Fact]
+    public async Task ABookingWithNoPersonId_MintsOneLocally_AndLeavesTheOriginConversationIdNull()
+    {
+        var world = new World();
+
+        var outcome = await world.HandleAsync(BookingFixtures.Command());
+
+        Assert.True(outcome.IsSuccess);
+        var attempt = Assert.Single(world.Bookings.Attempts);
+        Assert.NotEqual(Guid.Empty, attempt.PersonId);
+        Assert.Null(attempt.OriginConversationId);
+    }
+
     [Fact]
     public async Task ABooking_FromAnOriginThisTenantApproved_Succeeds()
     {

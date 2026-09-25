@@ -21,6 +21,14 @@ internal sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         // Event.BookingId's own remarks for why this column rather than a second `bookings` table.
         builder.Property(e => e.BookingId).HasColumnName("booking_id").HasConversion(IdConverters.NullableEvent);
 
+        // `26-136`/`adr/0184`: the account-scoped person and the originating chat conversation. Mapped as
+        // bare nullable `uuid`s with no HasConversion - they are opaque references chat owns (Event.PersonId's
+        // own remarks), so there is deliberately no strongly-typed calendar id to convert to or from. Both
+        // are nullable because an Available/Blocked row carries neither, exactly as it carries no
+        // customer_id; this is `adr/0184`'s expand phase, so person_id stays nullable in this slice.
+        builder.Property(e => e.PersonId).HasColumnName("person_id");
+        builder.Property(e => e.OriginConversationId).HasColumnName("origin_conversation_id");
+
         // timestamptz - absolute instants, the only kind of time this table stores. Contrast
         // working_hours_rules, whose `time` columns are wall clock; the two are converted into each
         // other exactly once, at materialisation, and never compared directly.

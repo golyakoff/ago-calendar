@@ -419,7 +419,9 @@ public class BookingStoreTests(PostgresFixture fixture)
                 new CustomerId(CalendarSeed.NewId()),
                 now,
                 now.AddMinutes(15),
-                phoneVerifiedAt ?? now),
+                phoneVerifiedAt ?? now,
+                CalendarSeed.NewId(),
+                null),
             CancellationToken.None);
     }
 

@@ -117,6 +117,17 @@ public interface IBookingStore
 /// have to re-prove it for a later one from the same phone, matching `20-09`'s own "Chat later unlinking
 /// the identity does not retroactively un-verify an already-claimed booking" acceptance.
 /// </param>
+/// <param name="PersonId">
+/// `26-136`/`adr/0184`: the account-scoped person this booking is for, stamped onto every claimed row's
+/// own <see cref="Event.PersonId"/>. Non-nullable here on purpose - <c>BookEventHandler</c> mints one
+/// locally when the inbound request carries none (`adr/0184` decision 2's public/operator path), so by
+/// the time an attempt reaches this port a person id always exists, and making that a construction
+/// guarantee is stronger than a runtime check any future caller of this port could forget.
+/// </param>
+/// <param name="OriginConversationId">
+/// `26-136`/`adr/0184`: the originating chat conversation, or <see langword="null"/> for a booking with
+/// no chat origin. Opaque - see <see cref="Event.OriginConversationId"/>.
+/// </param>
 public readonly record struct BookingAttempt(
     TenantId TenantId,
     CalendarId CalendarId,
@@ -127,7 +138,9 @@ public readonly record struct BookingAttempt(
     CustomerId NewCustomerId,
     DateTimeOffset Now,
     DateTimeOffset ConfirmationDeadline,
-    DateTimeOffset? PhoneVerifiedAt);
+    DateTimeOffset? PhoneVerifiedAt,
+    Guid PersonId,
+    Guid? OriginConversationId);
 
 /// <summary>
 /// What a successful claim returns, read back by the same statement that performed it

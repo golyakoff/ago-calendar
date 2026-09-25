@@ -92,6 +92,13 @@ public interface IConfirmedBookingReadStore
 /// <param name="Masked">`23-12`. Whether <paramref name="Phone"/> is the tenant's own rung-masked
 /// display value rather than the real number - the identical meaning
 /// <see cref="ContactRow.Masked"/> and <see cref="PendingBookingRow.Masked"/> already carry.</param>
+/// <param name="OriginConversationId">`26-121`/`26-136`/`adr/0184`: the chat conversation this booking
+/// came in through (<see cref="Event.OriginConversationId"/>), or <see langword="null"/> for a booking
+/// with no chat origin. Opaque here - never interpreted, only carried, the same posture the aggregate's
+/// own field takes: it is what the console's «Источник» row and its dialog-link affordance read to say a
+/// booking arrived through a conversation. Functionally dependent on <paramref name="BookingId"/> (every
+/// row of one booking carries the same value, written once by <c>Event.Claim</c>), so it groups exactly
+/// alongside it rather than aggregating.</param>
 public readonly record struct ConfirmedBookingRow(
     EventId BookingId,
     CalendarId CalendarId,
@@ -106,4 +113,5 @@ public readonly record struct ConfirmedBookingRow(
     DateOnly LocalDate,
     int Weekday,
     string Phone,
-    bool Masked);
+    bool Masked,
+    Guid? OriginConversationId);

@@ -223,13 +223,42 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
         Assert.Equal(slots[^1].EndsAt, row.EndsAt);
     }
 
+    /// <summary>`26-121`: a chat-originated booking carries its <c>origin_conversation_id</c> all the way
+    /// to the row - the fact the console's «Источник» row and its dialog-link read. Proven against a real
+    /// Postgres so the read store's own new <c>select</c>/<c>group by</c> column is actually exercised.</summary>
+    [Fact]
+    public async Task TheReadStore_CarriesTheOriginConversationId_ForAChatOriginatedBooking()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var conversationId = CalendarSeed.NewId();
+        await ABookedBookingAsync(seed, Now.AddHours(1), originConversationId: conversationId);
+
+        var rows = await ListAsync(seed.OperatorId, seed.Tenant.Id);
+
+        Assert.Equal(conversationId, Assert.Single(rows).OriginConversationId);
+    }
+
+    /// <summary>`26-121`: a booking with no chat origin leaves the field null rather than inventing one -
+    /// the honest «—» the console renders when a booking did not arrive through a conversation.</summary>
+    [Fact]
+    public async Task TheReadStore_LeavesTheOriginConversationIdNull_ForABookingWithNoChatOrigin()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        await ABookedBookingAsync(seed, Now.AddHours(1));
+
+        var rows = await ListAsync(seed.OperatorId, seed.Tenant.Id);
+
+        Assert.Null(Assert.Single(rows).OriginConversationId);
+    }
+
     [Fact]
     public async Task TheConsoleEndpoint_ReturnsTheList_OverRealHttp()
     {
         await using var apiFactory = new ConsoleApiFactory(fixture);
         using var client = apiFactory.CreateClient();
         var seed = await CalendarSeed.WriteAsync(fixture);
-        await ABookedBookingAsync(seed, Now.AddHours(1));
+        var conversationId = CalendarSeed.NewId();
+        await ABookedBookingAsync(seed, Now.AddHours(1), originConversationId: conversationId);
 
         var from = Today.ToString("yyyy-MM-dd");
         var to = Today.AddDays(1).ToString("yyyy-MM-dd");
@@ -241,10 +270,15 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var bookings = await response.Content.ReadFromJsonAsync<ConfirmedBookingResponse[]>();
-        Assert.Equal(seed.Customer.Id.Value, Assert.Single(bookings!).CustomerId);
+        var booking = Assert.Single(bookings!);
+        Assert.Equal(seed.Customer.Id.Value, booking.CustomerId);
+        // `26-121`: the origin conversation survives the full HTTP + JSON round-trip - what the Android
+        // «Источник» row and dialog-link bind to.
+        Assert.Equal(conversationId, booking.OriginConversationId);
     }
 
-    private async Task<Event> ABookedBookingAsync(SeededTenant seed, DateTimeOffset startsAt, int minutes = 45)
+    private async Task<Event> ABookedBookingAsync(
+        SeededTenant seed, DateTimeOffset startsAt, int minutes = 45, Guid? originConversationId = null)
     {
         var slot = Event.Materialize(
             new EventId(CalendarSeed.NewId()), seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id,
@@ -259,7 +293,9 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
         await using (var db = fixture.CreateDbContext())
         {
             var row = await db.Events.SingleAsync(e => e.Id == slot.Id);
-            row.Claim(seed.Customer.Id, seed.Service.Id, Now, Now.AddMinutes(30), slot.Id);
+            row.Claim(
+                seed.Customer.Id, seed.Service.Id, Now, Now.AddMinutes(30), slot.Id,
+                originConversationId: originConversationId);
             row.Confirm(Now.AddMinutes(31));
             row.ClearDomainEvents();
             await db.SaveChangesAsync();

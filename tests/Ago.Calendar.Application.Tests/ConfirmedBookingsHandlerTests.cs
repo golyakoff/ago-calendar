@@ -30,6 +30,9 @@ public class ConfirmedBookingsHandlerTests
 
         Assert.True(result.IsSuccess, result.Error?.Message);
         Assert.Equal(row.BookingId, Assert.Single(result.Value).BookingId);
+        // `26-121`: the origin conversation flows through the handler unchanged - it is the read store's
+        // fact, and the handler only gates and masks, never rewrites it.
+        Assert.Equal(row.OriginConversationId, Assert.Single(result.Value).OriginConversationId);
         Assert.Equal(TenantId, Assert.Single(store.AskedFor).TenantId);
     }
 
@@ -124,7 +127,8 @@ public class ConfirmedBookingsHandlerTests
         DateOnly.FromDateTime(Now.UtcDateTime),
         (int)Now.UtcDateTime.DayOfWeek,
         "+79990000001",
-        false);
+        false,
+        Guid.CreateVersion7(Now));
 
     private static FakePermissionChecker Permissive() => new();
 }

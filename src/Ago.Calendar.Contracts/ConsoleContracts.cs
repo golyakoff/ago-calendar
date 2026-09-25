@@ -274,6 +274,16 @@ public sealed record CustomerPhoneRevealResponse(string Phone);
 /// row on this screen already passed <c>customer:read</c>.</param>
 /// <param name="Masked">`23-12`: whether <see cref="Phone"/> is the tenant's own rung-masked display
 /// value rather than the real number.</param>
+/// <param name="OriginConversationId">`26-121`/`26-136`/`adr/0184`: the chat conversation this booking
+/// came in through, or <see langword="null"/> for a booking with no chat origin (the public/operator
+/// path). Opaque - the calendar stamps and echoes it but interprets nothing chat sends (`adr/0184`/
+/// `adr/0065`), so this is the only source signal it can honestly offer: <i>whether</i> a booking arrived
+/// through a conversation, never which channel within chat (widget vs Telegram vs Max - that detail lives
+/// in <c>ago-chat</c> and never reaches this product). The console renders the «Источник» row from its
+/// presence and its dialog-link affordance from the id itself. A <b>separate «Подтверждён по SMS» field
+/// is deliberately absent</b>: this product records no customer-SMS-confirmation of a booking at all
+/// (confirmation is operator-veto or the auto-sweep, and `20-05`'s SMS is an outbound notice, not an
+/// inbound confirmation), so there is nothing to populate it from - see `26-121`'s own report.</param>
 public sealed record ConfirmedBookingResponse(
     Guid BookingId,
     Guid CalendarId,
@@ -288,7 +298,8 @@ public sealed record ConfirmedBookingResponse(
     DateOnly LocalDate,
     int Weekday,
     string Phone,
-    bool Masked);
+    bool Masked,
+    Guid? OriginConversationId);
 
 /// <summary>`23-12`: what the console posts to reveal one customer's phone - which screen asked, for
 /// the reveal record's own "which surface" field.</summary>

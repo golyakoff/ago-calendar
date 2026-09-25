@@ -73,6 +73,32 @@ public sealed class Event
     /// cancelled on whom is exactly the history a lead card exists to keep.</summary>
     public CustomerId? CustomerId { get; private set; }
 
+    /// <summary>
+    /// `26-136`/`adr/0184`: the account-scoped person this booking is for - chat's own visitor id when
+    /// the booking came in through a conversation, or an id minted locally by the caller for a booking
+    /// with no chat origin (the public/operator path, `adr/0184` decision 2). Deliberately a bare
+    /// <see cref="Guid"/> and not a strongly-typed calendar id: the person is owned by chat, and this
+    /// product only ever references it opaquely (`adr/0184`'s "the calendar interprets nothing chat
+    /// sends" / `adr/0065`), so wrapping it in an <c>Ago.Calendar</c> id type would falsely claim
+    /// ownership this decision explicitly moves out of the calendar.
+    ///
+    /// <para><b>Nullable on the aggregate, though every <i>claimed</i> row carries one.</b> Set only by
+    /// <see cref="Claim"/> - an <see cref="EventStatus.Available"/> or <see cref="EventStatus.Blocked"/>
+    /// row has no person, exactly as it has no <see cref="CustomerId"/> - so the property has to be able
+    /// to hold "none" for the rows EF materialises straight off the availability grid. The column is
+    /// nullable for the same reason and, this being the expand phase of `adr/0184` (option B), it stays
+    /// nullable here rather than becoming <c>NOT NULL</c> in this slice.</para>
+    /// </summary>
+    public Guid? PersonId { get; private set; }
+
+    /// <summary>
+    /// `26-136`/`adr/0184`: the chat conversation a chat-origin booking came from, or
+    /// <see langword="null"/> for a booking with no chat origin. Opaque, for the identical reason
+    /// <see cref="PersonId"/> is - the link exists so a booking can be traced back to the conversation
+    /// that produced it (subsuming `26-112 C1`), never so this product reads anything out of it.
+    /// </summary>
+    public Guid? OriginConversationId { get; private set; }
+
     /// <summary>Instant the slot opens. Mapped as its own <c>timestamptz</c> column; see
     /// <see cref="Slot"/>.</summary>
     public DateTimeOffset StartsAt { get; }
@@ -217,9 +243,20 @@ public sealed class Event
     /// here explicitly - see <see cref="ConsecutiveRunFinder"/>, which computes the run this method is
     /// called once for, in order, per row.
     /// </param>
+    /// <param name="personId">
+    /// `26-136`/`adr/0184`: the account-scoped person this booking is for - see <see cref="PersonId"/>.
+    /// Left <see langword="null"/> by the callers that predate this item (the domain state-machine and
+    /// concurrency tests, which assert transitions, not identity) so their existing call sites keep
+    /// compiling and keep behaving exactly as before; the real booking write path always supplies one
+    /// (<c>BookEventHandler</c> mints it when the inbound request carries none).
+    /// </param>
+    /// <param name="originConversationId">
+    /// `26-136`/`adr/0184`: the originating chat conversation, or <see langword="null"/> for a booking
+    /// with no chat origin - see <see cref="OriginConversationId"/>.
+    /// </param>
     public void Claim(
         CustomerId customerId, ServiceId serviceId, DateTimeOffset now, DateTimeOffset confirmationDeadline,
-        EventId? bookingId = null)
+        EventId? bookingId = null, Guid? personId = null, Guid? originConversationId = null)
     {
         if (Status != EventStatus.Available)
         {
@@ -245,6 +282,8 @@ public sealed class Event
         ConfirmationDeadline = confirmationDeadline;
         Status = EventStatus.PendingConfirmation;
         BookingId = bookingId ?? Id;
+        PersonId = personId;
+        OriginConversationId = originConversationId;
         _domainEvents.Add(new EventClaimed(
             Id, TenantId, CalendarId, WorkerId, serviceId, customerId, Slot, confirmationDeadline, now));
     }

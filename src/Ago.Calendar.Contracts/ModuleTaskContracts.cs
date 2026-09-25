@@ -72,8 +72,23 @@ public sealed record DateTimePickerPayload(string Prompt, IReadOnlyList<SlotOpti
 /// <see cref="ModuleTaskReplyRequest.Locale"/>'s own remarks for why every step after the first one
 /// needs it resent instead.
 /// </param>
+/// <param name="PersonId">
+/// `26-136`/`adr/0184`: additive and nullable - chat's own account-scoped person (visitor) id. Accepted
+/// and, on this Start route, currently ignored (a booking is only ever written on the reply route, where
+/// <see cref="ModuleTaskReplyRequest.PersonId"/> carries the same value forward - this product persists
+/// nothing from Start, exactly as it accepts-and-ignores <see cref="ChatTaskId"/>/<see cref="SiteId"/>/
+/// <see cref="ConversationId"/>). Carried here so the two wire shapes stay symmetric and a future
+/// Start-time use has the field already. Null from a chat client predating this item, tolerated.
+/// </param>
+/// <param name="OriginConversationId">
+/// `26-136`/`adr/0184`: additive and nullable - the originating chat conversation id. On Start this is
+/// the same value as <see cref="ConversationId"/> and is likewise accepted-and-ignored; the reply route
+/// (<see cref="ModuleTaskReplyRequest.OriginConversationId"/>), which carries no conversation id of its
+/// own, is where it is actually needed at booking time. Null tolerated.
+/// </param>
 public sealed record ModuleTaskStartRequest(
-    Guid ChatTaskId, Guid SiteId, Guid ConversationId, string TriggerText, string Locale = "En");
+    Guid ChatTaskId, Guid SiteId, Guid ConversationId, string TriggerText, string Locale = "En",
+    Guid? PersonId = null, Guid? OriginConversationId = null);
 
 public sealed record ModuleTaskStartResponse(string ExternalTaskId, StepDto Step, bool Complete);
 
@@ -114,9 +129,23 @@ public sealed record ModuleTaskStartResponse(string ExternalTaskId, StepDto Step
 /// <c>ReplyToModuleTaskHandler.HandleSlotChosenAsync</c>'s own remarks for exactly what turning this on
 /// changes about the flow.
 /// </param>
+/// <param name="PersonId">
+/// `26-136`/`adr/0184`: additive and nullable (api-design.md - "new optional fields are fine" within a
+/// version) - chat's own account-scoped person (visitor) id, threaded straight onto the booked
+/// <c>Event.person_id</c> when this reply completes a booking. Null on every reply from a chat client
+/// predating this item and on every reply that does not complete a booking; when null,
+/// <c>BookEventHandler</c> mints a person id locally so an <c>Event</c> is never left without one
+/// (`adr/0184` decision 2). The calendar never interprets this value - it is opaque, chat owns it.
+/// </param>
+/// <param name="OriginConversationId">
+/// `26-136`/`adr/0184`: additive and nullable - the originating chat conversation id, threaded opaquely
+/// onto <c>Event.origin_conversation_id</c> (subsuming `26-112 C1`). Null tolerated, exactly as
+/// <see cref="PersonId"/> is.
+/// </param>
 public sealed record ModuleTaskReplyRequest(
     Guid ChatTaskId, string Kind, string Value, DateTimeOffset? PhoneVerifiedAt = null, string Locale = "En",
-    string? KnownPhone = null, bool AcceptUnverifiedPhone = false);
+    string? KnownPhone = null, bool AcceptUnverifiedPhone = false, Guid? PersonId = null,
+    Guid? OriginConversationId = null);
 
 /// <param name="Step">Null exactly when <see cref="Complete"/> is true - no further reply is
 /// expected.</param>

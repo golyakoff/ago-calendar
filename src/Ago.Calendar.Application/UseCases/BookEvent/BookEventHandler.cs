@@ -226,6 +226,13 @@ public sealed class BookEventHandler(
             return BookingOutcome.Rejected(BookingErrors.PhoneNotVerified());
         }
 
+        // `26-136`/`adr/0184` decision 2: a chat-origin booking reuses the person id chat already
+        // assigned this visitor; a booking with no chat origin (the dormant public/operator path, which
+        // carries no PersonId) mints one locally through the same IIdGenerator every other id on this
+        // path comes from, so every Event ends up with a person_id even before any Person exists in chat.
+        // The origin conversation id is passed straight through - opaque, null when there is no origin.
+        var personId = command.PersonId ?? idGenerator.NewId(now);
+
         var confirmation = await bookings.TryBookAsync(
             new BookingAttempt(
                 calendar.TenantId,
@@ -237,7 +244,9 @@ public sealed class BookEventHandler(
                 new CustomerId(idGenerator.NewId(now)),
                 now,
                 now + bookingOptions.ConfirmationWindow,
-                phoneVerifiedAt),
+                phoneVerifiedAt,
+                personId,
+                command.OriginConversationId),
             cancellationToken);
 
         // Null is the loser of the race, and it is an ordinary Tuesday: reported as a rejection the

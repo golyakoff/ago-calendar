@@ -30,9 +30,16 @@
 /// <param name="AcceptUnverifiedPhone">`25-39`: this site's own temporary, off-by-default relaxation
 /// of the verified-phone requirement - see
 /// <c>Ago.Calendar.Contracts.ModuleTaskReplyRequest.AcceptUnverifiedPhone</c>'s own remarks.</param>
+/// <param name="PersonId">`26-136`/`adr/0184`: chat's own visitor (person) id, threaded onto the booked
+/// <c>Event</c> when this reply completes a booking. Null on a reply from a chat client predating this
+/// item; <c>BookEventHandler</c> mints one locally in that case. See
+/// <c>Ago.Calendar.Contracts.ModuleTaskReplyRequest.PersonId</c>'s own remarks.</param>
+/// <param name="OriginConversationId">`26-136`/`adr/0184`: chat's own originating conversation id,
+/// threaded opaquely onto the booked <c>Event</c> - null when absent. See
+/// <c>Ago.Calendar.Contracts.ModuleTaskReplyRequest.OriginConversationId</c>'s own remarks.</param>
 public readonly record struct ReplyToModuleTask(
     string ExternalTaskId, Guid ChatTaskId, string Kind, string Value, DateTimeOffset? PhoneVerifiedAt = null,
     Guid? CredentialSiteId = null, string Locale = "En", string? KnownPhone = null,
-    bool AcceptUnverifiedPhone = false);
+    bool AcceptUnverifiedPhone = false, Guid? PersonId = null, Guid? OriginConversationId = null);
 
 public readonly record struct ModuleTaskReplied(ModuleStep? Step, bool Complete);

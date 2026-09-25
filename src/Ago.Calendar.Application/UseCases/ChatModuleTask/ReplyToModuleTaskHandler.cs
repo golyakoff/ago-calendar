@@ -142,11 +142,12 @@ public sealed class ReplyToModuleTaskHandler(
             ChatBookingTaskState.AwaitingSlotChoice =>
                 await HandleSlotChosenAsync(
                     task, tenantPublicKey, command.Value, command.Locale, command.KnownPhone,
-                    command.AcceptUnverifiedPhone, now, cancellationToken),
+                    command.AcceptUnverifiedPhone, command.PersonId, command.OriginConversationId, now,
+                    cancellationToken),
             ChatBookingTaskState.AwaitingPhone =>
                 await HandlePhoneProvidedAsync(
                     task, tenantPublicKey, command.Value, command.PhoneVerifiedAt, command.AcceptUnverifiedPhone,
-                    command.Locale, now, cancellationToken),
+                    command.Locale, command.PersonId, command.OriginConversationId, now, cancellationToken),
             _ => ChatModuleTaskErrors.AlreadyComplete(),
         };
     }
@@ -363,7 +364,8 @@ public sealed class ReplyToModuleTaskHandler(
     /// </summary>
     private async Task<Result<ModuleTaskReplied>> HandleSlotChosenAsync(
         ChatBookingTask task, string tenantPublicKey, string value, string locale, string? knownPhone,
-        bool acceptUnverifiedPhone, DateTimeOffset now, CancellationToken cancellationToken)
+        bool acceptUnverifiedPhone, Guid? personId, Guid? originConversationId, DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(value, out var eventId))
         {
@@ -379,8 +381,8 @@ public sealed class ReplyToModuleTaskHandler(
         if (acceptUnverifiedPhone && knownPhone is { } phone)
         {
             return await HandlePhoneProvidedAsync(
-                task, tenantPublicKey, phone, phoneVerifiedAt: null, acceptUnverifiedPhone, locale, now,
-                cancellationToken);
+                task, tenantPublicKey, phone, phoneVerifiedAt: null, acceptUnverifiedPhone, locale, personId,
+                originConversationId, now, cancellationToken);
         }
 
         return Result<ModuleTaskReplied>.Success(
@@ -389,7 +391,8 @@ public sealed class ReplyToModuleTaskHandler(
 
     private async Task<Result<ModuleTaskReplied>> HandlePhoneProvidedAsync(
         ChatBookingTask task, string tenantPublicKey, string phone, DateTimeOffset? phoneVerifiedAt,
-        bool acceptUnverifiedPhone, string locale, DateTimeOffset now, CancellationToken cancellationToken)
+        bool acceptUnverifiedPhone, string locale, Guid? personId, Guid? originConversationId, DateTimeOffset now,
+        CancellationToken cancellationToken)
     {
         // Qualified, not a bare `new BookEvent(...)`: this file's `using` for the BookEvent use-case
         // folder brings in a namespace named BookEvent alongside the command record of the same
@@ -411,11 +414,15 @@ public sealed class ReplyToModuleTaskHandler(
         // is recorded with no verification instant at all, the same honest signal every other
         // never-verified customer row already carries (BookingAttempt.PhoneVerifiedAt's own remarks on
         // why this is never overwritten once set, in either direction).
+        // `26-136`/`adr/0184`: chat's own person id and originating conversation id are threaded straight
+        // through onto the booked Event - opaque here, exactly like phoneVerifiedAt (Chat asserts, the
+        // calendar carries). Null when a chat client predating this item sent the reply; BookEventHandler
+        // mints a local person id in that case, so the booking still stamps a person_id.
         var outcome = await bookHandler.HandleAsync(
             new UseCases.BookEvent.BookEvent(
                 task.CalendarId, task.EventId!.Value, task.ServiceId!.Value, phone,
                 DisplayName: null, Origin: null, RequiresVerifiedPhone: !acceptUnverifiedPhone,
-                PhoneVerifiedAt: phoneVerifiedAt),
+                PhoneVerifiedAt: phoneVerifiedAt, PersonId: personId, OriginConversationId: originConversationId),
             cancellationToken);
 
         if (outcome.Booking is { } booking)

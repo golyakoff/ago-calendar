@@ -263,7 +263,9 @@ public sealed class TenantSuspensionChangedWireTests(TenantSuspensionChangedWire
                 new CustomerId(NewId(now)),
                 now,
                 now.AddMinutes(15),
-                now),
+                now,
+                NewId(now),
+                null),
             CancellationToken.None);
     }
 

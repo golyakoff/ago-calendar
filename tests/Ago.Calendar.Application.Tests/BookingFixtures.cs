@@ -132,10 +132,12 @@ internal static class BookingFixtures
     /// <see langword="true"/>; defaults to <see cref="Now"/> when omitted.</param>
     public static BookEvent Command(
         string? phone = null, ServiceId? serviceId = null, string? origin = null,
-        bool phoneVerified = true, DateTimeOffset? phoneVerifiedAt = null) =>
+        bool phoneVerified = true, DateTimeOffset? phoneVerifiedAt = null,
+        Guid? personId = null, Guid? originConversationId = null) =>
         new(CalendarId, EventId, serviceId ?? ServiceId, phone ?? Phone, "Anna",
             RequiresVerifiedPhone: true, Origin: origin,
-            PhoneVerifiedAt: phoneVerified ? phoneVerifiedAt ?? Now : null);
+            PhoneVerifiedAt: phoneVerified ? phoneVerifiedAt ?? Now : null,
+            PersonId: personId, OriginConversationId: originConversationId);
 
     /// <summary>`20-04`: a second tenant, so "another tenant's booking" is a real id rather than a
     /// missing one - the two must produce the same answer, and only a real one proves it.</summary>

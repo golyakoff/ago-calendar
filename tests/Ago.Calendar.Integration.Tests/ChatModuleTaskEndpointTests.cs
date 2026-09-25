@@ -162,6 +162,81 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         Assert.NotNull(stored.CustomerId);
     }
 
+    /// <summary>
+    /// `26-136`/`adr/0184`: a chat-origin booking stamps chat's own person id and originating
+    /// conversation id onto the booked <see cref="Event"/>, end to end over the real wire and a real
+    /// Postgres row. This is the item's own headline Done-when (and subsumes `26-112 C1`'s
+    /// origin-conversation link): the ids ride the reply request, cross the module boundary, and land
+    /// verbatim in <c>events.person_id</c>/<c>events.origin_conversation_id</c>.
+    /// </summary>
+    [Fact]
+    public async Task AChatOriginBooking_StampsThePersonIdAndOriginConversationId_OnTheBookedEvent()
+    {
+        var personId = Guid.NewGuid();
+        var conversationId = Guid.NewGuid();
+
+        var (taskId, slotValue) = await WalkToSlotAsync(conversationId);
+
+        var afterPhone = await ReplyAsync(
+            taskId, ModuleStepKinds.VerifiedPhoneForm, "+79997000010", phoneVerifiedAt: DateTimeOffset.UtcNow,
+            personId: personId, originConversationId: conversationId);
+        Assert.True(afterPhone.Complete);
+
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events.SingleAsync(e => e.Id == new EventId(Guid.Parse(slotValue)));
+        Assert.Equal(EventStatus.PendingConfirmation, stored.Status);
+        Assert.Equal(personId, stored.PersonId);
+        Assert.Equal(conversationId, stored.OriginConversationId);
+    }
+
+    /// <summary>
+    /// `26-136`/`adr/0184`: old-client compatibility - a reply carrying neither <c>personId</c> nor
+    /// <c>originConversationId</c> (every chat client predating this item) still books. The additive wire
+    /// fields are tolerated when absent: the booking completes, <c>person_id</c> is minted locally so the
+    /// row is never left without one (`adr/0184` decision 2), and <c>origin_conversation_id</c> stays null.
+    /// </summary>
+    [Fact]
+    public async Task ABookingWithNoPersonIdOnTheWire_StillBooks_AndMintsAPersonIdLocally()
+    {
+        var (taskId, slotValue) = await WalkToSlotAsync(Guid.NewGuid());
+
+        var afterPhone = await ReplyAsync(
+            taskId, ModuleStepKinds.VerifiedPhoneForm, "+79997000011", phoneVerifiedAt: DateTimeOffset.UtcNow);
+        Assert.True(afterPhone.Complete);
+
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events.SingleAsync(e => e.Id == new EventId(Guid.Parse(slotValue)));
+        Assert.Equal(EventStatus.PendingConfirmation, stored.Status);
+        Assert.NotNull(stored.PersonId);
+        Assert.NotEqual(Guid.Empty, stored.PersonId!.Value);
+        Assert.Null(stored.OriginConversationId);
+    }
+
+    /// <summary>Walks service -> worker -> date -> slot for a fresh task and returns its external id and
+    /// the chosen slot's own event id (as the wire's string value), leaving the task waiting on its phone
+    /// step - the one reply that actually books. Factors out the four identical steps the two `26-136`
+    /// tests above share.</summary>
+    private async Task<(string TaskId, string SlotValue)> WalkToSlotAsync(Guid conversationId)
+    {
+        var startResponse = await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, conversationId, "/booking");
+        var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
+        var serviceAction = Assert.Single(started!.Step.Actions);
+
+        var afterService = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, serviceAction.Value);
+        var workerAction = Assert.Single(afterService.Step!.Actions);
+
+        var afterWorker = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
+        var dateAction = Assert.Single(afterWorker.Step!.Actions);
+
+        var afterDate = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value);
+        var slotAction = Assert.Single(afterDate.Step!.Actions);
+
+        var afterSlot = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value);
+        Assert.Equal(ModuleStepKinds.VerifiedPhoneForm, afterSlot.Step!.Kind);
+
+        return (started.ExternalTaskId, slotAction.Value);
+    }
+
     /// <summary>`25-37`: the same walkthrough over real HTTP, in Russian - proving the locale reaches
     /// this product over the real wire (<see cref="ModuleTaskStartRequest.Locale"/>), not only through
     /// the fake-backed <c>Ago.Calendar.Application.Tests</c> proof.</summary>
@@ -689,11 +764,13 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     /// behaviour, matching every existing test in this file that never mentions them.</summary>
     private async Task<ModuleTaskReplyResponse> ReplyAsync(
         string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null,
-        string locale = "En", string? knownPhone = null, bool acceptUnverifiedPhone = false)
+        string locale = "En", string? knownPhone = null, bool acceptUnverifiedPhone = false,
+        Guid? personId = null, Guid? originConversationId = null)
     {
         var response = await PostReplyAsync(
             externalTaskId, kind, value, phoneVerifiedAt, locale: locale, knownPhone: knownPhone,
-            acceptUnverifiedPhone: acceptUnverifiedPhone);
+            acceptUnverifiedPhone: acceptUnverifiedPhone, personId: personId,
+            originConversationId: originConversationId);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         return (await response.Content.ReadFromJsonAsync<ModuleTaskReplyResponse>())!;
     }
@@ -705,13 +782,14 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     private async Task<HttpResponseMessage> PostReplyAsync(
         string externalTaskId, string kind, string value, DateTimeOffset? phoneVerifiedAt = null,
         Guid? siteId = null, string? secret = null, string locale = "En", string? knownPhone = null,
-        bool acceptUnverifiedPhone = false)
+        bool acceptUnverifiedPhone = false, Guid? personId = null, Guid? originConversationId = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/module-tasks/{externalTaskId}/replies")
         {
             Content = JsonContent.Create(
                 new ModuleTaskReplyRequest(
-                    Guid.NewGuid(), kind, value, phoneVerifiedAt, locale, knownPhone, acceptUnverifiedPhone)),
+                    Guid.NewGuid(), kind, value, phoneVerifiedAt, locale, knownPhone, acceptUnverifiedPhone,
+                    personId, originConversationId)),
         };
         request.Headers.Add(
             "X-Ago-Module-Credential",

@@ -203,8 +203,9 @@ public sealed class BookEventHandler(
         //
         // Not a check-then-act race of the kind `status = 'Available'` genuinely is: the resolved
         // instant is either a value the caller supplied directly on this exact command, a fact read
-        // from the customer's own row (immutable once first set - Customer.RecordVerifiedPhone's own
-        // earliest-wins rule), or a fact read from a PendingPhoneVerification row this same request just
+        // from the person's own record (immutable once first set for that phone -
+        // PersonRecord.RecordVerifiedPhone's own earliest-wins rule), or a fact read from a
+        // PendingPhoneVerification row this same request just
         // validated - none of the three is a value two concurrent callers are contending over and that
         // can go stale between a read and a write. There is no window for any of them to change out from
         // under this decision, so refusing here is safe in a way a pre-check on the slot's own live
@@ -226,12 +227,17 @@ public sealed class BookEventHandler(
             return BookingOutcome.Rejected(BookingErrors.PhoneNotVerified());
         }
 
-        // `26-136`/`adr/0184` decision 2: a chat-origin booking reuses the person id chat already
-        // assigned this visitor; a booking with no chat origin (the dormant public/operator path, which
-        // carries no PersonId) mints one locally through the same IIdGenerator every other id on this
-        // path comes from, so every Event ends up with a person_id even before any Person exists in chat.
-        // The origin conversation id is passed straight through - opaque, null when there is no origin.
+        // `adr/0184` decision 2: a chat-origin booking reuses the person id chat already assigned this
+        // visitor; a booking with no chat origin (the dormant public/operator path, which carries no
+        // PersonId) mints one locally through the same IIdGenerator every other id on this path comes
+        // from, so every Event ends up with a person_id even before any Person exists in chat - and the
+        // store announces that minted id to chat through the outbox (`PersonRegistered`) in the claim's
+        // own transaction, never through a call to chat from here (CLAUDE.md rules 4 and 8). The origin
+        // conversation id is passed straight through - opaque, null when there is no origin.
         var personId = command.PersonId ?? idGenerator.NewId(now);
+        var registration = command.PersonId is null
+            ? new PersonRegistration(string.IsNullOrWhiteSpace(command.DisplayName) ? null : command.DisplayName.Trim())
+            : (PersonRegistration?)null;
 
         var confirmation = await bookings.TryBookAsync(
             new BookingAttempt(
@@ -240,8 +246,7 @@ public sealed class BookEventHandler(
                 run,
                 command.ServiceId,
                 phone,
-                command.DisplayName,
-                new CustomerId(idGenerator.NewId(now)),
+                registration,
                 now,
                 now + bookingOptions.ConfirmationWindow,
                 phoneVerifiedAt,

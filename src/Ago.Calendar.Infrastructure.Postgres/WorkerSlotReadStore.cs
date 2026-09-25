@@ -15,7 +15,7 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
 {
     /// <summary>
     /// <c>services</c> is joined unconditionally - a service name is the shop's own catalogue, never
-    /// gated - while <c>customers</c> is not joined at all here. A literal <c>null::text</c> for both
+    /// gated - while <c>person_records</c> is not joined at all here. A literal <c>null::text</c> for both
     /// contact columns keeps this query's row shape identical to <see cref="SqlWithContactData"/>'s,
     /// which Dapper's constructor-matching materialisation requires: a C# record's default parameter
     /// value is a caller-side convenience only, not a second, shorter constructor
@@ -27,7 +27,7 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         select e.id as "EventId", e.local_date as "LocalDate", e.starts_at as "StartsAt",
                e.ends_at as "EndsAt", e.status as "Status",
                e.service_id as "ServiceId", s.name as "ServiceName",
-               e.customer_id as "CustomerId", null::text as "CustomerDisplayName", null::text as "Phone",
+               e.person_id as "PersonId", null::text as "Phone",
                e.booking_id as "BookingId"
         from events e
         left join services s on s.id = e.service_id
@@ -40,7 +40,7 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
 
     /// <summary>
     /// `20-12`'s own shape: the only difference from <see cref="SqlWithoutContactData"/> is the join to
-    /// <c>customers</c> and its two extra columns - chosen over always joining and hiding the result,
+    /// <c>person_records</c> and its two extra columns - chosen over always joining and hiding the result,
     /// so a caller without <c>customer:read</c> costs the database nothing extra. <c>left join</c>
     /// rather than an inner join, because plenty of rows here (every <c>Available</c> or
     /// <c>Blocked</c> slot) genuinely have no customer at all - unlike the pending queue, where every
@@ -51,11 +51,11 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         select e.id as "EventId", e.local_date as "LocalDate", e.starts_at as "StartsAt",
                e.ends_at as "EndsAt", e.status as "Status",
                e.service_id as "ServiceId", s.name as "ServiceName",
-               e.customer_id as "CustomerId", c.display_name as "CustomerDisplayName", c.phone as "Phone",
+               e.person_id as "PersonId", p.phone as "Phone",
                e.booking_id as "BookingId"
         from events e
         left join services s on s.id = e.service_id
-        left join customers c on c.id = e.customer_id
+        left join person_records p on p.person_id = e.person_id
         where e.tenant_id = @TenantId
           and e.worker_id = @WorkerId
           and e.local_date >= @From::date
@@ -98,11 +98,10 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         Enum.Parse<EventStatus>(row.Status),
         row.ServiceId is null ? null : new ServiceId(row.ServiceId.Value),
         row.ServiceName,
-        row.CustomerId is null ? null : new CustomerId(row.CustomerId.Value),
-        row.CustomerDisplayName,
+        row.PersonId,
         // null when the query never selected the column at all (SqlWithoutContactData leaves the
         // Dapper-materialised Phone at its type default) - see WorkerSlotRow.Phone's own remarks on
-        // the two things a null here can mean, told apart by CustomerId. `23-12`: masked (never the
+        // the two things a null here can mean, told apart by PersonId. `23-12`: masked (never the
         // real value) when the caller's rung called for it - see WorkerSlotRow.Masked's own remarks.
         row.Phone is null ? null : (mask ? new PhoneNumber(row.Phone).Masked() : row.Phone),
         row.Phone is not null && mask,
@@ -121,8 +120,7 @@ public sealed class WorkerSlotReadStore(NpgsqlDataSource dataSource) : IWorkerSl
         string Status,
         Guid? ServiceId,
         string? ServiceName,
-        Guid? CustomerId,
-        string? CustomerDisplayName,
+        Guid? PersonId,
         string? Phone,
         Guid? BookingId);
 }

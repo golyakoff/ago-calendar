@@ -15,7 +15,9 @@ namespace Ago.Calendar.Application.UseCases.BookEvent;
 /// several services in one visit, with two adjacent slots as the stated workaround.</param>
 /// <param name="Phone">Raw, as typed. Normalised by <see cref="PhoneNumber"/> so that
 /// <c>+7 (999) 123-45-67</c> and <c>+79991234567</c> are one lead card.</param>
-/// <param name="DisplayName">Optional.</param>
+/// <param name="DisplayName">Optional. `adr/0184`: not stored by this product - it travels to chat on
+/// <c>PersonRegistered</c> for a booking with no chat origin, and is ignored for a chat-origin one
+/// (chat already holds that person's name).</param>
 /// <param name="RequiresVerifiedPhone">
 /// `20-09`/`20-10`: whether *this calling surface* enforces the phone-verification gate at all - a fact
 /// about which caller is booking, not about whether verification happened to occur. <c>true</c> from

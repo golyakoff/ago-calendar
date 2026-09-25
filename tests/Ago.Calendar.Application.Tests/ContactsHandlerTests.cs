@@ -19,15 +19,14 @@ public class ContactsHandlerTests
     [Fact]
     public async Task WithCustomerRead_ReturnsTheStoresRows()
     {
-        var row = new ContactRow(
-            new CustomerId(Guid.CreateVersion7(Now)), "+79990000001", false, "Anna", null, 0, null, null, Now, Now, []);
+        var row = new ContactRow(Guid.CreateVersion7(Now), "+79990000001", false, 0, null, null, Now, Now);
         var store = new FakeContactsReadStore(row);
         var handler = new GetTenantContactsHandler(store, Permissive(), new FakeContactVisibilityProjectionStore());
 
         var result = await handler.HandleAsync(new GetTenantContacts(Caller, TenantId), CancellationToken.None);
 
         Assert.True(result.IsSuccess, result.Error?.Message);
-        Assert.Equal(row.CustomerId, Assert.Single(result.Value).CustomerId);
+        Assert.Equal(row.PersonId, Assert.Single(result.Value).PersonId);
         Assert.Equal(TenantId, Assert.Single(store.AskedFor).TenantId);
     }
 
@@ -48,8 +47,7 @@ public class ContactsHandlerTests
     [Fact]
     public async Task OnTheMaskedRung_AsksTheStoreToMask()
     {
-        var row = new ContactRow(
-            new CustomerId(Guid.CreateVersion7(Now)), "+79990000001", false, "Anna", null, 0, null, null, Now, Now, []);
+        var row = new ContactRow(Guid.CreateVersion7(Now), "+79990000001", false, 0, null, null, Now, Now);
         var store = new FakeContactsReadStore(row);
         var visibility = new FakeContactVisibilityProjectionStore(ContactVisibility.MaskedWithReveal);
         var handler = new GetTenantContactsHandler(store, Permissive(), visibility);

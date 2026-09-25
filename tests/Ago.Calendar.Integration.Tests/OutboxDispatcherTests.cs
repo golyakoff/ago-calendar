@@ -253,7 +253,7 @@ public sealed class OutboxDispatcherTests(ModuleQuantityGrantedWireFixture fixtu
         var calendar = BookingCalendar.Create(new CalendarId(CalendarSeed.NewId()), tenant.Id, "Main", new CalendarTimeZone("Europe/Moscow"), Now);
         var worker = Domain.Worker.Create(new WorkerId(CalendarSeed.NewId()), tenant.Id, "Doe", "Alex", null, Now);
         var service = Service.Create(new ServiceId(CalendarSeed.NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45), price: null);
-        var customer = Customer.Register(new CustomerId(CalendarSeed.NewId()), tenant.Id, new PhoneNumber("+79997000099"), Now);
+        var customer = PersonRecord.Register(CalendarSeed.NewId(), tenant.Id, new PhoneNumber("+79997000099"), Now);
 
         calendar.Publish();
         worker.JoinCalendar(calendar);
@@ -264,7 +264,7 @@ public sealed class OutboxDispatcherTests(ModuleQuantityGrantedWireFixture fixtu
         db.Calendars.Add(calendar);
         db.Services.Add(service);
         db.Workers.Add(worker);
-        db.Customers.Add(customer);
+        db.PersonRecords.Add(customer);
         await db.SaveChangesAsync(CancellationToken.None);
 
         return new SeededTenant(tenant, calendar, worker, service, customer, OperatorId.FromExternalSubjectId("kc-unused"), "kc-unused");
@@ -282,7 +282,7 @@ public sealed class OutboxDispatcherTests(ModuleQuantityGrantedWireFixture fixtu
         await using var db = fixture.CreateDbContext();
         await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
 
-        slot.Claim(seed.Customer.Id, seed.Service.Id, Now, deadline);
+        slot.Claim(seed.Person.PersonId, seed.Service.Id, Now, deadline);
         slot.ClearDomainEvents();
         await new EventRepository(db).SaveAsync(slot, CancellationToken.None);
 

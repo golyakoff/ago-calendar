@@ -5,7 +5,7 @@
 /// second SMS (`20-05`) follows this one, through the outbox, in the same transaction as the
 /// transition itself (CLAUDE.md rule 4).
 ///
-/// <para>`20-04` widened this from <c>(EventId, TenantId, CustomerId, Slot, OccurredAt)</c> to carry
+/// <para>`20-04` widened this from <c>(EventId, TenantId, PersonId, Slot, OccurredAt)</c> to carry
 /// <see cref="CalendarId"/> and <see cref="LocalDate"/> as well, because it is the item that finally
 /// mapped it onto a real integration event and found both missing.</para>
 ///
@@ -22,7 +22,7 @@
 ///
 /// <para><b>What it deliberately does not carry: the customer's phone number, or any name.</b> This
 /// record is mapped onto a contract that crosses a broker to consumers this product does not control.
-/// <see cref="CustomerId"/> is a pointer that resolves to whatever the lead card says *now*,
+/// <see cref="PersonId"/> is a pointer that resolves to whatever the person's record says *now*,
 /// including "deleted"; a copied phone number would be personal data that outlives the row it came
 /// from, in a table nothing prunes.</para>
 /// </summary>
@@ -30,7 +30,7 @@ public sealed record EventConfirmed(
     EventId EventId,
     TenantId TenantId,
     CalendarId CalendarId,
-    CustomerId CustomerId,
+    Guid PersonId,
     TimeSlot Slot,
     DateOnly LocalDate,
     DateTimeOffset OccurredAt) : IDomainEvent;

@@ -24,7 +24,7 @@ internal sealed record SeededTenant(
     // stays Ago.Calendar.Domain.Worker everywhere else in this codebase.
     Domain.Worker Worker,
     Service Service,
-    Customer Customer,
+    PersonRecord Person,
     OperatorId OperatorId,
     string ExternalSubjectId);
 
@@ -77,8 +77,9 @@ internal static class CalendarSeed
         var worker = Domain.Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);
         var service = Service.Create(
             new ServiceId(NewId()), tenant.Id, "Haircut", TimeSpan.FromMinutes(45), servicePrice);
-        var customer = Customer.Register(
-            new CustomerId(NewId()), tenant.Id, new PhoneNumber("+79991234567"), Now);
+        // `adr/0184`: the calendar's thin, person-id-keyed operational record - the id is minted here the
+        // way a no-chat-origin booking mints one, since no chat Person exists in this test database.
+        var person = PersonRecord.Register(NewId(), tenant.Id, new PhoneNumber("+79991234567"), Now);
 
         // `22-05`/`adr/0093`: no `Operator`/`Role` to create or grant any more - a projection row is
         // the whole fact. Written through the real adapter, not a fake, so a test seeded through here
@@ -96,14 +97,14 @@ internal static class CalendarSeed
         db.Calendars.Add(calendar);
         db.Services.Add(service);
         db.Workers.Add(worker);
-        db.Customers.Add(customer);
+        db.PersonRecords.Add(person);
 
         var projections = new RoleAssignmentProjectionStore(db);
         await projections.StageAsync(operatorId, tenant.Id, subject, AllPermissions, Now, CancellationToken.None);
 
         await db.SaveChangesAsync();
 
-        return new SeededTenant(tenant, calendar, worker, service, customer, operatorId, subject);
+        return new SeededTenant(tenant, calendar, worker, service, person, operatorId, subject);
     }
 
     /// <summary>Gives the seeded worker the same wall-clock window on every named day. Wall clock,

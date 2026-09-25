@@ -255,7 +255,7 @@ public sealed class CalendarModule : IProductModule
         // `22-05`/`adr/0093`: CreateRoleHandler/ListRolesForTenantHandler/ListOperatorsForTenantHandler/
         // GrantOperatorRoleHandler/RevokeOperatorRoleHandler/InviteOperatorHandler are gone - there is
         // no local `operators`/`roles` table left for any of them to manage. The tenant contacts
-        // report stays; it reads `customers`, not identity.
+        // report stays; it reads `person_records`, not identity.
         services.AddScoped<GetTenantContactsHandler>();
 
         // `23-12`/`adr/0123`: the rung projection's own three new handlers - reveal, confirm, and the
@@ -263,13 +263,6 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<RevealCustomerPhoneHandler>();
         services.AddScoped<ConfirmOperatorVerifiedPhoneHandler>();
         services.AddScoped<GetPhoneRevealsForTenantHandler>();
-
-        // `23-60`/`adr/0147`: the other half of that ADR's own choice - a phone match is now a hint an
-        // operator can act on. The preview ("both sets of bookings before deciding"), the merge itself,
-        // and the tenant's own audit read of every merge performed.
-        services.AddScoped<GetCustomerMergePreviewHandler>();
-        services.AddScoped<MergeCustomersHandler>();
-        services.AddScoped<GetCustomerMergesForTenantHandler>();
 
         // `22-14`/`adr/0100`: the switcher's own read - "which tenants may I act in here". Not an
         // identity-management endpoint of the kind `22-05` deleted above: it manages nothing and

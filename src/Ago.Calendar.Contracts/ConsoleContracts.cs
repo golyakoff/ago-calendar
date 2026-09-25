@@ -197,12 +197,10 @@ public sealed record WorkingHoursRuleResponse(
 /// field.</param>
 /// <param name="ServiceName">`26-50`: never gated, the same reasoning
 /// <see cref="ConfirmedBookingResponse.ServiceName"/> already carries.</param>
-/// <param name="CustomerDisplayName">`26-50`: gated exactly the way <see cref="Phone"/> already is -
-/// <see langword="null"/> for a caller who does not hold <c>customer:read</c>, and also
-/// <see langword="null"/> for a customer who has simply never had a name recorded (unlike
-/// <see cref="Phone"/>, where the second reason cannot occur - see
-/// <c>PendingBookingRow.CustomerDisplayName</c>'s own remarks for why the two fields' null-stories
-/// differ). Never a display name invented from a phone number.</param>
+/// <param name="PersonId">`adr/0184`: the opaque person id - never gated (an id, not personal data),
+/// and the key the console uses to read the person's name from chat's own Person API and display-merge
+/// it onto this row. The <c>CustomerDisplayName</c> field `26-50` added is gone: this product no longer
+/// holds a name to serve.</param>
 public sealed record PendingBookingResponse(
     Guid BookingId,
     Guid CalendarId,
@@ -210,8 +208,7 @@ public sealed record PendingBookingResponse(
     string WorkerDisplayName,
     Guid ServiceId,
     string? ServiceName,
-    Guid CustomerId,
-    string? CustomerDisplayName,
+    Guid PersonId,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     DateOnly LocalDate,
@@ -230,24 +227,22 @@ public sealed record PendingBookingResponse(
 /// code, or <see langword="null"/> if it never has been.</param>
 /// <param name="PhoneConfirmedByOperatorAt">`23-12`'s own distinct fact: when an operator recorded
 /// "I called and it is them", or <see langword="null"/> if nobody has. Never merged with
-/// <see cref="PhoneVerifiedAt"/> - see <c>Customer.PhoneConfirmedByOperatorAt</c>'s own remarks.</param>
+/// <see cref="PhoneVerifiedAt"/> - see <c>PersonRecord.PhoneConfirmedByOperatorAt</c>'s own remarks.</param>
 /// <param name="NoShowCount">Read honestly - see <c>ContactRow.NoShowCount</c>'s own remarks on why
-/// this is zero for every customer in this product's v1, not a bug in the report.</param>
-/// <param name="DuplicatePhoneCustomerIds">`23-60`/`adr/0147`: every other live customer in this
-/// tenant sharing this row's own phone - what the console's "shares a contact detail" hint and its
-/// Merge action are built from. Empty for the ordinary case.</param>
+/// this is zero for every person in this product's v1, not a bug in the report.</param>
+/// <param name="PersonId">`adr/0184`: the opaque person id. The name and the operator notes this
+/// response used to carry (<c>DisplayName</c>/<c>Notes</c>) are chat's now - the console reads them
+/// through this id from chat's own Person API and display-merges them onto this row. The `23-60`
+/// duplicate-phone hint is gone with the calendar-side merge (author decision O2).</param>
 public sealed record ContactResponse(
-    Guid CustomerId,
+    Guid PersonId,
     string Phone,
     bool Masked,
-    string? DisplayName,
-    string? Notes,
     int NoShowCount,
     DateTimeOffset? PhoneVerifiedAt,
     DateTimeOffset? PhoneConfirmedByOperatorAt,
     DateTimeOffset FirstSeenAt,
-    DateTimeOffset LastSeenAt,
-    IReadOnlyList<Guid> DuplicatePhoneCustomerIds);
+    DateTimeOffset LastSeenAt);
 
 /// <summary>`23-12`: the response to a deliberate reveal - the real number, and nothing else. Never
 /// returned by any list endpoint.</summary>
@@ -262,11 +257,9 @@ public sealed record CustomerPhoneRevealResponse(string Phone);
 /// personal data about a customer.</param>
 /// <param name="ServiceName">Never gated, the same reasoning <see cref="WorkerSlotResponse.ServiceName"/>
 /// already carries.</param>
-/// <param name="CustomerDisplayName"><see langword="null"/> only when the customer has never had a
-/// name recorded - unrelated to this response's own permission gate, since every row already passed
-/// <c>customer:read</c> (<c>IConfirmedBookingReadStore</c>'s own remarks on why this screen has no
-/// contact-free row the way <see cref="PendingBookingResponse"/> and <see cref="WorkerSlotResponse"/>
-/// both do).</param>
+/// <param name="PersonId">`adr/0184`: the opaque person id - the key the console reads the person's
+/// name through, from chat's own Person API. The <c>CustomerDisplayName</c> field is gone: this product
+/// no longer holds a name to serve.</param>
 /// <param name="Weekday">0 = Sunday, matching <see cref="WorkerSlotResponse.Weekday"/>'s own
 /// convention and the identical reasoning: computed server-side from <see cref="LocalDate"/> so the
 /// console never derives a weekday from a bare date string in its own, possibly different, zone.</param>
@@ -291,8 +284,7 @@ public sealed record ConfirmedBookingResponse(
     string WorkerDisplayName,
     Guid ServiceId,
     string? ServiceName,
-    Guid CustomerId,
-    string? CustomerDisplayName,
+    Guid PersonId,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     DateOnly LocalDate,
@@ -311,64 +303,17 @@ public sealed record ConfirmOperatorVerifiedPhoneResponse(DateTimeOffset Confirm
 /// <summary>`23-12`'s own audit view - `decisions.md` §5's amendment: individual reveals, never an
 /// aggregated count.</summary>
 public sealed record ContactPhoneRevealResponse(
-    Guid Id, DateTimeOffset OccurredAt, Guid CustomerId, Guid OperatorId, string Surface);
+    Guid Id, DateTimeOffset OccurredAt, Guid PersonId, Guid OperatorId, string Surface);
 
 /// <param name="NextBefore">Keyset cursor for the next page - <see langword="null"/> once the oldest
 /// row has been reached.</param>
 public sealed record ContactPhoneRevealPageResponse(
     IReadOnlyList<ContactPhoneRevealResponse> Items, Guid? NextBefore);
 
-/// <summary>`23-60`/`adr/0147`: the two candidate ids, unordered - <c>MergeCustomers</c>'s own doc
-/// comment explains why neither the preview request nor this one lets the caller name a
-/// "survivor".</summary>
-public sealed record CustomerMergePreviewRequest(Guid FirstCustomerId, Guid SecondCustomerId);
-
-/// <param name="Status">The CLR enum member name (<c>Available</c>/<c>PendingConfirmation</c>/
-/// <c>Booked</c>/<c>Cancelled</c>/<c>NoShow</c>/<c>Blocked</c>), verbatim - a closed vocabulary the
-/// console already has its own copy of for the pending/confirmed-bookings screens.</param>
-public sealed record CustomerMergePreviewBookingResponse(
-    Guid BookingId,
-    string Status,
-    string? ServiceName,
-    string WorkerDisplayName,
-    DateTimeOffset StartsAt,
-    DateTimeOffset EndsAt,
-    DateOnly LocalDate);
-
-/// <param name="WillSurvive">`adr/0161`: whether the server would keep this candidate if the
-/// operator goes on to confirm - display-only, re-decided (never trusted) by the merge itself.</param>
-public sealed record CustomerMergeCandidateResponse(
-    Guid CustomerId,
-    string Source,
-    bool WillSurvive,
-    string Phone,
-    bool Masked,
-    string? DisplayName,
-    int NoShowCount,
-    IReadOnlyList<CustomerMergePreviewBookingResponse> Bookings);
-
-public sealed record CustomerMergePreviewResponse(
-    CustomerMergeCandidateResponse First, CustomerMergeCandidateResponse Second);
-
-/// <summary>`23-60`/`adr/0147`: the merge itself - the same two unordered ids the preview above was
-/// asked about, now acted on.</summary>
-public sealed record MergeCustomersRequest(Guid FirstCustomerId, Guid SecondCustomerId);
-
-/// <param name="SurvivorCustomerId">Which of the two the operator's request actually kept - decided
-/// by the handler, not the request; see <c>MergeCustomersHandler</c>'s own doc comment for why an
-/// operator cannot choose this.</param>
-public sealed record CustomerMergeOutcomeResponse(Guid SurvivorCustomerId, Guid AbsorbedCustomerId, int BookingsMoved);
-
-/// <summary>`23-60`/`adr/0147`'s own Done-when: "the merge is recorded ... and is visible
-/// afterwards." One row, one merge - the same shape <see cref="ContactPhoneRevealResponse"/> already
-/// establishes for a different audit trail.</summary>
-public sealed record CustomerMergeResponse(
-    Guid Id, DateTimeOffset MergedAt, Guid SurvivorCustomerId, Guid AbsorbedCustomerId, Guid OperatorId, int BookingsMoved);
-
-/// <param name="NextBefore">Keyset cursor for the next page - <see langword="null"/> once the oldest
-/// row has been reached, the identical shape <see cref="ContactPhoneRevealPageResponse"/> already
-/// establishes.</param>
-public sealed record CustomerMergePageResponse(IReadOnlyList<CustomerMergeResponse> Items, Guid? NextBefore);
+// `adr/0184` (author decision O2): the `23-60` customer-merge contracts - preview request/response,
+// merge request/outcome, and the merge audit page - are gone with the calendar-side merge they
+// served. One person id per person makes duplicates rare; if a merge is ever wanted again it is a
+// chat-side act on the person registry, never a calendar one.
 
 /// <param name="LocalDate">The business-local day, as the shop names it - not an instant range. See
 /// <c>DeleteDayOff</c>.</param>
@@ -439,15 +384,13 @@ public sealed record WorkerScheduleResponse(
 /// <c>"PendingConfirmation"</c>, <c>"Booked"</c>, <c>"Cancelled"</c>, <c>"NoShow"</c> or
 /// <c>"Blocked"</c>.</param>
 /// <param name="ServiceName">Null on a <c>Blocked</c> row - a closure is not a service.</param>
-/// <param name="CustomerId">Not personal data - a foreign key - so never gated. What tells
-/// <see cref="CustomerDisplayName"/>/<see cref="Phone"/>'s two null-reasons apart: null here means
-/// nobody holds the slot; non-null with those two null means somebody does and this operator may not
-/// see who.</param>
-/// <param name="CustomerDisplayName">`20-12`'s own gate. Null either because
-/// <see cref="CustomerId"/> is null too (nobody holds the slot), or because this operator does not
-/// hold <c>customer:read</c> for this tenant - see <see cref="CustomerId"/> for the discriminator.
-/// </param>
-/// <param name="Phone">Same two-reasons-for-null story as <see cref="CustomerDisplayName"/>.</param>
+/// <param name="PersonId">Not personal data - an opaque person reference - so never gated. What tells
+/// <see cref="Phone"/>'s two null-reasons apart: null here means nobody holds the slot; non-null with
+/// <see cref="Phone"/> null means somebody does and this operator may not see who. `adr/0184`: the
+/// person's name is chat's - the console reads it through this id, never from this response.</param>
+/// <param name="Phone">Null either because <see cref="PersonId"/> is null too (nobody holds the slot),
+/// or because this operator does not hold <c>customer:read</c> for this tenant - see
+/// <see cref="PersonId"/> for the discriminator.</param>
 /// <param name="Masked">`23-12`: whether <see cref="Phone"/> is the masked display form -
 /// meaningful only when <see cref="Phone"/> is non-null.</param>
 /// <param name="BookingId">
@@ -465,8 +408,7 @@ public sealed record WorkerSlotResponse(
     string Status,
     Guid? ServiceId,
     string? ServiceName,
-    Guid? CustomerId,
-    string? CustomerDisplayName,
+    Guid? PersonId,
     string? Phone,
     bool Masked,
     Guid? BookingId);
@@ -500,8 +442,7 @@ public sealed record RecutBookingPreviewResponse(
     string Status,
     Guid? ServiceId,
     string? ServiceName,
-    Guid? CustomerId,
-    string? CustomerDisplayName,
+    Guid? PersonId,
     string? Phone,
     bool Masked,
     bool CanDecide);

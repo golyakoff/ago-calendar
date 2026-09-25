@@ -37,7 +37,7 @@ public interface IPendingBookingReadStore
     /// <param name="includeContactData">
     /// `20-12`: whether the caller holds <see cref="Permission.CustomerRead"/>, decided once by
     /// <c>GetPendingBookingsForTenantHandler</c> and passed down rather than re-checked here. When
-    /// <see langword="false"/> the query does not join to <c>customers</c> at all - keeping `20-04`'s
+    /// <see langword="false"/> the query does not join to <c>person_records</c> at all - keeping `20-04`'s
     /// original PII-minimisation argument alive for exactly the callers it was meant for, instead of
     /// joining unconditionally and merely hiding the column afterwards. See
     /// <see cref="PendingBookingRow.Phone"/> for what the caller sees in each case.
@@ -76,17 +76,9 @@ public interface IPendingBookingReadStore
 /// <param name="ServiceName">`26-50`: never gated, the identical reasoning
 /// <see cref="ConfirmedBookingRow.ServiceName"/> already states. Nullable only because the join is a
 /// defensive <c>left join</c>, the same caution that row's own remarks give.</param>
-/// <param name="CustomerId">Resolves the lead card. The queue's own <see cref="CustomerDisplayName"/>
-/// and <see cref="Phone"/> are the two fields personal data actually lives on - this id alone is a
-/// foreign key, never gated.</param>
-/// <param name="CustomerDisplayName">`26-50`: gated exactly the way <see cref="Phone"/> already is -
-/// <see langword="null"/> means either of the same two things <see cref="Phone"/>'s own remarks
-/// describe: the caller was never asked for it (<c>includeContactData: false</c>, so the query never
-/// joined to <c>customers</c> at all), or the customer has simply never had a name recorded. Unlike
-/// <see cref="Phone"/>, the second reason is reachable here - <see cref="Customer.DisplayName"/> is
-/// optional where <see cref="Customer.Phone"/> is not - so this field carries the two-reasons-for-null
-/// story <see cref="WorkerSlotRow.CustomerDisplayName"/> already has, rather than <see cref="Phone"/>'s
-/// simpler one.</param>
+/// <param name="PersonId">`adr/0184`: the opaque person id. The queue's own <see cref="Phone"/> is the
+/// one field personal data actually lives on - this id alone is a reference, never gated. The person's
+/// name is chat's, read by the console through this id and display-merged onto the row.</param>
 /// <param name="StartsAt">When the visit is - the run's first slot.</param>
 /// <param name="EndsAt">Exclusive - the run's last slot, buffers between them included.</param>
 /// <param name="LocalDate">The business-local day, as the shop names it (adr/0049).</param>
@@ -102,8 +94,8 @@ public interface IPendingBookingReadStore
 /// <param name="Phone">
 /// `20-12`. <see langword="null"/> means exactly one thing in this read store's own output: the caller
 /// was not asked for it (<c>includeContactData: false</c>), because the query never joined to
-/// <c>customers</c> at all. It does <b>not</b> mean "no phone on file" - <see cref="Customer.Phone"/>
-/// is a non-nullable <see cref="PhoneNumber"/>, so every <see cref="Customer"/> a pending booking can
+/// <c>person_records</c> at all. It does <b>not</b> mean "no phone on file" - <see cref="PersonRecord.Phone"/>
+/// is a non-nullable <see cref="PhoneNumber"/>, so every <see cref="PersonRecord"/> a pending booking can
 /// reference always has one; the "permitted but nothing recorded" state the item file asked about is
 /// therefore unreachable given today's model, and this row does not pretend otherwise with a third
 /// state nothing can produce. `23-12`: a <see cref="string"/>, not a <see cref="PhoneNumber"/> - see
@@ -119,8 +111,7 @@ public readonly record struct PendingBookingRow(
     string WorkerDisplayName,
     ServiceId ServiceId,
     string? ServiceName,
-    CustomerId CustomerId,
-    string? CustomerDisplayName,
+    Guid PersonId,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     DateOnly LocalDate,

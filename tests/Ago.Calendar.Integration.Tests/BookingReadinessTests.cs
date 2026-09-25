@@ -191,9 +191,9 @@ public class BookingReadinessTests(PostgresFixture fixture) : IAsyncLifetime
     {
         var parsed = new PhoneNumber(phone);
         await using var db = fixture.CreateDbContext();
-        var customer = Customer.Register(new CustomerId(CalendarSeed.NewId()), seed.Tenant.Id, parsed, CalendarSeed.Now);
+        var customer = PersonRecord.Register(CalendarSeed.NewId(), seed.Tenant.Id, parsed, CalendarSeed.Now);
         customer.RecordVerifiedPhone(CalendarSeed.Now);
-        db.Customers.Add(customer);
+        db.PersonRecords.Add(customer);
         await db.SaveChangesAsync();
     }
 

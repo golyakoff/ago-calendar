@@ -270,11 +270,11 @@ public class BookEventHandlerTests
     public async Task ANullPhoneVerifiedAt_ButAReturningCustomerAlreadyVerified_Succeeds()
     {
         var verifiedAt = BookingFixtures.Now.AddDays(-3);
-        var customer = Customer.Register(
-            BookingFixtures.CustomerId, BookingFixtures.TenantId, new PhoneNumber(BookingFixtures.Phone),
+        var person = PersonRecord.Register(
+            BookingFixtures.PersonId, BookingFixtures.TenantId, new PhoneNumber(BookingFixtures.Phone),
             BookingFixtures.Now.AddDays(-3));
-        customer.RecordVerifiedPhone(verifiedAt);
-        var world = new World(existingCustomer: customer);
+        person.RecordVerifiedPhone(verifiedAt);
+        var world = new World(existingPerson: person);
 
         var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false));
 
@@ -287,11 +287,11 @@ public class BookEventHandlerTests
     [Fact]
     public async Task AReturningCustomerAtAnotherTenant_DoesNotSatisfyTheGate()
     {
-        var customer = Customer.Register(
-            BookingFixtures.CustomerId, BookingFixtures.OtherTenantId, new PhoneNumber(BookingFixtures.Phone),
+        var person = PersonRecord.Register(
+            BookingFixtures.PersonId, BookingFixtures.OtherTenantId, new PhoneNumber(BookingFixtures.Phone),
             BookingFixtures.Now.AddDays(-3));
-        customer.RecordVerifiedPhone(BookingFixtures.Now.AddDays(-3));
-        var world = new World(existingCustomer: customer);
+        person.RecordVerifiedPhone(BookingFixtures.Now.AddDays(-3));
+        var world = new World(existingPerson: person);
 
         var outcome = await world.HandleAsync(BookingFixtures.Command(phoneVerified: false));
 
@@ -460,7 +460,7 @@ public class BookEventHandlerTests
         var service = Service.Create(BookingFixtures.ServiceId, BookingFixtures.TenantId, "Colour", TimeSpan.FromMinutes(70));
         var schedule = BookingFixtures.Schedule(slotMinutes: 30, bufferMinutes: 10);
         var day = BookingFixtures.ConsecutiveSlots(count: 3, slotMinutes: 30, bufferMinutes: 10).ToList();
-        day[1].Claim(BookingFixtures.CustomerId, service.Id, BookingFixtures.Now, BookingFixtures.Now.AddMinutes(15));
+        day[1].Claim(BookingFixtures.PersonId, service.Id, BookingFixtures.Now, BookingFixtures.Now.AddMinutes(15));
         var worker = BookingFixtures.WorkerOffering(service);
         var world = new World(service: service, worker: worker, schedule: schedule, day: day);
 
@@ -612,7 +612,7 @@ public class BookEventHandlerTests
             // PhoneVerificationAssertionResolver tries when a test's own BookEvent carries no
             // PhoneVerifiedAt directly. Both default to "nothing here", so every test that never
             // mentions either exercises the exact same path it did before this item.
-            Customer? existingCustomer = null,
+            PersonRecord? existingPerson = null,
             PendingPhoneVerification? pendingVerification = null)
         {
             var resolvedService = service ?? BookingFixtures.HaircutService();
@@ -637,7 +637,7 @@ public class BookEventHandlerTests
                 new BookingRateLimitOptions(),
                 Booking,
                 new PhoneVerificationAssertionResolver(
-                    new FakeCustomerRepository(existingCustomer),
+                    new FakePersonRecordRepository(existingPerson),
                     new FakePendingPhoneVerificationRepository(pendingVerification)),
                 new SequentialIdGenerator(),
                 new FakeClock(BookingFixtures.Now));

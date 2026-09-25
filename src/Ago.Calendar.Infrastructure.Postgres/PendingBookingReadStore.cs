@@ -57,7 +57,7 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
     /// <summary>
     /// `26-50`: <c>workers</c>/<c>services</c> are joined unconditionally here too, the identical
     /// reasoning <c>ConfirmedBookingReadStore</c>'s own remarks give - naming what a booking is and who
-    /// it is with is never gated on <c>customer:read</c>, only <c>customers</c> is. <c>workers</c> is
+    /// it is with is never gated on <c>customer:read</c>, only <c>person_records</c> is. <c>workers</c> is
     /// an inner join (every <see cref="Domain.Event"/> in <c>PendingConfirmation</c> was claimed by a
     /// worker who cannot have been deleted since, only deactivated); <c>services</c> stays a defensive
     /// <c>left join</c>, the same caution <c>ConfirmedBookingReadStore</c> takes.
@@ -66,7 +66,7 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         """
         select e.booking_id as "EventId", e.calendar_id as "CalendarId", e.worker_id as "WorkerId",
                w.display_name as "WorkerDisplayName", e.service_id as "ServiceId", s.name as "ServiceName",
-               e.customer_id as "CustomerId", null::text as "CustomerDisplayName",
+               e.person_id as "PersonId",
                min(e.starts_at) as "StartsAt", max(e.ends_at) as "EndsAt", e.local_date as "LocalDate",
                e.confirmation_deadline as "ConfirmationDeadline",
                (e.confirmation_deadline <= @Now) as "IsOverdue",
@@ -77,7 +77,7 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         where e.tenant_id = @TenantId
           and e.status = 'PendingConfirmation'
         group by e.booking_id, e.calendar_id, e.worker_id, w.display_name, e.service_id, s.name,
-                 e.customer_id, e.local_date, e.confirmation_deadline
+                 e.person_id, e.local_date, e.confirmation_deadline
         order by e.confirmation_deadline
         limit @Limit
         """;
@@ -95,19 +95,19 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         """
         select e.booking_id as "EventId", e.calendar_id as "CalendarId", e.worker_id as "WorkerId",
                w.display_name as "WorkerDisplayName", e.service_id as "ServiceId", s.name as "ServiceName",
-               e.customer_id as "CustomerId", c.display_name as "CustomerDisplayName",
+               e.person_id as "PersonId",
                min(e.starts_at) as "StartsAt", max(e.ends_at) as "EndsAt", e.local_date as "LocalDate",
                e.confirmation_deadline as "ConfirmationDeadline",
                (e.confirmation_deadline <= @Now) as "IsOverdue",
-               c.phone as "Phone"
+               p.phone as "Phone"
         from events e
         join workers w on w.id = e.worker_id
         left join services s on s.id = e.service_id
-        left join customers c on c.id = e.customer_id
+        left join person_records p on p.person_id = e.person_id
         where e.tenant_id = @TenantId
           and e.status = 'PendingConfirmation'
         group by e.booking_id, e.calendar_id, e.worker_id, w.display_name, e.service_id, s.name,
-                 e.customer_id, c.display_name, e.local_date, e.confirmation_deadline, c.phone
+                 e.person_id, e.local_date, e.confirmation_deadline, p.phone
         order by e.confirmation_deadline
         limit @Limit
         """;
@@ -138,11 +138,7 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         // empty id would hide that instead of surfacing it.
         new ServiceId(row.ServiceId!.Value),
         row.ServiceName,
-        new CustomerId(row.CustomerId!.Value),
-        // `26-50`: null when the query never selected the column at all (SqlWithoutContactData leaves
-        // this at its type default), the identical two-reasons-for-null story Phone below carries -
-        // never a second, separately-invented gate.
-        row.CustomerDisplayName,
+        row.PersonId!.Value,
         new DateTimeOffset(DateTime.SpecifyKind(row.StartsAt, DateTimeKind.Utc)),
         new DateTimeOffset(DateTime.SpecifyKind(row.EndsAt, DateTimeKind.Utc)),
         row.LocalDate,
@@ -168,8 +164,7 @@ public sealed class PendingBookingReadStore(NpgsqlDataSource dataSource) : IPend
         string WorkerDisplayName,
         Guid? ServiceId,
         string? ServiceName,
-        Guid? CustomerId,
-        string? CustomerDisplayName,
+        Guid? PersonId,
         DateTime StartsAt,
         DateTime EndsAt,
         DateOnly LocalDate,

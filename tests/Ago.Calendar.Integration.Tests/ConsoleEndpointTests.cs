@@ -643,7 +643,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
             DateOnly.FromDateTime(startsAt.UtcDateTime),
             DateTimeOffset.UtcNow);
 
-        slot.Claim(seed.Customer.Id, seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2));
+        slot.Claim(seed.Person.PersonId, seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2));
         slot.ClearDomainEvents();
 
         await using var db = fixture.CreateDbContext();
@@ -694,7 +694,7 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
             localDate,
             DateTimeOffset.UtcNow);
 
-        slot.Claim(seed.Customer.Id, seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2));
+        slot.Claim(seed.Person.PersonId, seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2));
         slot.ClearDomainEvents();
 
         await using var db = fixture.CreateDbContext();

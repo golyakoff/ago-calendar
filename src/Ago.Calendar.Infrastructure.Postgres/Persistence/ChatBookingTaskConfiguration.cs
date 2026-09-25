@@ -27,7 +27,7 @@ internal sealed class ChatBookingTaskConfiguration : IEntityTypeConfiguration<Ch
 
         builder.Property(t => t.EventId).HasColumnName("event_id").HasConversion(IdConverters.NullableEvent);
 
-        // Raw text, not IdConverters.Phone's PhoneNumber - unlike Event.CustomerId, this column is a
+        // Raw text, not IdConverters.Phone's PhoneNumber - unlike PersonRecord.Phone, this column is a
         // record of what the visitor typed while the task was in flight, not the normalised value
         // BookEventHandler's own PhoneNumber constructor produces. Re-validating it here would just
         // be BookEventHandler's own check performed a second time on data this column does not use

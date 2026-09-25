@@ -44,7 +44,7 @@ public class ConfirmationSweepTests(PostgresFixture fixture)
 
         // The customer is unchanged - nobody was told anything new, and nothing about the lead card
         // is part of confirming.
-        Assert.Equal(booking.CustomerId, stored.CustomerId);
+        Assert.Equal(booking.PersonId, stored.PersonId);
     }
 
     [Fact]
@@ -88,9 +88,9 @@ public class ConfirmationSweepTests(PostgresFixture fixture)
         Assert.Equal(EventStatus.Booked, await StatusOfAsync(booking.Id));
 
         await using var db = fixture.CreateDbContext();
-        var customer = await new CustomerRepository(db).FindByPhoneAsync(
+        var verifiedAt = await new PersonRecordRepository(db).FindPhoneVerifiedAtAsync(
             seed.Tenant.Id, new PhoneNumber("+79997000009"), CancellationToken.None);
-        Assert.Equal(Now.AddDays(-1), customer!.PhoneVerifiedAt);
+        Assert.Equal(Now.AddDays(-1), verifiedAt);
     }
 
     [Fact]
@@ -158,14 +158,14 @@ public class ConfirmationSweepTests(PostgresFixture fixture)
         Assert.Equal(booking.Id.Value, payload.EventId);
         Assert.Equal(seed.Tenant.Id.Value, payload.TenantId);
         Assert.Equal(seed.Calendar.Id.Value, payload.CalendarId);
-        // The booking's own customer, which this fixture created for the phone number under test -
+        // The booking's own person, which this fixture created for the phone number under test -
         // not the seed's default one.
-        Assert.Equal(booking.CustomerId!.Value.Value, payload.CustomerId);
+        Assert.Equal(booking.PersonId!.Value, payload.PersonId);
         Assert.Equal(booking.StartsAt, payload.StartsAt);
         Assert.Equal(booking.LocalDate, payload.LocalDate);
 
         // The rule this event exists under: it crosses a broker to consumers this product does not
-        // control, and it lands in a table nothing prunes. `20-05` resolves the phone from CustomerId
+        // control, and it lands in a table nothing prunes. `20-05` resolves the phone from PersonId
         // at send time; a copy here would be personal data outliving the row it came from.
         Assert.DoesNotContain("7999", row.Payload, StringComparison.Ordinal);
         Assert.DoesNotContain("phone", row.Payload, StringComparison.OrdinalIgnoreCase);
@@ -319,28 +319,25 @@ public class ConfirmationSweepTests(PostgresFixture fixture)
         await using var db = fixture.CreateDbContext();
         await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
 
-        var customer = await new CustomerRepository(db).FindByPhoneAsync(
-            seed.Tenant.Id, new PhoneNumber(phone), CancellationToken.None);
-        if (customer is null)
+        // `adr/0184`: a fresh person record per pending booking - the record is keyed by person id, so
+        // there is no "reuse the row for this phone" to do; two bookings with one number are two people
+        // until chat says otherwise.
+        var person = PersonRecord.Register(CalendarSeed.NewId(), seed.Tenant.Id, new PhoneNumber(phone), Now);
+        if (phoneVerifiedAt is { } verifiedAt)
         {
-            customer = Customer.Register(
-                new CustomerId(CalendarSeed.NewId()), seed.Tenant.Id, new PhoneNumber(phone), Now);
-            if (phoneVerifiedAt is { } verifiedAt)
-            {
-                // `20-09`: the domain's own canonical statement of the precondition - see Customer's
-                // own remarks on why the real write for this item is BookingStore's SQL, not this
-                // method; this harness already bypasses BookingStore entirely (this method's own
-                // remarks below), so setting it here through the aggregate is the honest equivalent.
-                customer.RecordVerifiedPhone(verifiedAt);
-            }
-
-            await new CustomerRepository(db).AddAsync(customer, CancellationToken.None);
+            // `20-09`: the domain's own canonical statement of the precondition - see PersonRecord's
+            // own remarks on why the real write for this item is BookingStore's SQL, not this
+            // method; this harness already bypasses BookingStore entirely (this method's own
+            // remarks below), so setting it here through the aggregate is the honest equivalent.
+            person.RecordVerifiedPhone(verifiedAt);
         }
+
+        await new PersonRecordRepository(db).AddAsync(person, CancellationToken.None);
 
         // Constructed through the aggregate rather than through `20-03`'s BookingStore: what these
         // tests need is a row that is genuinely PendingConfirmation with a known deadline, and going
         // through the real claim would tie every one of them to that item's own clock handling.
-        slot.Claim(customer.Id, seed.Service.Id, Now, deadline ?? Deadline);
+        slot.Claim(person.PersonId, seed.Service.Id, Now, deadline ?? Deadline);
         slot.ClearDomainEvents();
         await new EventRepository(db).SaveAsync(slot, CancellationToken.None);
 

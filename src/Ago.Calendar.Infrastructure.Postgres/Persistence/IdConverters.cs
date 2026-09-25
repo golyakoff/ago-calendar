@@ -19,7 +19,6 @@ internal static class IdConverters
     public static readonly ValueConverter<WorkerId, Guid> Worker = new(id => id.Value, value => new WorkerId(value));
     public static readonly ValueConverter<ServiceId, Guid> Service = new(id => id.Value, value => new ServiceId(value));
     public static readonly ValueConverter<CalendarId, Guid> Calendar = new(id => id.Value, value => new CalendarId(value));
-    public static readonly ValueConverter<CustomerId, Guid> Customer = new(id => id.Value, value => new CustomerId(value));
     public static readonly ValueConverter<WorkingHoursRuleId, Guid> WorkingHoursRule = new(id => id.Value, value => new WorkingHoursRuleId(value));
     public static readonly ValueConverter<WorkerScheduleId, Guid> WorkerSchedule = new(id => id.Value, value => new WorkerScheduleId(value));
     public static readonly ValueConverter<EventId, Guid> Event = new(id => id.Value, value => new EventId(value));
@@ -32,10 +31,6 @@ internal static class IdConverters
     public static readonly ValueConverter<ServiceId?, Guid?> NullableService = new(
         id => id.HasValue ? id.Value.Value : (Guid?)null,
         value => value.HasValue ? new ServiceId(value.Value) : (ServiceId?)null);
-
-    public static readonly ValueConverter<CustomerId?, Guid?> NullableCustomer = new(
-        id => id.HasValue ? id.Value.Value : (Guid?)null,
-        value => value.HasValue ? new CustomerId(value.Value) : (CustomerId?)null);
 
     /// <summary>`20-07`: <see cref="ChatBookingTask.WorkerId"/> is unset until the visitor picks one.</summary>
     public static readonly ValueConverter<WorkerId?, Guid?> NullableWorker = new(

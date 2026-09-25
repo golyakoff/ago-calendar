@@ -31,7 +31,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
         // The blocking row spans what it replaced - the worker's Tuesday, not the whole calendar
         // day. A worker whose Tuesday was 09:00-18:00 is not thereby unavailable at midnight.
         Assert.Equal(new DateTimeOffset(2026, 5, 5, 6, 0, 0, TimeSpan.Zero), blocking.StartsAt.ToUniversalTime());
-        Assert.Null(blocking.CustomerId);
+        Assert.Null(blocking.PersonId);
 
         // Neighbouring days are untouched: the edit is scoped by local_date, which is the column
         // adr/0049 stored rather than derived precisely so that this is one indexed predicate.
@@ -204,7 +204,7 @@ public class ManualDayEditingTests(PostgresFixture fixture)
             .OrderBy(e => e.StartsAt)
             .FirstAsync();
 
-        target.Claim(seed.Customer.Id, seed.Service.Id, Monday, Monday.AddMinutes(15));
+        target.Claim(seed.Person.PersonId, seed.Service.Id, Monday, Monday.AddMinutes(15));
         await new EventRepository(db).SaveAsync(target, CancellationToken.None);
     }
 

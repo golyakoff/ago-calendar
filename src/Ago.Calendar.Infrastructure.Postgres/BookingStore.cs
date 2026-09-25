@@ -12,12 +12,12 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 
 /// <summary>
 /// Two raw statements plus, since `25-63`, one ordinary EF <c>SaveChangesAsync</c> staging the
-/// outbox row - all inside one transaction, no reads that a decision depends on.
+/// outbox row(s) - all inside one transaction, no reads that a decision depends on.
 ///
 /// <para><b>Raw SQL, and the exact reason it is raw.</b> Both statements below are compare-and-set
 /// shaped, and EF Core cannot express either as one round trip. The claim's verdict *is* its
 /// rows-affected count; the upsert's <c>ON CONFLICT</c> arbitration happens inside Postgres against
-/// a unique index. Written through EF's LINQ they would each become a read followed by a write, with
+/// the primary key. Written through EF's LINQ they would each become a read followed by a write, with
 /// a window in between that a concurrent caller walks through - and EF's own answer to that window,
 /// optimistic concurrency, converts an ordinary lost race into an exception on the hottest path in
 /// the product. adr/0004's "EF for writes" default holds everywhere else in this adapter; this is a
@@ -33,57 +33,51 @@ public sealed class BookingStore(
     AgoCalendarDbContext db, IOutboxWriter outbox, IIdGenerator idGenerator) : IBookingStore
 {
     /// <summary>
-    /// The lead card, found-or-created in one statement.
+    /// `adr/0184`: the person's thin operational record, found-or-created in one statement, keyed by
+    /// the opaque person id rather than by phone.
     ///
     /// <para><c>ON CONFLICT ... DO UPDATE</c>, not <c>DO NOTHING</c>: <c>DO UPDATE</c> is what makes
-    /// the statement return a row in both cases, so the caller learns the customer's id whether it
-    /// inserted or collided. With <c>DO NOTHING</c> a collision returns nothing and the caller has to
-    /// go and read the row it just failed to insert - a second round trip, and a branch that only
-    /// executes under contention, which is the branch least likely to be exercised before
-    /// production.</para>
+    /// the statement return a row in both cases, so the caller learns the outcome whether it inserted
+    /// or collided. With <c>DO NOTHING</c> a collision returns nothing and the caller has to go and
+    /// read the row it just failed to insert - a second round trip, and a branch that only executes
+    /// under contention, which is the branch least likely to be exercised before production.</para>
     ///
     /// <para><c>last_seen_at</c> takes the greater of the two values rather than the incoming one, so
     /// a request that was slow in flight cannot rewind the watermark - the same rule
-    /// <see cref="Customer.Touch"/> enforces in memory, restated here because this statement never
+    /// <see cref="PersonRecord.Touch"/> enforces in memory, restated here because this statement never
     /// goes through that method.</para>
     ///
-    /// <para><c>display_name</c> keeps whatever is already there and only fills a blank. An operator
-    /// who corrected "jon" to "Jonathan Reed" on the lead card has curated that field; the next
-    /// booking from that phone must not silently undo it because the customer typed the short form
-    /// into a public form again.</para>
+    /// <para><b>The phone follows the booking; the verification follows the phone.</b> A returning
+    /// person booking with the number they used last time keeps their <c>phone_verified_at</c> on the
+    /// "keep what's already there" rule `20-09` established (<c>COALESCE</c>, earliest wins - the
+    /// identical rule <see cref="PersonRecord.RecordVerifiedPhone"/> states in C#): once a number has
+    /// been proven reachable, a later booking from it with an older or absent assertion does not
+    /// un-prove it. A person booking with a <em>different</em> number gets that number written and the
+    /// verification marks reset to whatever this attempt asserted - the marks were facts about the old
+    /// number, and carrying them across would claim the new one was verified when nobody ever did
+    /// (<see cref="PersonRecord.ChangePhone"/> is the C# statement of the same rule).</para>
     ///
-    /// <para><b>`20-09`: <c>phone_verified_at</c> follows the identical "keep what's already there"
-    /// rule as <c>display_name</c>, for a related but distinct reason.</b> <see cref="BookingAttempt"/>'s
-    /// own value is always non-null (the caller already refused to reach this point without one), but
-    /// once a phone has been proven reachable, that proof does not expire just because a later booking
-    /// from the same number happens to arrive with an older or (structurally impossible today, but not
-    /// worth relying on) different assertion - the first verification is the honest "since when" answer
-    /// (`RouteConversationToModuleHandler`'s own remarks on Chat's side make the identical choice,
-    /// reading <c>ChannelIdentity.FirstSeenAt</c> rather than "now"). <c>COALESCE</c> in this direction
-    /// means a customer row can only ever move from unverified to verified, never the reverse and never
-    /// to a different timestamp once set.</para>
-    ///
-    /// <para><b>`23-59`/`adr/0147`: <c>source</c> is written as the literal <c>'Booking'</c>, and the
-    /// <c>ON CONFLICT</c> target now carries the identical <c>WHERE source = 'Booking'</c> predicate as
-    /// <c>ux_customers_tenant_phone</c> itself.</b> That index is a partial one since this item - active
-    /// only for a <c>Booking</c>-sourced row, so a chat-carried row can share a phone with this one
-    /// without colliding (`CustomerConfiguration`'s own remarks) - and Postgres only accepts a partial
-    /// index as an upsert's conflict-arbitration target when the statement's own <c>WHERE</c> clause
-    /// matches the index's exactly; without it this statement would fail outright with "there is no
-    /// unique or exclusion constraint matching the ON CONFLICT specification," not silently misbehave.
-    /// This statement never writes <c>source_contact_id</c> - it stays its column default
-    /// (<see langword="null"/>), which is what keeps a booking-sourced row out of
-    /// <c>ux_customers_tenant_source_contact</c>'s own partial index entirely.</para>
+    /// <para>No <c>display_name</c>, no <c>notes</c>: the columns are gone with the person copy
+    /// (`adr/0184`), and a name typed on a public booking travels to chat on <c>PersonRegistered</c>
+    /// instead - see <see cref="TryBookAsync"/>.</para>
     /// </summary>
-    private const string UpsertCustomerSql =
+    private const string UpsertPersonRecordSql =
         """
-        INSERT INTO customers (id, tenant_id, phone, source, display_name, phone_verified_at, no_show_count, first_seen_at, last_seen_at)
-        VALUES (@id, @tenantId, @phone, 'Booking', @displayName, @phoneVerifiedAt, 0, @now, @now)
-        ON CONFLICT (tenant_id, phone) WHERE source = 'Booking' DO UPDATE
-            SET last_seen_at = GREATEST(customers.last_seen_at, EXCLUDED.last_seen_at),
-                display_name = COALESCE(customers.display_name, EXCLUDED.display_name),
-                phone_verified_at = COALESCE(customers.phone_verified_at, EXCLUDED.phone_verified_at)
-        RETURNING id
+        INSERT INTO person_records (person_id, tenant_id, phone, phone_verified_at, no_show_count, first_seen_at, last_seen_at)
+        VALUES (@personId, @tenantId, @phone, @phoneVerifiedAt, 0, @now, @now)
+        ON CONFLICT (person_id) DO UPDATE
+            SET last_seen_at = GREATEST(person_records.last_seen_at, EXCLUDED.last_seen_at),
+                phone = EXCLUDED.phone,
+                phone_verified_at = CASE
+                    WHEN person_records.phone = EXCLUDED.phone
+                        THEN COALESCE(person_records.phone_verified_at, EXCLUDED.phone_verified_at)
+                    ELSE EXCLUDED.phone_verified_at
+                END,
+                operator_confirmed_phone_at = CASE
+                    WHEN person_records.phone = EXCLUDED.phone THEN person_records.operator_confirmed_phone_at
+                    ELSE NULL
+                END
+        RETURNING person_id
         """;
 
     /// <summary>
@@ -118,7 +112,7 @@ public sealed class BookingStore(
     /// own length".</b> Fewer rows than <c>@eventIds</c> named means at least one slot of the run was
     /// unavailable - taken, blocked, started, or on another calendar - and <see cref="ClaimAsync"/>
     /// rolls the whole attempt back rather than accepting a partial claim: a booking is claimed whole
-    /// or not at all, which is what stops a torn state (some of a customer's slots taken, some not)
+    /// or not at all, which is what stops a torn state (some of a person's slots taken, some not)
     /// from ever being observable.</para>
     ///
     /// <para><b>`20-09`: deliberately does <em>not</em> add a <c>phone_verified_at IS NOT NULL</c>
@@ -134,21 +128,20 @@ public sealed class BookingStore(
     /// stronger guarantee besides: it holds for every future caller of this port by construction, not
     /// only for the one caller that happens to remember a runtime check.</para>
     ///
-    /// <para><b>`26-136`/`adr/0184`: <c>person_id</c> and <c>origin_conversation_id</c> are written onto
-    /// every row of the run</b>, from <see cref="BookingAttempt.PersonId"/>/<see cref="BookingAttempt.OriginConversationId"/> -
-    /// the same "identical value onto every touched row" shape <c>booking_id</c> already has.
-    /// <c>person_id</c> is always non-null by the time it reaches here (the handler mints one when the
-    /// request carries none); <c>origin_conversation_id</c> is null for a booking with no chat origin.
-    /// They are deliberately <em>not</em> added to <c>RETURNING</c>: <see cref="BookingConfirmation"/> has
-    /// no consumer for either id (a confirmation card quotes the booking, not the person), so returning
-    /// them would only read back columns this statement already knows and nothing downstream reads.</para>
+    /// <para><b>`adr/0184`: <c>person_id</c> is the booking's one person reference</b>, written onto
+    /// every row of the run from <see cref="BookingAttempt.PersonId"/> - the same "identical value onto
+    /// every touched row" shape <c>booking_id</c> already has - and it is a foreign key to the
+    /// <c>person_records</c> row the statement above just upserted in this same transaction, so the
+    /// constraint can never reject a legitimate claim. <c>origin_conversation_id</c> is null for a
+    /// booking with no chat origin. Neither is added to <c>RETURNING</c>: <see cref="BookingConfirmation"/>
+    /// already knows the person id it asked for.</para>
     ///
     /// <para><c>RETURNING</c> hands back what the confirmation needs, from the write itself, one row
     /// per slot claimed. A follow-up <c>SELECT</c> would be a second round trip reading rows that
     /// `20-04`'s sweep could already have moved on - the values below are the ones this statement
     /// wrote.</para>
     ///
-    /// <para>The statement never touches <c>no_show_count</c> or any other lead-card field: a
+    /// <para>The statement never touches <c>no_show_count</c> or any other person-record field: a
     /// booking is a fact about a slot, and conflating the two writes is how one contended statement
     /// grows a second reason to contend.</para>
     ///
@@ -169,11 +162,10 @@ public sealed class BookingStore(
         """
         UPDATE events
         SET status = 'PendingConfirmation',
-            customer_id = @customerId,
+            person_id = @personId,
             service_id = @serviceId,
             confirmation_deadline = @deadline,
             booking_id = @bookingId,
-            person_id = @personId,
             origin_conversation_id = @originConversationId
         WHERE id = ANY(@eventIds)
           AND calendar_id = @calendarId
@@ -195,15 +187,16 @@ public sealed class BookingStore(
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         var pgTransaction = (NpgsqlTransaction)transaction.GetDbTransaction();
 
-        var customerId = await UpsertCustomerAsync(attempt, connection, pgTransaction, cancellationToken);
+        await UpsertPersonRecordAsync(attempt, connection, pgTransaction, cancellationToken);
 
-        var confirmation = await ClaimAsync(attempt, customerId, connection, pgTransaction, cancellationToken);
+        var confirmation = await ClaimAsync(attempt, connection, pgTransaction, cancellationToken);
         if (confirmation is null)
         {
             // The slot went to somebody else between this request arriving and this statement
             // running - or was never claimable. Rolling back is what keeps the promise
-            // IBookingStore makes about personal data: a booking that did not happen leaves no lead
-            // card behind. Explicit rather than relying on the `await using` above, so the intent is
+            // IBookingStore makes about personal data: a booking that did not happen leaves no person
+            // record behind - and, for a locally minted person id, no PersonRegistered announcement
+            // either. Explicit rather than relying on the `await using` above, so the intent is
             // legible at the point the decision is made.
             await transaction.RollbackAsync(cancellationToken);
             return null;
@@ -219,35 +212,45 @@ public sealed class BookingStore(
         // ambient transaction rather than a second, separate one.
         outbox.Enqueue(BookingPendingStateChangedMapper.ToEnvelope(
             confirmation.Value.BookingId, attempt.TenantId, "PendingConfirmation", attempt.Now, idGenerator));
+
+        // `adr/0184` decision 2: a person id this product minted for a booking with no chat origin is
+        // announced to the account's person registry on the same transaction - the booking and the
+        // announcement commit or roll back together (rule 4), and chat is never called from here
+        // (rule 8). A chat-origin booking carries chat's own visitor id and stages nothing: chat already
+        // knows that person.
+        if (attempt.RegisterPerson is { } registration)
+        {
+            outbox.Enqueue(PersonRegisteredMapper.ToEnvelope(
+                attempt.PersonId, attempt.TenantId, attempt.Phone, registration.DisplayName, attempt.Now, idGenerator));
+        }
+
         await db.SaveChangesAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
         return confirmation;
     }
 
-    private static async Task<CustomerId> UpsertCustomerAsync(
+    private static async Task UpsertPersonRecordAsync(
         BookingAttempt attempt,
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         CancellationToken cancellationToken)
     {
-        await using var command = new NpgsqlCommand(UpsertCustomerSql, connection, transaction);
-        command.Parameters.AddWithValue("id", attempt.NewCustomerId.Value);
+        await using var command = new NpgsqlCommand(UpsertPersonRecordSql, connection, transaction);
+        command.Parameters.AddWithValue("personId", attempt.PersonId);
         command.Parameters.AddWithValue("tenantId", attempt.TenantId.Value);
         command.Parameters.AddWithValue("phone", attempt.Phone.Value);
-        command.Parameters.AddWithValue("displayName", Blank(attempt.DisplayName) ?? (object)DBNull.Value);
         command.Parameters.AddWithValue("phoneVerifiedAt", (object?)attempt.PhoneVerifiedAt ?? DBNull.Value);
         command.Parameters.AddWithValue("now", attempt.Now);
 
-        // Always non-null: DO UPDATE returns a row on both the insert and the conflict path, which is
-        // the whole reason it is DO UPDATE.
-        var id = await command.ExecuteScalarAsync(cancellationToken);
-        return new CustomerId((Guid)id!);
+        // Always one row back: DO UPDATE returns a row on both the insert and the conflict path, which
+        // is the whole reason it is DO UPDATE. Read and discarded - the person id is the caller's own
+        // input, never something this statement decides.
+        await command.ExecuteScalarAsync(cancellationToken);
     }
 
     private static async Task<BookingConfirmation?> ClaimAsync(
         BookingAttempt attempt,
-        CustomerId customerId,
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         CancellationToken cancellationToken)
@@ -260,16 +263,15 @@ public sealed class BookingStore(
         command.Parameters.AddWithValue("eventIds", attempt.EventIds.Select(id => id.Value).ToArray());
         command.Parameters.AddWithValue("bookingId", bookingId.Value);
         command.Parameters.AddWithValue("calendarId", attempt.CalendarId.Value);
-        command.Parameters.AddWithValue("customerId", customerId.Value);
+        command.Parameters.AddWithValue("personId", attempt.PersonId);
         command.Parameters.AddWithValue("serviceId", attempt.ServiceId.Value);
         command.Parameters.AddWithValue("deadline", attempt.ConfirmationDeadline);
         command.Parameters.AddWithValue("now", attempt.Now);
         // `22-08`: the tenant the suspension subquery checks live, inside this same statement -
         // ClaimSlotSql's own remarks state why this cannot be a pre-read instead.
         command.Parameters.AddWithValue("tenantId", attempt.TenantId.Value);
-        // `26-136`/`adr/0184`: the opaque person id (always present here) and the origin conversation id
-        // (null when the booking has no chat origin), written onto every claimed row.
-        command.Parameters.AddWithValue("personId", attempt.PersonId);
+        // `26-136`/`adr/0184`: the origin conversation id (null when the booking has no chat origin),
+        // written onto every claimed row.
         command.Parameters.AddWithValue("originConversationId", (object?)attempt.OriginConversationId ?? DBNull.Value);
 
         var rowsClaimed = 0;
@@ -308,11 +310,9 @@ public sealed class BookingStore(
         return new BookingConfirmation(
             bookingId,
             attempt.EventIds,
-            customerId,
+            attempt.PersonId,
             workerId!.Value,
             new TimeSlot(earliestStart!.Value, latestEnd!.Value),
             localDate!.Value);
     }
-
-    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

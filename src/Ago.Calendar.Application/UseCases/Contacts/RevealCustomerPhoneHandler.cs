@@ -19,15 +19,15 @@ namespace Ago.Calendar.Application.UseCases.Contacts;
 /// the same "a denied or not-found read has nothing to attest to" principle `adr/0113`'s own remarks
 /// state for `access_records`.</para>
 ///
-/// <para><b>Wrong tenant reads like no such customer</b> - <see cref="ContactsErrors.CustomerNotFound"/>,
+/// <para><b>Wrong tenant reads like no such person</b> - <see cref="ContactsErrors.CustomerNotFound"/>,
 /// never a different, more informative error. This is also `23-12`'s own tenant-isolation guarantee:
 /// an operator who holds <see cref="Permission.CustomerRead"/> in their own tenant and happens to know
-/// another tenant's customer id still cannot reveal it, because the lookup below is scoped to the
-/// caller's own <see cref="TenantId"/> and a customer belonging to someone else's tenant simply does
+/// another tenant's person id still cannot reveal it, because the lookup below is scoped to the
+/// caller's own <see cref="TenantId"/> and a person belonging to someone else's tenant simply does
 /// not match it.</para>
 /// </summary>
 public sealed class RevealCustomerPhoneHandler(
-    ICustomerRepository customers,
+    IPersonRecordRepository persons,
     IPermissionChecker permissions,
     IContactPhoneRevealRepository reveals,
     IIdGenerator idGenerator,
@@ -42,19 +42,19 @@ public sealed class RevealCustomerPhoneHandler(
             return ContactsErrors.Forbidden(Permission.CustomerRead);
         }
 
-        var customer = await customers.GetByIdAsync(command.CustomerId, cancellationToken);
-        if (customer is null || customer.TenantId != command.TenantId)
+        var person = await persons.GetByIdAsync(command.PersonId, cancellationToken);
+        if (person is null || person.TenantId != command.TenantId)
         {
-            return ContactsErrors.CustomerNotFound(command.CustomerId);
+            return ContactsErrors.CustomerNotFound(command.PersonId);
         }
 
         var now = clock.UtcNow;
         await reveals.RecordAsync(
             new ContactPhoneRevealToWrite(
-                idGenerator.NewId(now), now, command.TenantId, command.CustomerId, command.OperatorId,
+                idGenerator.NewId(now), now, command.TenantId, command.PersonId, command.OperatorId,
                 command.Surface),
             cancellationToken);
 
-        return customer.Phone.Value;
+        return person.Phone.Value;
     }
 }

@@ -45,7 +45,7 @@ public sealed record ContactPhoneRevealToWrite(
     Guid Id,
     DateTimeOffset OccurredAt,
     TenantId TenantId,
-    CustomerId CustomerId,
+    Guid PersonId,
     OperatorId OperatorId,
     string Surface);
 
@@ -55,7 +55,7 @@ public sealed record ContactPhoneRevealToWrite(
 public sealed record ContactPhoneRevealItem(
     Guid Id,
     DateTimeOffset OccurredAt,
-    Guid CustomerId,
+    Guid PersonId,
     Guid OperatorId,
     string Surface);
 

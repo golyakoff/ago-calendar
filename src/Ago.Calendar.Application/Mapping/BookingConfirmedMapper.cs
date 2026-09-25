@@ -39,7 +39,7 @@ public static class BookingConfirmedMapper
             EventId: domainEvent.EventId.Value,
             TenantId: domainEvent.TenantId.Value,
             CalendarId: domainEvent.CalendarId.Value,
-            CustomerId: domainEvent.CustomerId.Value,
+            PersonId: domainEvent.PersonId,
             StartsAt: domainEvent.Slot.StartsAt,
             EndsAt: groupEndsAt ?? domainEvent.Slot.EndsAt,
             LocalDate: domainEvent.LocalDate,

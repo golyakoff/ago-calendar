@@ -124,8 +124,7 @@ public sealed class RecutPreviewHandler(
                     row.Status,
                     row.ServiceId,
                     row.ServiceName,
-                    row.CustomerId,
-                    row.CustomerDisplayName,
+                    row.PersonId,
                     row.Phone,
                     row.Masked,
                     CanDecide: row.Status != EventStatus.NoShow));

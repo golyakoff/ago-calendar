@@ -33,14 +33,9 @@ public readonly record struct RecutPreviewResult(
 public readonly record struct RecutDayPreview(
     DateOnly LocalDate, int AvailableSlotsToDelete, IReadOnlyList<RecutBookingPreview> Bookings);
 
-/// <param name="CustomerId">Not personal data itself - a foreign key - so never gated, the same
-/// distinction <see cref="WorkerSlotRow.CustomerId"/> draws from <see cref="CustomerDisplayName"/> and
-/// <see cref="Phone"/>.</param>
-/// <param name="CustomerDisplayName">Null either because this operator does not hold
-/// <see cref="Permission.CustomerRead"/> for this tenant, or (impossible here, since every row in this
-/// list holds a customer by construction) for the "nobody holds it" reason
-/// <see cref="WorkerSlotRow.CustomerDisplayName"/> also carries - kept as the identical two-null-reasons
-/// shape rather than inventing a narrower one for this one caller.</param>
+/// <param name="PersonId">Not personal data itself - an opaque person reference - so never gated, the
+/// same distinction <see cref="WorkerSlotRow.PersonId"/> draws from <see cref="Phone"/>. `adr/0184`:
+/// the person's name is chat's, read by the console through this id.</param>
 /// <param name="Phone">`23-12`: carried verbatim from <see cref="WorkerSlotRow.Phone"/> - already
 /// masked when the tenant's rung called for it, a <see cref="string"/> rather than a
 /// <see cref="PhoneNumber"/> for the identical reason that row's own remarks give.</param>
@@ -59,8 +54,7 @@ public readonly record struct RecutBookingPreview(
     EventStatus Status,
     ServiceId? ServiceId,
     string? ServiceName,
-    CustomerId? CustomerId,
-    string? CustomerDisplayName,
+    Guid? PersonId,
     string? Phone,
     bool Masked,
     bool CanDecide);

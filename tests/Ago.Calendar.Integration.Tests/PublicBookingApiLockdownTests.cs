@@ -117,10 +117,10 @@ public class PublicBookingApiLockdownTests(PostgresFixture fixture) : IAsyncLife
         await using (var db = fixture.CreateDbContext())
         {
             await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
-            var customer = Customer.Register(
-                new CustomerId(Guid.CreateVersion7()), seed.Tenant.Id, new PhoneNumber("+79997000003"), CalendarSeed.Now);
+            var customer = PersonRecord.Register(
+                Guid.CreateVersion7(), seed.Tenant.Id, new PhoneNumber("+79997000003"), CalendarSeed.Now);
             customer.RecordVerifiedPhone(CalendarSeed.Now);
-            db.Customers.Add(customer);
+            db.PersonRecords.Add(customer);
             await db.SaveChangesAsync();
         }
 

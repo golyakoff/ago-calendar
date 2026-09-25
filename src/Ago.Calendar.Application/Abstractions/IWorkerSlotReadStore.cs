@@ -48,16 +48,15 @@ public interface IWorkerSlotReadStore
 /// service (<see cref="Event.ServiceId"/>'s own remarks).</param>
 /// <param name="ServiceName">Resolved alongside <paramref name="ServiceId"/>, never permission-gated:
 /// a service name is the shop's own catalogue, not personal data.</param>
-/// <param name="CustomerId">Not personal data itself - a foreign key, not a phone number or a name -
-/// so it is never gated, exactly like <see cref="PendingBookingRow.CustomerId"/>. Carried specifically
-/// so a caller can tell "nobody holds this slot" (null) apart from "somebody does, and I may not see
-/// who" (non-null <see cref="CustomerId"/> with a null <see cref="CustomerDisplayName"/>) - a
-/// distinction <see cref="IPendingBookingReadStore"/> never needed, because every row in that queue
-/// already has a customer.</param>
-/// <param name="CustomerDisplayName">Null for either of two reasons the row alone does not
-/// distinguish - see <paramref name="CustomerId"/> for how a caller tells them apart.</param>
-/// <param name="Phone">The same two-reasons-for-null story as <paramref name="CustomerDisplayName"/>,
-/// and see <see cref="PendingBookingRow.Phone"/> for why "permitted but nothing on file" is not a
+/// <param name="PersonId">Not personal data itself - an opaque person reference, not a phone number
+/// or a name - so it is never gated, exactly like <see cref="PendingBookingRow.PersonId"/>. Carried
+/// specifically so a caller can tell "nobody holds this slot" (null) apart from "somebody does, and I
+/// may not see who" (non-null <see cref="PersonId"/> with a null <see cref="Phone"/>) - a distinction
+/// <see cref="IPendingBookingReadStore"/> never needed, because every row in that queue already has a
+/// person. `adr/0184`: the name is chat's, read by the console through this id, never served here.</param>
+/// <param name="Phone">Null for either of two reasons the row alone does not distinguish - see
+/// <paramref name="PersonId"/> for how a caller tells them apart - and see
+/// <see cref="PendingBookingRow.Phone"/> for why "permitted but nothing on file" is not a
 /// third state anything here can produce. `23-12`: a <see cref="string"/>, not a
 /// <see cref="PhoneNumber"/> - see <see cref="ContactRow.Phone"/>'s own remarks. Already masked
 /// (<see cref="Masked"/>) when the tenant's rung called for it.</param>
@@ -79,8 +78,7 @@ public readonly record struct WorkerSlotRow(
     EventStatus Status,
     ServiceId? ServiceId,
     string? ServiceName,
-    CustomerId? CustomerId,
-    string? CustomerDisplayName,
+    Guid? PersonId,
     string? Phone,
     bool Masked,
     EventId? BookingId);

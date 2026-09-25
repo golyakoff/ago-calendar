@@ -94,7 +94,7 @@ public class AvailabilityMaterializationTests(PostgresFixture fixture)
                 .Skip(3)
                 .FirstAsync();
 
-            target.Claim(seed.Customer.Id, seed.Service.Id, Monday, Monday.AddMinutes(15));
+            target.Claim(seed.Person.PersonId, seed.Service.Id, Monday, Monday.AddMinutes(15));
             await repository.SaveAsync(target, CancellationToken.None);
             claimedId = target.Id;
             claimedStart = target.StartsAt;
@@ -112,7 +112,7 @@ public class AvailabilityMaterializationTests(PostgresFixture fixture)
 
         // The booking is untouched: same status, same customer, same slot.
         Assert.Equal(EventStatus.PendingConfirmation, claimed.Status);
-        Assert.Equal(seed.Customer.Id, claimed.CustomerId);
+        Assert.Equal(seed.Person.PersonId, claimed.PersonId);
 
         // And no second row was created for the time it occupies - which is the failure that would
         // let a second customer book the same chair. Asserted against the whole table for that

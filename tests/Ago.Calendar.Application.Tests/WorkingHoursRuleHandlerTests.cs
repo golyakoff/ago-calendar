@@ -232,7 +232,6 @@ public class WorkingHoursRuleHandlerTests
         null,
         null,
         null,
-        null,
         false,
         null);
 

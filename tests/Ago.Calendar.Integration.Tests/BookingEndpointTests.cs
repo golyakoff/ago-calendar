@@ -160,7 +160,7 @@ public class BookingEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     /// somehow. This file's own concern is the HTTP wiring this class-level summary already
     /// states - status codes, headers, response shape, rate limiting, race outcomes - not phone
     /// verification itself, which <c>PhoneVerificationEndpointTests</c> owns end to end, including the
-    /// real send-code/confirm-code round trip. Pre-seeding an already-verified <c>Customer</c> row
+    /// real send-code/confirm-code round trip. Pre-seeding an already-verified <c>PersonRecord</c> row
     /// exercises the real returning-customer shortcut
     /// (<c>PhoneVerificationAssertionResolver</c>/`20-10`'s own Scope item (b)) over real HTTP and real
     /// Postgres on every call, which is the cheapest way to clear the same gate every test here now has
@@ -193,18 +193,18 @@ public class BookingEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         await using var db = fixture.CreateDbContext();
 
         // Idempotent: several tests (e.g. ADeniedBooking_Returns429WithARetryAfterHeader) reuse the
-        // same phone against the same tenant across several BookAsync calls, and ux_customers_tenant_phone
-        // is real - a second unconditional insert would violate it.
-        var existing = await db.Customers.FirstOrDefaultAsync(c => c.TenantId == seed.Tenant.Id && c.Phone == parsed);
+        // same phone against the same tenant across several BookAsync calls - one verified record for
+        // that number is all the resolver's own "was this number verified here" read needs.
+        var existing = await db.PersonRecords.FirstOrDefaultAsync(c => c.TenantId == seed.Tenant.Id && c.Phone == parsed);
         if (existing is not null)
         {
             existing.RecordVerifiedPhone(CalendarSeed.Now);
         }
         else
         {
-            var customer = Customer.Register(new CustomerId(Guid.CreateVersion7()), seed.Tenant.Id, parsed, CalendarSeed.Now);
+            var customer = PersonRecord.Register(Guid.CreateVersion7(), seed.Tenant.Id, parsed, CalendarSeed.Now);
             customer.RecordVerifiedPhone(CalendarSeed.Now);
-            db.Customers.Add(customer);
+            db.PersonRecords.Add(customer);
         }
 
         await db.SaveChangesAsync();

@@ -143,7 +143,9 @@ internal static class BookingFixtures
     /// missing one - the two must produce the same answer, and only a real one proves it.</summary>
     public static readonly TenantId OtherTenantId = new(new Guid("88888888-8888-8888-8888-888888888888"));
 
-    public static readonly CustomerId CustomerId = new(new Guid("99999999-9999-9999-9999-999999999999"));
+    /// <summary>`adr/0184`: the opaque person id a chat-origin booking carries - a bare Guid, like
+    /// <see cref="Event.PersonId"/> itself.</summary>
+    public static readonly Guid PersonId = new("99999999-9999-9999-9999-999999999999");
 
     /// <summary>A booking sitting in the veto window - what the queue shows and what the sweep will
     /// confirm if nobody acts.</summary>
@@ -151,7 +153,7 @@ internal static class BookingFixtures
     {
         var booking = Event.Materialize(
             EventId, tenantId ?? TenantId, CalendarId, WorkerId, Slot, LocalDate, Now);
-        booking.Claim(CustomerId, ServiceId, Now, Now.AddMinutes(15));
+        booking.Claim(PersonId, ServiceId, Now, Now.AddMinutes(15));
         booking.ClearDomainEvents();
         return booking;
     }
@@ -177,7 +179,7 @@ internal static class BookingFixtures
         var anchorId = group[0].Id;
         foreach (var slot in group)
         {
-            slot.Claim(CustomerId, ServiceId, Now, Now.AddMinutes(15), anchorId);
+            slot.Claim(PersonId, ServiceId, Now, Now.AddMinutes(15), anchorId);
             slot.ClearDomainEvents();
         }
 

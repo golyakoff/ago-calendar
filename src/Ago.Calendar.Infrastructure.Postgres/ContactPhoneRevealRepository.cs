@@ -17,14 +17,14 @@ public sealed class ContactPhoneRevealRepository(NpgsqlDataSource dataSource) : 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var command = new NpgsqlCommand(
             """
-            insert into contact_phone_reveals (id, occurred_at, tenant_id, customer_id, operator_id, surface)
-            values (@id, @occurredAt, @tenantId, @customerId, @operatorId, @surface)
+            insert into contact_phone_reveals (id, occurred_at, tenant_id, person_id, operator_id, surface)
+            values (@id, @occurredAt, @tenantId, @personId, @operatorId, @surface)
             """,
             connection);
         command.Parameters.AddWithValue("id", reveal.Id);
         command.Parameters.AddWithValue("occurredAt", reveal.OccurredAt);
         command.Parameters.AddWithValue("tenantId", reveal.TenantId.Value);
-        command.Parameters.AddWithValue("customerId", reveal.CustomerId.Value);
+        command.Parameters.AddWithValue("personId", reveal.PersonId);
         command.Parameters.AddWithValue("operatorId", reveal.OperatorId.Value);
         command.Parameters.AddWithValue("surface", reveal.Surface);
 
@@ -37,7 +37,7 @@ public sealed class ContactPhoneRevealRepository(NpgsqlDataSource dataSource) : 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var command = new NpgsqlCommand(
             """
-            select id, occurred_at, customer_id, operator_id, surface
+            select id, occurred_at, person_id, operator_id, surface
             from contact_phone_reveals
             where tenant_id = @tenantId and (@beforeId is null or id < @beforeId)
             order by id desc

@@ -53,16 +53,16 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
 
         // Not a torn state: one status, one customer, one deadline, and the customer is the winner's.
         Assert.Equal(EventStatus.PendingConfirmation, stored.Status);
-        Assert.Equal(winners[0]!.Value.CustomerId, stored.CustomerId);
+        Assert.Equal(winners[0]!.Value.PersonId, stored.PersonId);
         Assert.NotNull(stored.ConfirmationDeadline);
         Assert.Equal(seed.ServiceId, stored.ServiceId);
 
-        // And every loser rolled back whole: exactly one lead card exists for this burst, the
+        // And every loser rolled back whole: exactly one person record exists for this burst, the
         // winner's. The losers' phone numbers were never written, which is the data-minimisation
         // property the single transaction is there for.
-        var cards = await db.Customers.Where(c => c.TenantId == seed.TenantId).ToListAsync();
-        Assert.Single(cards);
-        Assert.Equal(winners[0]!.Value.CustomerId, cards[0].Id);
+        var records = await db.PersonRecords.Where(p => p.TenantId == seed.TenantId).ToListAsync();
+        Assert.Single(records);
+        Assert.Equal(winners[0]!.Value.PersonId, records[0].PersonId);
     }
 
     [Fact]
@@ -100,17 +100,18 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
         var results = await Task.WhenAll(attempts);
 
         Assert.All(results, result => Assert.NotNull(result));
-        Assert.Equal(16, results.Select(result => result!.Value.CustomerId).Distinct().Count());
+        Assert.Equal(16, results.Select(result => result!.Value.PersonId).Distinct().Count());
     }
 
     [Fact]
-    public async Task OnePhoneBookingSeveralSlotsAtOnce_EndsWithExactlyOneLeadCard()
+    public async Task OnePersonBookingSeveralSlotsAtOnce_EndsWithExactlyOneRecord()
     {
         // The upsert's own race, which the slot claim's race hides: every one of these succeeds at
-        // claiming a different slot, so all sixteen reach ON CONFLICT (tenant_id, phone) against the
-        // same key at the same instant. Postgres arbitrates on the unique index inside the statement;
-        // a read-then-insert would produce duplicate cards here, or a unique-violation storm.
+        // claiming a different slot, so all sixteen reach ON CONFLICT (person_id) against the same key
+        // at the same instant. Postgres arbitrates on the primary key inside the statement; a
+        // read-then-insert would produce duplicate records here, or a unique-violation storm.
         var seed = await SeedAsync();
+        var personId = NewId();
         var slots = new List<Event>();
         for (var i = 0; i < 16; i++)
         {
@@ -119,7 +120,7 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
 
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var attempts = slots.Select(slot =>
-            Task.Run(() => AttemptAsync(seed, slot.Id, "+79992000001", gate))).ToList();
+            Task.Run(() => AttemptAsync(seed, slot.Id, "+79992000001", gate, personId))).ToList();
 
         gate.SetResult();
         var results = await Task.WhenAll(attempts);
@@ -127,12 +128,12 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
         Assert.All(results, result => Assert.NotNull(result));
 
         await using var db = fixture.CreateDbContext();
-        var cards = await db.Customers.Where(c => c.TenantId == seed.TenantId).ToListAsync();
+        var records = await db.PersonRecords.Where(p => p.TenantId == seed.TenantId).ToListAsync();
 
-        Assert.Single(cards);
+        Assert.Single(records);
 
-        // Every booking points at that one card.
-        Assert.All(results, result => Assert.Equal(cards[0].Id, result!.Value.CustomerId));
+        // Every booking points at that one record.
+        Assert.All(results, result => Assert.Equal(records[0].PersonId, result!.Value.PersonId));
     }
 
     /// <summary>
@@ -188,15 +189,15 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
         var loserSlot = stored[loserOnlySlotId];
         Assert.Equal(EventStatus.Available, loserSlot.Status);
         Assert.Null(loserSlot.BookingId);
-        Assert.Null(loserSlot.CustomerId);
+        Assert.Null(loserSlot.PersonId);
         Assert.Null(loserSlot.ConfirmationDeadline);
 
-        // And the loser's own lead card was never written - the same data-minimisation property the
-        // single-slot race already proves, restated for a run: a failed multi-slot attempt leaves
+        // And the loser's own person record was never written - the same data-minimisation property
+        // the single-slot race already proves, restated for a run: a failed multi-slot attempt leaves
         // exactly as little trace as a failed single-slot one.
-        var cards = await db.Customers.Where(c => c.TenantId == seed.TenantId).ToListAsync();
-        Assert.Single(cards);
-        Assert.Equal(winner.CustomerId, cards[0].Id);
+        var records = await db.PersonRecords.Where(p => p.TenantId == seed.TenantId).ToListAsync();
+        Assert.Single(records);
+        Assert.Equal(winner.PersonId, records[0].PersonId);
     }
 
     private async Task<IReadOnlyList<BookingConfirmation?>> RaceAsync(
@@ -217,11 +218,12 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
     }
 
     private Task<BookingConfirmation?> AttemptAsync(
-        SeededCalendar seed, EventId eventId, string phone, TaskCompletionSource gate) =>
-        AttemptAsync(seed, [eventId], phone, gate);
+        SeededCalendar seed, EventId eventId, string phone, TaskCompletionSource gate, Guid? personId = null) =>
+        AttemptAsync(seed, [eventId], phone, gate, personId);
 
     private async Task<BookingConfirmation?> AttemptAsync(
-        SeededCalendar seed, IReadOnlyList<EventId> eventIds, string phone, TaskCompletionSource gate)
+        SeededCalendar seed, IReadOnlyList<EventId> eventIds, string phone, TaskCompletionSource gate,
+        Guid? personId = null)
     {
         await using var db = fixture.CreateDbContext();
 
@@ -240,12 +242,11 @@ public class ConcurrentBookingTests(ConcurrencyFixture fixture)
                 eventIds,
                 seed.ServiceId,
                 new PhoneNumber(phone),
-                "Anna",
-                new CustomerId(NewId()),
+                new PersonRegistration("Anna"),
                 Now,
                 Now.AddMinutes(15),
                 Now,
-                NewId(),
+                personId ?? NewId(),
                 null),
             CancellationToken.None);
     }

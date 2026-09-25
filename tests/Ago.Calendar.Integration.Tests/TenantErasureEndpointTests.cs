@@ -40,7 +40,7 @@ public sealed class TenantErasureEndpointTests(PostgresFixture fixture) : IAsync
         await _factory.DisposeAsync();
     }
 
-    /// <summary>The item's own first Done-when, word for word: "leaves no `tenants`, `customers`,
+    /// <summary>The item's own first Done-when, word for word: "leaves no `tenants`, `person_records`,
     /// `events`, `workers` ... row for them, proven by erasing one and querying the calendar's
     /// database" - plus the two tables `adr/0093`'s own migration replaced `operators`/`roles` with
     /// (`role_assignment_projections`) and the registration row `22-11` built
@@ -61,10 +61,10 @@ public sealed class TenantErasureEndpointTests(PostgresFixture fixture) : IAsync
             await connection.ExecuteAsync(
                 """
                 insert into events
-                    (id, tenant_id, calendar_id, worker_id, service_id, customer_id, status,
+                    (id, tenant_id, calendar_id, worker_id, service_id, person_id, status,
                      starts_at, ends_at, local_date, created_at)
                 values
-                    (@id, @tenantId, @calendarId, @workerId, @serviceId, @customerId, 'Confirmed',
+                    (@id, @tenantId, @calendarId, @workerId, @serviceId, @personId, 'Confirmed',
                      @startsAt, @endsAt, (@startsAt at time zone 'utc')::date, @now)
                 """,
                 new
@@ -74,7 +74,7 @@ public sealed class TenantErasureEndpointTests(PostgresFixture fixture) : IAsync
                     calendarId = seed.Calendar.Id.Value,
                     workerId = seed.Worker.Id.Value,
                     serviceId = seed.Service.Id.Value,
-                    customerId = seed.Customer.Id.Value,
+                    personId = seed.Person.PersonId,
                     startsAt = CalendarSeed.Now,
                     endsAt = CalendarSeed.Now.AddMinutes(45),
                     now = CalendarSeed.Now,
@@ -96,7 +96,7 @@ public sealed class TenantErasureEndpointTests(PostgresFixture fixture) : IAsync
         }
 
         Assert.Equal(1, await CountAsync("tenants", "id", seed.Tenant.Id.Value));
-        Assert.Equal(1, await CountAsync("customers", "tenant_id", seed.Tenant.Id.Value));
+        Assert.Equal(1, await CountAsync("person_records", "tenant_id", seed.Tenant.Id.Value));
         Assert.Equal(1, await CountAsync("events", "tenant_id", seed.Tenant.Id.Value));
         Assert.Equal(1, await CountAsync("workers", "tenant_id", seed.Tenant.Id.Value));
         Assert.Equal(1, await CountAsync("calendars", "tenant_id", seed.Tenant.Id.Value));
@@ -116,7 +116,7 @@ public sealed class TenantErasureEndpointTests(PostgresFixture fixture) : IAsync
         // the endpoint's own request used (a new connection per CountAsync call below), so this is
         // genuinely a second, independent read of Postgres proving the first one was honest.
         Assert.Equal(0, await CountAsync("tenants", "id", seed.Tenant.Id.Value));
-        Assert.Equal(0, await CountAsync("customers", "tenant_id", seed.Tenant.Id.Value));
+        Assert.Equal(0, await CountAsync("person_records", "tenant_id", seed.Tenant.Id.Value));
         Assert.Equal(0, await CountAsync("events", "tenant_id", seed.Tenant.Id.Value));
         Assert.Equal(0, await CountAsync("workers", "tenant_id", seed.Tenant.Id.Value));
         Assert.Equal(0, await CountAsync("calendars", "tenant_id", seed.Tenant.Id.Value));

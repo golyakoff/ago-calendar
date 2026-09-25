@@ -80,7 +80,7 @@ internal sealed class FakeBookingStore : IBookingStore
         return Task.FromResult<BookingConfirmation?>(new BookingConfirmation(
             attempt.EventIds[0],
             attempt.EventIds,
-            attempt.NewCustomerId,
+            attempt.PersonId,
             BookingFixtures.WorkerId,
             BookingFixtures.Slot,
             BookingFixtures.LocalDate));
@@ -230,31 +230,31 @@ internal sealed class FakeWorkerRepository(Worker? worker) : IWorkerRepository
         throw new NotSupportedException("Not reached by BookEventHandler.");
 }
 
-/// <summary>`20-10`: <see cref="PhoneVerificationAssertionResolver"/>'s own returning-customer
-/// shortcut. Defaults to "no returning customer" - the identical no-op-by-default shape every other
-/// fake in this file uses, so a test that never mentions phone verification exercises the exact same
-/// path it always did.</summary>
-internal sealed class FakeCustomerRepository(Customer? customer = null) : ICustomerRepository
+/// <summary>`20-10`/`adr/0184`: <see cref="PhoneVerificationAssertionResolver"/>'s own "this number was
+/// already verified here" shortcut. Defaults to "never verified" - the identical no-op-by-default shape
+/// every other fake in this file uses, so a test that never mentions phone verification exercises the
+/// exact same path it always did.</summary>
+internal sealed class FakePersonRecordRepository(PersonRecord? record = null) : IPersonRecordRepository
 {
-    public Task<Customer?> FindByPhoneAsync(TenantId tenantId, PhoneNumber phone, CancellationToken cancellationToken) =>
+    public Task<DateTimeOffset?> FindPhoneVerifiedAtAsync(TenantId tenantId, PhoneNumber phone, CancellationToken cancellationToken) =>
         Task.FromResult(
-            customer is not null && customer.TenantId == tenantId && customer.Phone.Value == phone.Value
-                ? customer
+            record is not null && record.TenantId == tenantId && record.Phone.Value == phone.Value
+                ? record.PhoneVerifiedAt
                 : null);
 
-    public Task<Customer?> GetByIdAsync(CustomerId id, CancellationToken cancellationToken) =>
+    public Task<PersonRecord?> GetByIdAsync(Guid personId, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
 
-    public Task AddAsync(Customer customer, CancellationToken cancellationToken) =>
+    public Task AddAsync(PersonRecord record, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
 
-    public Task SaveAsync(Customer customer, CancellationToken cancellationToken) =>
+    public Task SaveAsync(PersonRecord record, CancellationToken cancellationToken) =>
         throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
 }
 
 /// <summary>`20-10`: backs both <see cref="PhoneVerificationAssertionResolver"/>'s own fresh-proof
 /// lookup (read-only there - defaults to "no such row" for the identical no-op-by-default reason
-/// <see cref="FakeCustomerRepository"/> gives) and <c>InitiatePhoneVerificationHandler</c>/
+/// <see cref="FakePersonRecordRepository"/> gives) and <c>InitiatePhoneVerificationHandler</c>/
 /// <c>ConfirmPhoneVerificationHandler</c>'s own real reads and writes, which do need
 /// <see cref="SaveAsync"/> to actually persist - unlike the other fakes in this file, whose "not
 /// reached" throw only ever needs to hold for <c>BookEventHandler</c>'s own call graph.</summary>

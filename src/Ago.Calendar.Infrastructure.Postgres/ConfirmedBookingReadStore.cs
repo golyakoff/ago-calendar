@@ -40,7 +40,7 @@ public sealed class ConfirmedBookingReadStore(NpgsqlDataSource dataSource) : ICo
                w.display_name as "WorkerDisplayName", e.service_id as "ServiceId", s.name as "ServiceName",
                e.customer_id as "CustomerId", c.display_name as "CustomerDisplayName",
                min(e.starts_at) as "StartsAt", max(e.ends_at) as "EndsAt", e.local_date as "LocalDate",
-               c.phone as "Phone"
+               c.phone as "Phone", e.origin_conversation_id as "OriginConversationId"
         from events e
         join workers w on w.id = e.worker_id
         left join services s on s.id = e.service_id
@@ -50,7 +50,7 @@ public sealed class ConfirmedBookingReadStore(NpgsqlDataSource dataSource) : ICo
           and e.local_date >= @From::date
           and e.local_date <= @To::date
         group by e.booking_id, e.calendar_id, e.worker_id, w.display_name, e.service_id, s.name,
-                 e.customer_id, c.display_name, e.local_date, c.phone
+                 e.customer_id, c.display_name, e.local_date, c.phone, e.origin_conversation_id
         order by e.local_date, w.display_name, min(e.starts_at)
         """;
 
@@ -96,7 +96,11 @@ public sealed class ConfirmedBookingReadStore(NpgsqlDataSource dataSource) : ICo
         // restated the way `ContactsReadStore.ToRow`'s own remarks give it: there is no flag
         // downstream of this method a careless edit could ignore and forward the unmasked number.
         mask ? new PhoneNumber(row.Phone!).Masked() : row.Phone!,
-        mask);
+        mask,
+        // Carried straight through - the calendar interprets nothing chat sends (adr/0184/0065), so this
+        // is the opaque `origin_conversation_id` as written by `Event.Claim`, null on a booking with no
+        // chat origin.
+        row.OriginConversationId);
 
     /// <summary>The raw shape Dapper materialises, separate from <see cref="ConfirmedBookingRow"/> so
     /// the Application-facing row can hold strongly-typed ids and <see cref="DateTimeOffset"/>s while
@@ -113,5 +117,6 @@ public sealed class ConfirmedBookingReadStore(NpgsqlDataSource dataSource) : ICo
         DateTime StartsAt,
         DateTime EndsAt,
         DateOnly LocalDate,
-        string? Phone);
+        string? Phone,
+        Guid? OriginConversationId);
 }

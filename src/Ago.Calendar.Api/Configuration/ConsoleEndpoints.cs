@@ -678,7 +678,8 @@ public static class ConsoleEndpoints
                 row.LocalDate,
                 row.Weekday,
                 row.Phone,
-                row.Masked))
+                row.Masked,
+                row.OriginConversationId))
             .ToArray());
     }
 

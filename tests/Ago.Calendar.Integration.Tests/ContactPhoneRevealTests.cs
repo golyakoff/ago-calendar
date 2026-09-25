@@ -24,14 +24,14 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
         var seed = await CalendarSeed.WriteAsync(fixture);
         await StageRungAsync(seed.Tenant.Id, ContactVisibility.MaskedWithReveal);
 
-        var (result, reveals) = await RevealAsync(seed.OperatorId, seed.Tenant.Id, seed.Customer.Id, "ConsoleContacts");
+        var (result, reveals) = await RevealAsync(seed.OperatorId, seed.Tenant.Id, seed.Person.PersonId, "ConsoleContacts");
 
         Assert.True(result.IsSuccess, result.Error?.Message);
-        Assert.Equal(seed.Customer.Phone.Value, result.Value);
+        Assert.Equal(seed.Person.Phone.Value, result.Value);
 
         var page = await reveals.ListForTenantAsync(seed.Tenant.Id, null, 10, CancellationToken.None);
         var item = Assert.Single(page.Items);
-        Assert.Equal(seed.Customer.Id.Value, item.CustomerId);
+        Assert.Equal(seed.Person.PersonId, item.PersonId);
         Assert.Equal(seed.OperatorId.Value, item.OperatorId);
         Assert.Equal("ConsoleContacts", item.Surface);
     }
@@ -42,7 +42,7 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
         var seed = await CalendarSeed.WriteAsync(fixture);
         var stranger = await AnOperatorWithoutCustomerReadAsync(seed.Tenant.Id);
 
-        var (result, reveals) = await RevealAsync(stranger, seed.Tenant.Id, seed.Customer.Id, "ConsoleContacts");
+        var (result, reveals) = await RevealAsync(stranger, seed.Tenant.Id, seed.Person.PersonId, "ConsoleContacts");
 
         Assert.True(result.IsFailure);
         Assert.Equal("contacts.forbidden", result.Error!.Value.Code);
@@ -61,7 +61,7 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
         var mine = await CalendarSeed.WriteAsync(fixture);
         var theirs = await CalendarSeed.WriteAsync(fixture);
 
-        var (result, reveals) = await RevealAsync(mine.OperatorId, mine.Tenant.Id, theirs.Customer.Id, "ConsoleContacts");
+        var (result, reveals) = await RevealAsync(mine.OperatorId, mine.Tenant.Id, theirs.Person.PersonId, "ConsoleContacts");
 
         Assert.True(result.IsFailure);
         Assert.Equal("contacts.customer_not_found", result.Error!.Value.Code);
@@ -77,13 +77,13 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
 
         await using (var db = fixture.CreateDbContext())
         {
-            var customer = await db.Customers.FindAsync(seed.Customer.Id);
-            customer!.RecordVerifiedPhone(Now);
+            var person = await db.PersonRecords.FindAsync(seed.Person.PersonId);
+            person!.RecordVerifiedPhone(Now);
             await db.SaveChangesAsync();
         }
 
         var confirmedAt = Now.AddMinutes(5);
-        var result = await ConfirmAsync(seed.OperatorId, seed.Tenant.Id, seed.Customer.Id, confirmedAt);
+        var result = await ConfirmAsync(seed.OperatorId, seed.Tenant.Id, seed.Person.PersonId, confirmedAt);
 
         Assert.True(result.IsSuccess, result.Error?.Message);
         Assert.Equal(confirmedAt, result.Value);
@@ -103,14 +103,14 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
         var seed = await CalendarSeed.WriteAsync(fixture);
         var stranger = await AnOperatorWithoutCustomerReadAsync(seed.Tenant.Id);
 
-        var result = await ConfirmAsync(stranger, seed.Tenant.Id, seed.Customer.Id, Now);
+        var result = await ConfirmAsync(stranger, seed.Tenant.Id, seed.Person.PersonId, Now);
 
         Assert.True(result.IsFailure);
         Assert.Equal("contacts.forbidden", result.Error!.Value.Code);
 
         await using var reader = fixture.CreateDbContext();
-        var customer = await reader.Customers.FindAsync(seed.Customer.Id);
-        Assert.Null(customer!.PhoneConfirmedByOperatorAt);
+        var person = await reader.PersonRecords.FindAsync(seed.Person.PersonId);
+        Assert.Null(person!.PhoneConfirmedByOperatorAt);
     }
 
     [Fact]
@@ -118,7 +118,7 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
         await StageRungAsync(seed.Tenant.Id, ContactVisibility.MaskedWithReveal);
-        await RevealAsync(seed.OperatorId, seed.Tenant.Id, seed.Customer.Id, "ConsoleContacts");
+        await RevealAsync(seed.OperatorId, seed.Tenant.Id, seed.Person.PersonId, "ConsoleContacts");
 
         await using var db = fixture.CreateDbContext();
         var handler = new GetPhoneRevealsForTenantHandler(
@@ -153,13 +153,13 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
 
-        Assert.DoesNotContain(seed.Customer.Phone.Value, body, StringComparison.Ordinal);
+        Assert.DoesNotContain(seed.Person.Phone.Value, body, StringComparison.Ordinal);
 
         var contacts = await response.Content.ReadFromJsonAsync<ContactResponse[]>();
         var row = Assert.Single(contacts!);
         Assert.True(row.Masked);
-        Assert.NotEqual(seed.Customer.Phone.Value, row.Phone);
-        Assert.StartsWith(seed.Customer.Phone.Value[..2], row.Phone, StringComparison.Ordinal);
+        Assert.NotEqual(seed.Person.Phone.Value, row.Phone);
+        Assert.StartsWith(seed.Person.Phone.Value[..2], row.Phone, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -179,7 +179,7 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
         var contacts = await response.Content.ReadFromJsonAsync<ContactResponse[]>();
         var row = Assert.Single(contacts!);
         Assert.False(row.Masked);
-        Assert.Equal(seed.Customer.Phone.Value, row.Phone);
+        Assert.Equal(seed.Person.Phone.Value, row.Phone);
     }
 
     private async Task StageRungAsync(TenantId tenantId, ContactVisibility rung)
@@ -191,28 +191,28 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
     }
 
     private async Task<(Result<string> Result, ContactPhoneRevealRepository Reveals)> RevealAsync(
-        OperatorId operatorId, TenantId tenantId, CustomerId customerId, string surface)
+        OperatorId operatorId, TenantId tenantId, Guid personId, string surface)
     {
         await using var db = fixture.CreateDbContext();
         var reveals = new ContactPhoneRevealRepository(fixture.DataSource);
         var handler = new RevealCustomerPhoneHandler(
-            new CustomerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), reveals,
+            new PersonRecordRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), reveals,
             new UuidV7Generator(), new FixedClock(Now));
 
         var result = await handler.HandleAsync(
-            new RevealCustomerPhone(operatorId, tenantId, customerId, surface), CancellationToken.None);
+            new RevealCustomerPhone(operatorId, tenantId, personId, surface), CancellationToken.None);
         return (result, reveals);
     }
 
     private async Task<Result<DateTimeOffset>> ConfirmAsync(
-        OperatorId operatorId, TenantId tenantId, CustomerId customerId, DateTimeOffset confirmedAt)
+        OperatorId operatorId, TenantId tenantId, Guid personId, DateTimeOffset confirmedAt)
     {
         await using var db = fixture.CreateDbContext();
         var handler = new ConfirmOperatorVerifiedPhoneHandler(
-            new CustomerRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(confirmedAt));
+            new PersonRecordRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)), new FixedClock(confirmedAt));
 
         return await handler.HandleAsync(
-            new ConfirmOperatorVerifiedPhone(operatorId, tenantId, customerId), CancellationToken.None);
+            new ConfirmOperatorVerifiedPhone(operatorId, tenantId, personId), CancellationToken.None);
     }
 
     /// <summary>`22-05`/`adr/0093`: a second operator, narrower than <see cref="CalendarSeed"/>'s own

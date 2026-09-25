@@ -1,4 +1,5 @@
-﻿using Ago.Calendar.Application.Abstractions;
+﻿using System.Text.Json;
+using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
@@ -25,7 +26,7 @@ public class BookingStoreTests(PostgresFixture fixture)
     private static readonly DateTimeOffset Now = new(2026, 5, 4, 9, 0, 0, TimeSpan.Zero);
 
     [Fact]
-    public async Task ASuccessfulClaim_TransitionsTheSlotAndCreatesTheLeadCard()
+    public async Task ASuccessfulClaim_TransitionsTheSlotAndCreatesThePersonRecord()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
         var slot = await AnAvailableSlotAsync(seed);
@@ -45,7 +46,7 @@ public class BookingStoreTests(PostgresFixture fixture)
         var stored = await db.Events.SingleAsync(e => e.Id == slot.Id);
 
         Assert.Equal(EventStatus.PendingConfirmation, stored.Status);
-        Assert.Equal(confirmation.Value.CustomerId, stored.CustomerId);
+        Assert.Equal(confirmation.Value.PersonId, stored.PersonId);
         Assert.Equal(seed.Service.Id, stored.ServiceId);
         Assert.Equal(Now.AddMinutes(15), stored.ConfirmationDeadline);
 
@@ -53,10 +54,72 @@ public class BookingStoreTests(PostgresFixture fixture)
         // booking_id, not null.
         Assert.Equal(slot.Id, stored.BookingId);
 
-        var card = await db.Customers.SingleAsync(c => c.Id == confirmation.Value.CustomerId);
-        Assert.Equal("+79990000010", card.Phone.Value);
-        Assert.Equal("Anna", card.DisplayName);
-        Assert.Equal(0, card.NoShowCount);
+        var record = await db.PersonRecords.SingleAsync(p => p.PersonId == confirmation.Value.PersonId);
+        Assert.Equal("+79990000010", record.Phone.Value);
+        Assert.Equal(0, record.NoShowCount);
+    }
+
+    /// <summary>`adr/0184` decision 2: a booking whose person id this product minted (no chat origin)
+    /// announces that person to chat through the outbox, in the claim's own transaction - and a
+    /// chat-origin booking, whose person chat already knows, stages nothing of the kind.</summary>
+    [Fact]
+    public async Task ALocallyMintedPerson_IsAnnouncedOnTheOutbox_ButAChatKnownPersonIsNot()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var first = await AnAvailableSlotAsync(seed);
+        var second = await AnAvailableSlotAsync(seed, startsAt: Now.AddHours(4));
+
+        var minted = await BookAsync(seed, first.Id, "+79990000040", "Anna");
+        var chatKnown = await BookAsync(seed, second.Id, "+79990000041", "Boris", registerPerson: false);
+
+        Assert.NotNull(minted);
+        Assert.NotNull(chatKnown);
+
+        var rows = await OutboxRowsOfTypeAsync("PersonRegistered");
+        var row = Assert.Single(rows, r => r.PartitionKey == minted.Value.PersonId.ToString());
+        Assert.DoesNotContain(rows, r => r.PartitionKey == chatKnown.Value.PersonId.ToString());
+
+        var payload = JsonSerializer.Deserialize<PersonRegistered>(row.Payload)!;
+        Assert.Equal(minted.Value.PersonId, payload.PersonId);
+        Assert.Equal(seed.Tenant.Id.Value, payload.AccountId);
+        Assert.Equal("+79990000040", payload.Phone);
+        Assert.Equal("Anna", payload.Name);
+    }
+
+    /// <summary>The announcement rides the claim's transaction: a lost race leaves no PersonRegistered
+    /// row behind, exactly as it leaves no person record - chat must never learn of a person whose
+    /// booking never happened.</summary>
+    [Fact]
+    public async Task ALostRace_StagesNoPersonRegistered()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var winner = await BookAsync(seed, slot.Id, "+79990000042");
+        var loser = await BookAsync(seed, slot.Id, "+79990000043");
+
+        Assert.NotNull(winner);
+        Assert.Null(loser);
+
+        var rows = await OutboxRowsOfTypeAsync("PersonRegistered");
+        Assert.Single(rows, r => r.PartitionKey == winner.Value.PersonId.ToString());
+        Assert.DoesNotContain(rows, r => r.Payload.Contains("+79990000043", StringComparison.Ordinal));
+    }
+
+    private async Task<IReadOnlyList<(string PartitionKey, string Payload)>> OutboxRowsOfTypeAsync(string type)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            "select partition_key, payload from outbox where type = @type order by occurred_at", connection);
+        command.Parameters.AddWithValue("type", type);
+        var rows = new List<(string, string)>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            rows.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        return rows;
     }
 
     /// <summary>
@@ -117,44 +180,57 @@ public class BookingStoreTests(PostgresFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var stored = await db.Events.SingleAsync(e => e.Id == slot.Id);
-        Assert.Equal(first.Value.CustomerId, stored.CustomerId);
+        Assert.Equal(first.Value.PersonId, stored.PersonId);
 
-        // And the loser's lead card was rolled back with its claim - no personal data written for a
+        // And the loser's person record was rolled back with its claim - no personal data written for a
         // booking that did not happen. This is the assertion the single transaction exists for.
-        Assert.False(await db.Customers.AnyAsync(c => c.Phone == new PhoneNumber("+79990000012")));
+        Assert.False(await db.PersonRecords.AnyAsync(p => p.Phone == new PhoneNumber("+79990000012")));
     }
 
+    /// <summary>`adr/0184`: the record is keyed by the person id, so a returning person - the same
+    /// id, chat's own visitor id on a chat-origin booking - lands on the one row, whatever number they
+    /// typed this time.</summary>
     [Fact]
-    public async Task ARepeatedBookingFromTheSamePhone_UpdatesTheOneLeadCard()
+    public async Task ARepeatedBookingByTheSamePerson_UpdatesTheOneRecord()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var first = await AnAvailableSlotAsync(seed);
+        var second = await AnAvailableSlotAsync(seed, startsAt: Now.AddHours(4));
+        var personId = CalendarSeed.NewId();
+
+        var one = await BookAsync(seed, first.Id, "+79990000013", personId: personId);
+        var two = await BookAsync(seed, second.Id, "+79990000013", at: Now.AddMinutes(5), personId: personId);
+
+        Assert.NotNull(one);
+        Assert.NotNull(two);
+        Assert.Equal(personId, one.Value.PersonId);
+        Assert.Equal(personId, two.Value.PersonId);
+
+        await using var db = fixture.CreateDbContext();
+        var records = await db.PersonRecords.Where(p => p.TenantId == seed.Tenant.Id).ToListAsync();
+
+        var record = Assert.Single(records, p => p.PersonId == personId);
+        Assert.Equal(Now.AddMinutes(5), record.LastSeenAt);
+        Assert.Equal(Now, record.FirstSeenAt);
+    }
+
+    /// <summary>`adr/0147`'s "a phone is a hint, not proof", kept by `adr/0184`: two bookings with the
+    /// same number under two person ids are two records, never silently one.</summary>
+    [Fact]
+    public async Task TheSamePhoneUnderTwoPersonIds_IsTwoRecords()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
         var first = await AnAvailableSlotAsync(seed);
         var second = await AnAvailableSlotAsync(seed, startsAt: Now.AddHours(4));
 
-        var one = await BookAsync(seed, first.Id, "+79990000013", "Anna");
-        var two = await BookAsync(seed, second.Id, "+79990000013", "Anna B", at: Now.AddMinutes(5));
+        var one = await BookAsync(seed, first.Id, "+79990000044");
+        var two = await BookAsync(seed, second.Id, "+79990000044");
 
-        Assert.NotNull(one);
-        Assert.NotNull(two);
-
-        // The Done-when in one line: the second booking reused the first booking's card rather than
-        // minting a second one. The id the handler generated for the "if it inserts" case was
-        // discarded by ON CONFLICT, which is exactly what DO UPDATE ... RETURNING is for - the caller
-        // learns the winning row's id without a second query.
-        Assert.Equal(one.Value.CustomerId, two.Value.CustomerId);
+        Assert.NotEqual(one!.Value.PersonId, two!.Value.PersonId);
 
         await using var db = fixture.CreateDbContext();
-        var cards = await db.Customers
-            .Where(c => c.TenantId == seed.Tenant.Id && c.Phone == new PhoneNumber("+79990000013"))
-            .ToListAsync();
-
-        var card = Assert.Single(cards);
-        Assert.Equal(Now.AddMinutes(5), card.LastSeenAt);
-        Assert.Equal(Now, card.FirstSeenAt);
-
-        // "Anna", not "Anna B": a name already on the card is not overwritten by whatever a public
-        // form was typed into next time. An operator who corrected it must not be undone.
-        Assert.Equal("Anna", card.DisplayName);
+        Assert.Equal(2, await db.PersonRecords.CountAsync(
+            p => p.TenantId == seed.Tenant.Id && p.Phone == new PhoneNumber("+79990000044")));
     }
 
     [Fact]
@@ -163,42 +239,52 @@ public class BookingStoreTests(PostgresFixture fixture)
         var seed = await CalendarSeed.WriteAsync(fixture);
         var first = await AnAvailableSlotAsync(seed);
         var second = await AnAvailableSlotAsync(seed, startsAt: Now.AddHours(4));
+        var personId = CalendarSeed.NewId();
 
-        await BookAsync(seed, first.Id, "+79990000014", at: Now.AddMinutes(30));
+        await BookAsync(seed, first.Id, "+79990000014", at: Now.AddMinutes(30), personId: personId);
 
         // A request that was slow in flight arrives with an older instant. GREATEST is what stops it
-        // rewinding the watermark - the same rule Customer.Touch enforces in memory, restated in SQL
+        // rewinding the watermark - the same rule PersonRecord.Touch enforces in memory, restated in SQL
         // because this statement never goes through that method.
-        await BookAsync(seed, second.Id, "+79990000014", at: Now);
+        await BookAsync(seed, second.Id, "+79990000014", at: Now, personId: personId);
 
         await using var db = fixture.CreateDbContext();
-        var card = await db.Customers.SingleAsync(
-            c => c.TenantId == seed.Tenant.Id && c.Phone == new PhoneNumber("+79990000014"));
+        var record = await db.PersonRecords.SingleAsync(p => p.PersonId == personId);
 
-        Assert.Equal(Now.AddMinutes(30), card.LastSeenAt);
+        Assert.Equal(Now.AddMinutes(30), record.LastSeenAt);
     }
 
+    /// <summary>`adr/0184` (author decision O1): the phone follows the booking, and the verification
+    /// follows the phone - a person who books again with a different number gets that number written
+    /// and its own verification mark (this attempt's, not the old number's earlier one), because nobody
+    /// ever proved the new number back then.</summary>
     [Fact]
-    public async Task ABlankNameOnASecondBooking_DoesNotEraseTheNameAlreadyOnTheCard()
+    public async Task ABookingWithADifferentPhone_ByTheSamePerson_ReplacesThePhoneAndItsVerification()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
         var first = await AnAvailableSlotAsync(seed);
         var second = await AnAvailableSlotAsync(seed, startsAt: Now.AddHours(4));
+        var personId = CalendarSeed.NewId();
+        var oldNumberVerifiedAt = Now.AddDays(-1);
+        var newNumberVerifiedAt = Now.AddMinutes(5);
 
-        await BookAsync(seed, first.Id, "+79990000015", "Anna");
-        await BookAsync(seed, second.Id, "+79990000015", displayName: null);
+        await BookAsync(seed, first.Id, "+79990000015", phoneVerifiedAt: oldNumberVerifiedAt, personId: personId);
+        await BookAsync(seed, second.Id, "+79990000016", at: Now.AddMinutes(5), phoneVerifiedAt: newNumberVerifiedAt,
+            personId: personId, registerPerson: false);
 
         await using var db = fixture.CreateDbContext();
-        var card = await db.Customers.SingleAsync(
-            c => c.TenantId == seed.Tenant.Id && c.Phone == new PhoneNumber("+79990000015"));
+        var record = await db.PersonRecords.SingleAsync(p => p.PersonId == personId);
 
-        Assert.Equal("Anna", card.DisplayName);
+        Assert.Equal("+79990000016", record.Phone.Value);
+        // Not the old number's earlier instant - the earliest-wins rule applies only while the number is
+        // the same one it was proven for.
+        Assert.Equal(newNumberVerifiedAt, record.PhoneVerifiedAt);
     }
 
     /// <summary>`20-09`'s own Done-when: the claim writes the caller's asserted verification timestamp
-    /// onto the lead card, in the same transaction as the claim itself.</summary>
+    /// onto the person record, in the same transaction as the claim itself.</summary>
     [Fact]
-    public async Task AVerifiedClaim_SnapshotsThePhoneVerifiedAtTimestampOntoTheLeadCard()
+    public async Task AVerifiedClaim_SnapshotsThePhoneVerifiedAtTimestampOntoThePersonRecord()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
         var slot = await AnAvailableSlotAsync(seed);
@@ -208,15 +294,14 @@ public class BookingStoreTests(PostgresFixture fixture)
 
         Assert.NotNull(confirmation);
         await using var db = fixture.CreateDbContext();
-        var card = await db.Customers.SingleAsync(c => c.Id == confirmation!.Value.CustomerId);
-        Assert.Equal(verifiedAt, card.PhoneVerifiedAt);
+        var record = await db.PersonRecords.SingleAsync(p => p.PersonId == confirmation!.Value.PersonId);
+        Assert.Equal(verifiedAt, record.PhoneVerifiedAt);
     }
 
-    /// <summary>The identical "keep what's already there" rule <c>display_name</c> already follows,
-    /// applied to <c>phone_verified_at</c> for a related but distinct reason (`UpsertCustomerSql`'s own
-    /// remarks): a phone verified once for an earlier booking must not need re-proving for a later one
-    /// from the same number, and the *first* verification is the honest "since when" answer - a later,
-    /// different assertion must never silently replace it.</summary>
+    /// <summary>The "keep what's already there" rule on <c>phone_verified_at</c> (`UpsertPersonRecordSql`'s
+    /// own remarks): a phone verified once for an earlier booking by this person must not need
+    /// re-proving for a later one from the same number, and the *first* verification is the honest
+    /// "since when" answer - a later, different assertion must never silently replace it.</summary>
     [Fact]
     public async Task ARepeatedBookingFromAnAlreadyVerifiedPhone_KeepsTheEarlierVerificationTimestamp()
     {
@@ -225,19 +310,19 @@ public class BookingStoreTests(PostgresFixture fixture)
         var second = await AnAvailableSlotAsync(seed, startsAt: Now.AddHours(4));
         var firstVerifiedAt = Now.AddDays(-5);
         var laterVerifiedAt = Now.AddMinutes(5);
+        var personId = CalendarSeed.NewId();
 
-        await BookAsync(seed, first.Id, "+79990000021", phoneVerifiedAt: firstVerifiedAt);
-        await BookAsync(seed, second.Id, "+79990000021", at: Now.AddMinutes(5), phoneVerifiedAt: laterVerifiedAt);
+        await BookAsync(seed, first.Id, "+79990000021", phoneVerifiedAt: firstVerifiedAt, personId: personId);
+        await BookAsync(seed, second.Id, "+79990000021", at: Now.AddMinutes(5), phoneVerifiedAt: laterVerifiedAt, personId: personId);
 
         await using var db = fixture.CreateDbContext();
-        var card = await db.Customers.SingleAsync(
-            c => c.TenantId == seed.Tenant.Id && c.Phone == new PhoneNumber("+79990000021"));
+        var record = await db.PersonRecords.SingleAsync(p => p.PersonId == personId);
 
-        Assert.Equal(firstVerifiedAt, card.PhoneVerifiedAt);
+        Assert.Equal(firstVerifiedAt, record.PhoneVerifiedAt);
     }
 
     [Fact]
-    public async Task TheSamePhoneAtTwoTenants_IsTwoLeadCards()
+    public async Task TheSamePhoneAtTwoTenants_IsTwoRecords()
     {
         var mine = await CalendarSeed.WriteAsync(fixture);
         var theirs = await CalendarSeed.WriteAsync(fixture);
@@ -247,9 +332,9 @@ public class BookingStoreTests(PostgresFixture fixture)
         var one = await BookAsync(mine, mySlot.Id, "+79990000016");
         var two = await BookAsync(theirs, theirSlot.Id, "+79990000016");
 
-        // (tenant_id, phone), never phone alone. One tenant's notes must never reach another's
-        // console, and the upsert's conflict target is what enforces that at the storage level.
-        Assert.NotEqual(one!.Value.CustomerId, two!.Value.CustomerId);
+        // Two tenants, two person ids, two records: one tenant's operational facts never reach
+        // another's console.
+        Assert.NotEqual(one!.Value.PersonId, two!.Value.PersonId);
     }
 
     [Fact]
@@ -328,7 +413,7 @@ public class BookingStoreTests(PostgresFixture fixture)
 
         Assert.All(stored, e => Assert.Equal(EventStatus.PendingConfirmation, e.Status));
         Assert.All(stored, e => Assert.Equal(run[0].Id, e.BookingId));
-        Assert.All(stored, e => Assert.Equal(confirmation.Value.CustomerId, e.CustomerId));
+        Assert.All(stored, e => Assert.Equal(confirmation.Value.PersonId, e.PersonId));
         Assert.All(stored, e => Assert.Equal(Now.AddMinutes(15), e.ConfirmationDeadline));
     }
 
@@ -360,9 +445,9 @@ public class BookingStoreTests(PostgresFixture fixture)
         Assert.Equal(EventStatus.Available, last.Status);
         Assert.Null(last.BookingId);
 
-        // And no second lead card for the attempt that lost - the same data-minimisation property the
-        // single-slot case already proves.
-        Assert.False(await db.Customers.AnyAsync(c => c.Phone == new PhoneNumber("+79990000032")));
+        // And no second person record for the attempt that lost - the same data-minimisation property
+        // the single-slot case already proves.
+        Assert.False(await db.PersonRecords.AnyAsync(p => p.Phone == new PhoneNumber("+79990000032")));
     }
 
     private async Task<IReadOnlyList<Event>> ConsecutiveSlotsAsync(
@@ -389,14 +474,21 @@ public class BookingStoreTests(PostgresFixture fixture)
         return slot;
     }
 
+    /// <param name="personId">`adr/0184`: the person this booking is for - a fresh, "locally minted" id
+    /// by default, or a caller-supplied one to model the same person booking again.</param>
+    /// <param name="registerPerson">Whether the attempt models a locally minted person id (a booking
+    /// with no chat origin, which announces the person on the outbox) - the default - or a chat-known
+    /// one, which stages nothing.</param>
     private Task<BookingConfirmation?> BookAsync(
         SeededTenant seed,
         EventId eventId,
         string phone,
         string? displayName = null,
         DateTimeOffset? at = null,
-        DateTimeOffset? phoneVerifiedAt = null) =>
-        BookAsync(seed, [eventId], phone, displayName, at, phoneVerifiedAt);
+        DateTimeOffset? phoneVerifiedAt = null,
+        Guid? personId = null,
+        bool registerPerson = true) =>
+        BookAsync(seed, [eventId], phone, displayName, at, phoneVerifiedAt, personId, registerPerson);
 
     private async Task<BookingConfirmation?> BookAsync(
         SeededTenant seed,
@@ -404,7 +496,9 @@ public class BookingStoreTests(PostgresFixture fixture)
         string phone,
         string? displayName = null,
         DateTimeOffset? at = null,
-        DateTimeOffset? phoneVerifiedAt = null)
+        DateTimeOffset? phoneVerifiedAt = null,
+        Guid? personId = null,
+        bool registerPerson = true)
     {
         var now = at ?? Now;
         await using var db = fixture.CreateDbContext();
@@ -415,12 +509,11 @@ public class BookingStoreTests(PostgresFixture fixture)
                 eventIds,
                 seed.Service.Id,
                 new PhoneNumber(phone),
-                displayName,
-                new CustomerId(CalendarSeed.NewId()),
+                registerPerson ? new PersonRegistration(displayName) : null,
                 now,
                 now.AddMinutes(15),
                 phoneVerifiedAt ?? now,
-                CalendarSeed.NewId(),
+                personId ?? CalendarSeed.NewId(),
                 null),
             CancellationToken.None);
     }

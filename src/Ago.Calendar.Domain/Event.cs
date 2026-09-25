@@ -69,10 +69,6 @@ public sealed class Event
     /// <see cref="EventStatus.Blocked"/> row - a closure is not a service.</summary>
     public ServiceId? ServiceId { get; private set; }
 
-    /// <summary>Set by <see cref="Claim"/> and never cleared, including on cancellation: who
-    /// cancelled on whom is exactly the history a lead card exists to keep.</summary>
-    public CustomerId? CustomerId { get; private set; }
-
     /// <summary>
     /// `26-136`/`adr/0184`: the account-scoped person this booking is for - chat's own visitor id when
     /// the booking came in through a conversation, or an id minted locally by the caller for a booking
@@ -82,12 +78,17 @@ public sealed class Event
     /// sends" / `adr/0065`), so wrapping it in an <c>Ago.Calendar</c> id type would falsely claim
     /// ownership this decision explicitly moves out of the calendar.
     ///
-    /// <para><b>Nullable on the aggregate, though every <i>claimed</i> row carries one.</b> Set only by
-    /// <see cref="Claim"/> - an <see cref="EventStatus.Available"/> or <see cref="EventStatus.Blocked"/>
-    /// row has no person, exactly as it has no <see cref="CustomerId"/> - so the property has to be able
-    /// to hold "none" for the rows EF materialises straight off the availability grid. The column is
-    /// nullable for the same reason and, this being the expand phase of `adr/0184` (option B), it stays
-    /// nullable here rather than becoming <c>NOT NULL</c> in this slice.</para>
+    /// <para><b>This is the booking's only person reference.</b> The <c>CustomerId</c> that used to
+    /// sit beside it pointed at this product's own <c>customers</c> copy of the person; `adr/0184`
+    /// deleted that copy, and this column now carries the foreign key to the calendar's thin
+    /// operational record (<see cref="PersonRecord"/>) instead. Set by <see cref="Claim"/> and never
+    /// cleared, including on cancellation: who cancelled on whom is exactly the history the record
+    /// exists to keep.</para>
+    ///
+    /// <para><b>Nullable on the aggregate, though every <i>claimed</i> row carries one.</b> An
+    /// <see cref="EventStatus.Available"/> or <see cref="EventStatus.Blocked"/> row has no person, so
+    /// the property has to be able to hold "none" for the rows EF materialises straight off the
+    /// availability grid; the column is nullable for the same reason.</para>
     /// </summary>
     public Guid? PersonId { get; private set; }
 
@@ -146,7 +147,7 @@ public sealed class Event
     /// <summary>
     /// `20-18`: which booking this row belongs to. Null on <see cref="EventStatus.Available"/> and
     /// <see cref="EventStatus.Blocked"/> rows - nobody has claimed anything yet. Set by
-    /// <see cref="Claim"/> and never cleared afterwards, matching <see cref="CustomerId"/>'s own
+    /// <see cref="Claim"/> and never cleared afterwards, matching <see cref="PersonId"/>'s own
     /// "history, not current state" treatment.
     ///
     /// <para><b>The value is another event's own <see cref="EventId"/>, not a freshly minted id -
@@ -244,20 +245,23 @@ public sealed class Event
     /// called once for, in order, per row.
     /// </param>
     /// <param name="personId">
-    /// `26-136`/`adr/0184`: the account-scoped person this booking is for - see <see cref="PersonId"/>.
-    /// Left <see langword="null"/> by the callers that predate this item (the domain state-machine and
-    /// concurrency tests, which assert transitions, not identity) so their existing call sites keep
-    /// compiling and keep behaving exactly as before; the real booking write path always supplies one
-    /// (<c>BookEventHandler</c> mints it when the inbound request carries none).
+    /// `adr/0184`: the account-scoped person this booking is for - see <see cref="PersonId"/>. Always
+    /// supplied: the real booking write path mints one when the inbound request carries none
+    /// (<c>BookEventHandler</c>), so there is no "claimed, but for nobody" state to model.
     /// </param>
     /// <param name="originConversationId">
     /// `26-136`/`adr/0184`: the originating chat conversation, or <see langword="null"/> for a booking
     /// with no chat origin - see <see cref="OriginConversationId"/>.
     /// </param>
     public void Claim(
-        CustomerId customerId, ServiceId serviceId, DateTimeOffset now, DateTimeOffset confirmationDeadline,
-        EventId? bookingId = null, Guid? personId = null, Guid? originConversationId = null)
+        Guid personId, ServiceId serviceId, DateTimeOffset now, DateTimeOffset confirmationDeadline,
+        EventId? bookingId = null, Guid? originConversationId = null)
     {
+        if (personId == Guid.Empty)
+        {
+            throw new ArgumentException("A claim needs a real person id.", nameof(personId));
+        }
+
         if (Status != EventStatus.Available)
         {
             throw new InvalidEventStateException(
@@ -277,15 +281,14 @@ public sealed class Event
                 "The confirmation window must close in the future.");
         }
 
-        CustomerId = customerId;
+        PersonId = personId;
         ServiceId = serviceId;
         ConfirmationDeadline = confirmationDeadline;
         Status = EventStatus.PendingConfirmation;
         BookingId = bookingId ?? Id;
-        PersonId = personId;
         OriginConversationId = originConversationId;
         _domainEvents.Add(new EventClaimed(
-            Id, TenantId, CalendarId, WorkerId, serviceId, customerId, Slot, confirmationDeadline, now));
+            Id, TenantId, CalendarId, WorkerId, serviceId, personId, Slot, confirmationDeadline, now));
     }
 
     /// <summary>
@@ -309,7 +312,7 @@ public sealed class Event
 
         ConfirmationDeadline = null;
         Status = EventStatus.Booked;
-        _domainEvents.Add(new EventConfirmed(Id, TenantId, CalendarId, CustomerId!.Value, Slot, LocalDate, now));
+        _domainEvents.Add(new EventConfirmed(Id, TenantId, CalendarId, PersonId!.Value, Slot, LocalDate, now));
     }
 
     /// <summary>The operator's veto, inside the window. <c>PendingConfirmation -&gt; Cancelled</c>.
@@ -366,7 +369,7 @@ public sealed class Event
         }
 
         Status = EventStatus.NoShow;
-        _domainEvents.Add(new EventNoShowRecorded(Id, TenantId, CustomerId!.Value, Slot, now));
+        _domainEvents.Add(new EventNoShowRecorded(Id, TenantId, PersonId!.Value, Slot, now));
     }
 
     /// <summary>Takes a free slot out of circulation without a customer - `20-02`'s direct editing of
@@ -391,6 +394,6 @@ public sealed class Event
     {
         ConfirmationDeadline = null;
         Status = EventStatus.Cancelled;
-        _domainEvents.Add(new EventCancelled(Id, TenantId, CustomerId, Slot, reason, now));
+        _domainEvents.Add(new EventCancelled(Id, TenantId, PersonId, Slot, reason, now));
     }
 }

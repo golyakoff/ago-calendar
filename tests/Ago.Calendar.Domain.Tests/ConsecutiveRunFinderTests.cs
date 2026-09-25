@@ -61,7 +61,7 @@ public sealed class ConsecutiveRunFinderTests
     public void FindRun_WhenTheStartingSlotIsNotAvailable_ReturnsNull()
     {
         var day = ARun(startHour: 12, count: 3, slotMinutes: 30, bufferMinutes: 10);
-        day[0].Claim(new CustomerId(Guid.CreateVersion7(Now)), new ServiceId(Guid.CreateVersion7(Now)), Now, Now.AddMinutes(15));
+        day[0].Claim(Guid.CreateVersion7(Now), new ServiceId(Guid.CreateVersion7(Now)), Now, Now.AddMinutes(15));
 
         var run = ConsecutiveRunFinder.FindRun(day, day[0].Id, 30, 30, 10, true);
 
@@ -74,7 +74,7 @@ public sealed class ConsecutiveRunFinderTests
     public void FindRun_WhenTheMiddleSlotOfAnOtherwiseValidRunIsTaken_ReturnsNull()
     {
         var day = ARun(startHour: 12, count: 3, slotMinutes: 30, bufferMinutes: 10);
-        day[1].Claim(new CustomerId(Guid.CreateVersion7(Now)), new ServiceId(Guid.CreateVersion7(Now)), Now, Now.AddMinutes(15));
+        day[1].Claim(Guid.CreateVersion7(Now), new ServiceId(Guid.CreateVersion7(Now)), Now, Now.AddMinutes(15));
 
         // 70 minutes with a 10-minute buffer needs two slots when counted - day[0] and day[1] - and
         // day[1] is gone.

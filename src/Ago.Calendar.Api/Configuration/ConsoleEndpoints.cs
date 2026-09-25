@@ -112,23 +112,20 @@ public static class ConsoleEndpoints
         // own console is where a person is granted `calendar:configure` and friends now (`22-06`).
         group.MapGet("/contacts", HandleContactsAsync).WithName("GetContacts");
 
-        // `23-12`/`decisions.md` §5: masked, revealed on demand, and the reveal is recorded.
-        group.MapPost("/contacts/{customerId:guid}/reveal-phone", HandleRevealCustomerPhoneAsync)
+        // `23-12`/`decisions.md` §5: masked, revealed on demand, and the reveal is recorded. `adr/0184`:
+        // the route names the opaque person id now - the same value chat's own Person API is keyed by.
+        group.MapPost("/contacts/{personId:guid}/reveal-phone", HandleRevealCustomerPhoneAsync)
             .WithName("RevealCustomerPhone");
         // `23-12`: "I called and it is them" - a distinct fact from the SMS code's own verification.
-        group.MapPost("/contacts/{customerId:guid}/confirm-phone", HandleConfirmOperatorVerifiedPhoneAsync)
+        group.MapPost("/contacts/{personId:guid}/confirm-phone", HandleConfirmOperatorVerifiedPhoneAsync)
             .WithName("ConfirmOperatorVerifiedPhone");
         // `23-12`'s own audit view - individual reveals, never an aggregated count
         // (`decisions.md` §5's amendment).
         group.MapGet("/contacts/phone-reveals", HandlePhoneRevealsAsync).WithName("GetPhoneReveals");
 
-        // `23-60`/`adr/0147`: the other half of that ADR's own choice - "seeing both sets of bookings
-        // before deciding", the merge itself, and the tenant's own audit trail of every merge
-        // performed. POST rather than GET for the preview: it names two ids the caller chose, closer
-        // in shape to `RecutSchedulePreview` (also a POST) than to a bare query-string filter.
-        group.MapPost("/contacts/merge-preview", HandleCustomerMergePreviewAsync).WithName("GetCustomerMergePreview");
-        group.MapPost("/contacts/merge", HandleMergeCustomersAsync).WithName("MergeCustomers");
-        group.MapGet("/contacts/merges", HandleCustomerMergesAsync).WithName("GetCustomerMerges");
+        // `adr/0184` (author decision O2): the `23-60` merge routes (`/contacts/merge-preview`,
+        // `/contacts/merge`, `/contacts/merges`) are retired with the calendar-side merge - see
+        // ConsoleContracts.cs's own note where their records used to be.
 
         // `20-15`: the materialised slot view - what the tenant's own schedule actually produced for
         // one worker, over a date range. Read-only; see the item's own scope for why it offers no
@@ -634,8 +631,7 @@ public static class ConsoleEndpoints
                 row.WorkerDisplayName,
                 row.ServiceId.Value,
                 row.ServiceName,
-                row.CustomerId.Value,
-                row.CustomerDisplayName,
+                row.PersonId,
                 row.StartsAt,
                 row.EndsAt,
                 row.LocalDate,
@@ -671,8 +667,7 @@ public static class ConsoleEndpoints
                 row.WorkerDisplayName,
                 row.ServiceId.Value,
                 row.ServiceName,
-                row.CustomerId.Value,
-                row.CustomerDisplayName,
+                row.PersonId,
                 row.StartsAt,
                 row.EndsAt,
                 row.LocalDate,
@@ -778,118 +773,19 @@ public static class ConsoleEndpoints
 
         return Results.Ok(result.Value
             .Select(row => new ContactResponse(
-                row.CustomerId.Value,
+                row.PersonId,
                 row.Phone,
                 row.Masked,
-                row.DisplayName,
-                row.Notes,
                 row.NoShowCount,
                 row.PhoneVerifiedAt,
                 row.PhoneConfirmedByOperatorAt,
                 row.FirstSeenAt,
-                row.LastSeenAt,
-                [.. row.DuplicatePhoneCustomerIds.Select(id => id.Value)]))
+                row.LastSeenAt))
             .ToArray());
     }
 
-    private static async Task<IResult> HandleCustomerMergePreviewAsync(
-        CustomerMergePreviewRequest request,
-        ClaimsPrincipal principal,
-        GetCustomerMergePreviewHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken)
-    {
-        if (request is null)
-        {
-            return Results.BadRequest();
-        }
-
-        var result = await handler.HandleAsync(
-            new GetCustomerMergePreview(
-                principal.GetOperatorId(), principal.GetTenantId(),
-                new CustomerId(request.FirstCustomerId), new CustomerId(request.SecondCustomerId)),
-            cancellationToken);
-
-        if (!result.IsSuccess)
-        {
-            return result.Error!.Value.ToProblem(httpContext);
-        }
-
-        var preview = result.Value;
-        return Results.Ok(new CustomerMergePreviewResponse(ToCandidateResponse(preview.First), ToCandidateResponse(preview.Second)));
-    }
-
-    private static CustomerMergeCandidateResponse ToCandidateResponse(CustomerMergeCandidate candidate) => new(
-        candidate.CustomerId.Value,
-        candidate.Source.ToString(),
-        candidate.WillSurvive,
-        candidate.Phone,
-        candidate.Masked,
-        candidate.DisplayName,
-        candidate.NoShowCount,
-        [.. candidate.Bookings.Select(booking => new CustomerMergePreviewBookingResponse(
-            booking.BookingId.Value,
-            booking.Status.ToString(),
-            booking.ServiceName,
-            booking.WorkerDisplayName,
-            booking.StartsAt,
-            booking.EndsAt,
-            booking.LocalDate))]);
-
-    private static async Task<IResult> HandleMergeCustomersAsync(
-        MergeCustomersRequest request,
-        ClaimsPrincipal principal,
-        MergeCustomersHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken)
-    {
-        if (request is null)
-        {
-            return Results.BadRequest();
-        }
-
-        var result = await handler.HandleAsync(
-            new MergeCustomers(
-                principal.GetOperatorId(), principal.GetTenantId(),
-                new CustomerId(request.FirstCustomerId), new CustomerId(request.SecondCustomerId)),
-            cancellationToken);
-
-        if (!result.IsSuccess)
-        {
-            return result.Error!.Value.ToProblem(httpContext);
-        }
-
-        var outcome = result.Value;
-        return Results.Ok(new CustomerMergeOutcomeResponse(
-            outcome.SurvivorCustomerId.Value, outcome.AbsorbedCustomerId.Value, outcome.BookingsMoved));
-    }
-
-    private static async Task<IResult> HandleCustomerMergesAsync(
-        Guid? before,
-        int? limit,
-        ClaimsPrincipal principal,
-        GetCustomerMergesForTenantHandler handler,
-        HttpContext httpContext,
-        CancellationToken cancellationToken)
-    {
-        var result = await handler.HandleAsync(
-            new GetCustomerMergesForTenant(principal.GetOperatorId(), principal.GetTenantId(), before, limit),
-            cancellationToken);
-
-        if (!result.IsSuccess)
-        {
-            return result.Error!.Value.ToProblem(httpContext);
-        }
-
-        var page = result.Value;
-        return Results.Ok(new CustomerMergePageResponse(
-            [.. page.Items.Select(item => new CustomerMergeResponse(
-                item.Id, item.MergedAt, item.SurvivorCustomerId, item.AbsorbedCustomerId, item.OperatorId, item.BookingsMoved))],
-            page.NextBeforeId));
-    }
-
     private static async Task<IResult> HandleRevealCustomerPhoneAsync(
-        Guid customerId,
+        Guid personId,
         RevealCustomerPhoneRequest request,
         ClaimsPrincipal principal,
         RevealCustomerPhoneHandler handler,
@@ -903,7 +799,7 @@ public static class ConsoleEndpoints
 
         var result = await handler.HandleAsync(
             new RevealCustomerPhone(
-                principal.GetOperatorId(), principal.GetTenantId(), new CustomerId(customerId), request.Surface),
+                principal.GetOperatorId(), principal.GetTenantId(), personId, request.Surface),
             cancellationToken);
 
         return result.IsSuccess
@@ -912,14 +808,14 @@ public static class ConsoleEndpoints
     }
 
     private static async Task<IResult> HandleConfirmOperatorVerifiedPhoneAsync(
-        Guid customerId,
+        Guid personId,
         ClaimsPrincipal principal,
         ConfirmOperatorVerifiedPhoneHandler handler,
         HttpContext httpContext,
         CancellationToken cancellationToken)
     {
         var result = await handler.HandleAsync(
-            new ConfirmOperatorVerifiedPhone(principal.GetOperatorId(), principal.GetTenantId(), new CustomerId(customerId)),
+            new ConfirmOperatorVerifiedPhone(principal.GetOperatorId(), principal.GetTenantId(), personId),
             cancellationToken);
 
         return result.IsSuccess
@@ -947,7 +843,7 @@ public static class ConsoleEndpoints
         var page = result.Value;
         return Results.Ok(new ContactPhoneRevealPageResponse(
             [.. page.Items.Select(item => new ContactPhoneRevealResponse(
-                item.Id, item.OccurredAt, item.CustomerId, item.OperatorId, item.Surface))],
+                item.Id, item.OccurredAt, item.PersonId, item.OperatorId, item.Surface))],
             page.NextBeforeId));
     }
 
@@ -979,8 +875,7 @@ public static class ConsoleEndpoints
                 row.Status.ToString(),
                 row.ServiceId?.Value,
                 row.ServiceName,
-                row.CustomerId?.Value,
-                row.CustomerDisplayName,
+                row.PersonId,
                 row.Phone,
                 row.Masked,
                 row.BookingId?.Value))
@@ -1023,8 +918,7 @@ public static class ConsoleEndpoints
                             booking.Status.ToString(),
                             booking.ServiceId?.Value,
                             booking.ServiceName,
-                            booking.CustomerId?.Value,
-                            booking.CustomerDisplayName,
+                            booking.PersonId,
                             booking.Phone,
                             booking.Masked,
                             booking.CanDecide)),

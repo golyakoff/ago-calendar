@@ -10,7 +10,7 @@ namespace Ago.Calendar.Api.Booking;
 /// The product's one public write surface, and the first HTTP endpoint AGO Calendar has.
 ///
 /// <para><b>Unauthenticated, on purpose, and that is the whole security story here.</b> A customer
-/// books with a phone number and no account - <see cref="Customer"/> has no password by design - so
+/// books with a phone number and no account - a person who books has no password by design - so
 /// there is no token to check and nothing to check it against. What stands in for authentication is
 /// therefore doing real work: the route's own calendar id is the only thing binding a request to a
 /// tenant, and it is carried into the claim's <c>WHERE</c> clause rather than merely validated

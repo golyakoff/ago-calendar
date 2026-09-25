@@ -6,7 +6,7 @@ namespace Ago.Calendar.Application.UseCases.Contacts;
 
 /// <summary>
 /// `23-12`/`decisions.md` §5: "I called and it is them" - a fact only an operator who could see the
-/// number to call it can state, recorded on <see cref="Customer.RecordOperatorConfirmedPhone"/>.
+/// number to call it can state, recorded on <see cref="PersonRecord.RecordOperatorConfirmedPhone"/>.
 ///
 /// <para><b>Gated on <see cref="Permission.CustomerRead"/>, and that alone - the decision this item's
 /// own brief asked to be made and argued rather than defaulted.</b> §5 says the confirm act "lives
@@ -27,15 +27,15 @@ namespace Ago.Calendar.Application.UseCases.Contacts;
 /// <para><b>No reveal record is written here.</b> Confirming is not itself a read of the masked value
 /// - the operator already saw the number (directly, or through a prior
 /// <see cref="RevealCustomerPhoneHandler"/> call, which is what left its own record) - so this write
-/// carries nothing an audit view needs beyond what <see cref="Customer.PhoneConfirmedByOperatorAt"/>
+/// carries nothing an audit view needs beyond what <see cref="PersonRecord.PhoneConfirmedByOperatorAt"/>
 /// already states plainly in the read model.</para>
 ///
-/// <para>Tenant-isolated the same way <see cref="RevealCustomerPhoneHandler"/> is: a customer id
+/// <para>Tenant-isolated the same way <see cref="RevealCustomerPhoneHandler"/> is: a person id
 /// belonging to another tenant reads as <see cref="ContactsErrors.CustomerNotFound"/>, never a
 /// different, more informative error.</para>
 /// </summary>
 public sealed class ConfirmOperatorVerifiedPhoneHandler(
-    ICustomerRepository customers, IPermissionChecker permissions, IClock clock)
+    IPersonRecordRepository persons, IPermissionChecker permissions, IClock clock)
 {
     public async Task<Result<DateTimeOffset>> HandleAsync(
         ConfirmOperatorVerifiedPhone command, CancellationToken cancellationToken)
@@ -47,15 +47,15 @@ public sealed class ConfirmOperatorVerifiedPhoneHandler(
             return ContactsErrors.Forbidden(Permission.CustomerRead);
         }
 
-        var customer = await customers.GetByIdAsync(command.CustomerId, cancellationToken);
-        if (customer is null || customer.TenantId != command.TenantId)
+        var person = await persons.GetByIdAsync(command.PersonId, cancellationToken);
+        if (person is null || person.TenantId != command.TenantId)
         {
-            return ContactsErrors.CustomerNotFound(command.CustomerId);
+            return ContactsErrors.CustomerNotFound(command.PersonId);
         }
 
-        customer.RecordOperatorConfirmedPhone(clock.UtcNow);
-        await customers.SaveAsync(customer, cancellationToken);
+        person.RecordOperatorConfirmedPhone(clock.UtcNow);
+        await persons.SaveAsync(person, cancellationToken);
 
-        return customer.PhoneConfirmedByOperatorAt!.Value;
+        return person.PhoneConfirmedByOperatorAt!.Value;
     }
 }

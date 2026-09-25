@@ -15,17 +15,17 @@ internal sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         builder.Property(e => e.CalendarId).HasColumnName("calendar_id").HasConversion(IdConverters.Calendar);
         builder.Property(e => e.WorkerId).HasColumnName("worker_id").HasConversion(IdConverters.Worker);
         builder.Property(e => e.ServiceId).HasColumnName("service_id").HasConversion(IdConverters.NullableService);
-        builder.Property(e => e.CustomerId).HasColumnName("customer_id").HasConversion(IdConverters.NullableCustomer);
 
         // `20-18`: which booking this row belongs to - another event's own id, the run's anchor. See
         // Event.BookingId's own remarks for why this column rather than a second `bookings` table.
         builder.Property(e => e.BookingId).HasColumnName("booking_id").HasConversion(IdConverters.NullableEvent);
 
-        // `26-136`/`adr/0184`: the account-scoped person and the originating chat conversation. Mapped as
-        // bare nullable `uuid`s with no HasConversion - they are opaque references chat owns (Event.PersonId's
+        // `adr/0184`: the account-scoped person and the originating chat conversation. Mapped as bare
+        // nullable `uuid`s with no HasConversion - they are opaque references chat owns (Event.PersonId's
         // own remarks), so there is deliberately no strongly-typed calendar id to convert to or from. Both
-        // are nullable because an Available/Blocked row carries neither, exactly as it carries no
-        // customer_id; this is `adr/0184`'s expand phase, so person_id stays nullable in this slice.
+        // are nullable because an Available/Blocked row carries neither. person_id is the booking's one
+        // person reference - the `customer_id` column that used to point at the deleted `customers` copy
+        // is gone - and it carries a real foreign key to `person_records` (below).
         builder.Property(e => e.PersonId).HasColumnName("person_id");
         builder.Property(e => e.OriginConversationId).HasColumnName("origin_conversation_id");
 
@@ -57,7 +57,11 @@ internal sealed class EventConfiguration : IEntityTypeConfiguration<Event>
         builder.HasOne<BookingCalendar>().WithMany().HasForeignKey(e => e.CalendarId);
         builder.HasOne<Worker>().WithMany().HasForeignKey(e => e.WorkerId);
         builder.HasOne<Service>().WithMany().HasForeignKey(e => e.ServiceId);
-        builder.HasOne<Customer>().WithMany().HasForeignKey(e => e.CustomerId);
+        // `adr/0184`: the thin operational record is upserted in the same transaction as every claim
+        // (BookingStore.TryBookAsync), so this constraint never rejects a legitimate write - it exists so
+        // a future bug pointing person_id at nothing fails at the database rather than silently producing
+        // a booking whose phone and no-show history resolve to nobody.
+        builder.HasOne<PersonRecord>().WithMany().HasForeignKey(e => e.PersonId);
 
         // Postgres's own system column, not one we maintain: EF bumps and checks it on every UPDATE,
         // which is optimistic concurrency with no migration-visible column to keep in sync by hand

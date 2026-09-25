@@ -327,69 +327,67 @@ public class MoneyTests
     }
 }
 
-public class CustomerTests
+public class PersonRecordTests
 {
     [Fact]
     public void Touch_NeverMovesLastSeenBackwards()
     {
         var tenant = CalendarFixtures.Tenant();
-        var customer = CalendarFixtures.Customer(tenant);
+        var person = CalendarFixtures.Person(tenant);
         var later = CalendarFixtures.Now.AddHours(1);
-        customer.Touch(later);
+        person.Touch(later);
 
-        customer.Touch(CalendarFixtures.Now.AddMinutes(-30));
+        person.Touch(CalendarFixtures.Now.AddMinutes(-30));
 
-        Assert.Equal(later, customer.LastSeenAt);
+        Assert.Equal(later, person.LastSeenAt);
     }
 
+    /// <summary>`adr/0184`: the record is keyed by the opaque person id and an empty one is a caller
+    /// bug, never "no person yet" - every claimed booking has a person by construction.</summary>
     [Fact]
-    public void Describe_WithBlankValues_ClearsTheField()
+    public void Register_RefusesAnEmptyPersonId()
     {
         var tenant = CalendarFixtures.Tenant();
-        var customer = CalendarFixtures.Customer(tenant);
-        customer.Describe("Ivan", "prefers mornings");
 
-        customer.Describe("   ", null);
-
-        Assert.Null(customer.DisplayName);
-        Assert.Null(customer.Notes);
+        Assert.Throws<ArgumentException>(() =>
+            PersonRecord.Register(Guid.Empty, tenant.Id, new PhoneNumber("+79991234567"), CalendarFixtures.Now));
     }
 
-    /// <summary>`23-12`/`decisions.md` §5: "I called and it is them" - a fresh customer carries
+    /// <summary>`23-12`/`decisions.md` §5: "I called and it is them" - a fresh record carries
     /// neither confirmation, which is what lets a caller tell "confirmed" apart from "never
     /// asked".</summary>
     [Fact]
-    public void ANewCustomer_HasNoOperatorConfirmation()
+    public void ANewRecord_HasNoOperatorConfirmation()
     {
         var tenant = CalendarFixtures.Tenant();
-        var customer = CalendarFixtures.Customer(tenant);
+        var person = CalendarFixtures.Person(tenant);
 
-        Assert.Null(customer.PhoneConfirmedByOperatorAt);
+        Assert.Null(person.PhoneConfirmedByOperatorAt);
     }
 
     [Fact]
     public void RecordOperatorConfirmedPhone_SetsTheTimestamp()
     {
         var tenant = CalendarFixtures.Tenant();
-        var customer = CalendarFixtures.Customer(tenant);
+        var person = CalendarFixtures.Person(tenant);
 
-        customer.RecordOperatorConfirmedPhone(CalendarFixtures.Now);
+        person.RecordOperatorConfirmedPhone(CalendarFixtures.Now);
 
-        Assert.Equal(CalendarFixtures.Now, customer.PhoneConfirmedByOperatorAt);
+        Assert.Equal(CalendarFixtures.Now, person.PhoneConfirmedByOperatorAt);
     }
 
     [Fact]
     public void RecordOperatorConfirmedPhone_IsEarliestWins_ASecondCallNeverOverwrites()
     {
         var tenant = CalendarFixtures.Tenant();
-        var customer = CalendarFixtures.Customer(tenant);
+        var person = CalendarFixtures.Person(tenant);
         var first = CalendarFixtures.Now;
         var second = CalendarFixtures.Now.AddDays(1);
 
-        customer.RecordOperatorConfirmedPhone(first);
-        customer.RecordOperatorConfirmedPhone(second);
+        person.RecordOperatorConfirmedPhone(first);
+        person.RecordOperatorConfirmedPhone(second);
 
-        Assert.Equal(first, customer.PhoneConfirmedByOperatorAt);
+        Assert.Equal(first, person.PhoneConfirmedByOperatorAt);
     }
 
     /// <summary>The central distinction `decisions.md` §5 draws: "verified by operator" is a different
@@ -399,45 +397,47 @@ public class CustomerTests
     public void RecordOperatorConfirmedPhone_NeverSetsPhoneVerifiedAt_AndViceVersa()
     {
         var tenant = CalendarFixtures.Tenant();
-        var customer = CalendarFixtures.Customer(tenant);
-        customer.RecordOperatorConfirmedPhone(CalendarFixtures.Now);
-        Assert.Null(customer.PhoneVerifiedAt);
+        var person = CalendarFixtures.Person(tenant);
+        person.RecordOperatorConfirmedPhone(CalendarFixtures.Now);
+        Assert.Null(person.PhoneVerifiedAt);
 
-        var other = CalendarFixtures.Customer(tenant, phone: "+79997654321");
+        var other = CalendarFixtures.Person(tenant, phone: "+79997654321");
         other.RecordVerifiedPhone(CalendarFixtures.Now);
         Assert.Null(other.PhoneConfirmedByOperatorAt);
     }
 
-    /// <summary>`23-59`/`adr/0147`: <see cref="Customer.RegisterFromChat"/>'s own canonical statement -
-    /// unlike <see cref="Customer.Register"/>, this factory <em>is</em> actually called at runtime
-    /// (<c>ContactCollectedCustomerStore</c>'s own remarks), so both a domain-level and a Postgres-level
-    /// proof exist for it.</summary>
+    /// <summary>`adr/0184` (author decision O1): the phone on the record is the number the person last
+    /// booked with, and the two verification marks are facts about <em>that</em> number - a person who
+    /// books with a new number has not thereby verified it, so both marks clear. The same number again
+    /// changes nothing, so the earliest-wins rule on the marks is untouched.</summary>
     [Fact]
-    public void RegisterFromChat_SetsSourceToChat_AndCarriesTheSourceContactId()
+    public void ChangePhone_ToADifferentNumber_ClearsBothVerificationMarks_ButTheSameNumberKeepsThem()
     {
         var tenant = CalendarFixtures.Tenant();
-        var sourceContactId = Guid.NewGuid();
+        var person = CalendarFixtures.Person(tenant);
+        person.RecordVerifiedPhone(CalendarFixtures.Now);
+        person.RecordOperatorConfirmedPhone(CalendarFixtures.Now);
 
-        var customer = Customer.RegisterFromChat(
-            new CustomerId(Guid.NewGuid()), tenant.Id, new PhoneNumber("+15550100"), sourceContactId, CalendarFixtures.Now);
+        person.ChangePhone(new PhoneNumber("+79991234567"));
+        Assert.Equal(CalendarFixtures.Now, person.PhoneVerifiedAt);
+        Assert.Equal(CalendarFixtures.Now, person.PhoneConfirmedByOperatorAt);
 
-        Assert.Equal(CustomerSource.Chat, customer.Source);
-        Assert.Equal(sourceContactId, customer.SourceContactId);
-        Assert.Equal(CalendarFixtures.Now, customer.FirstSeenAt);
-        Assert.Equal(CalendarFixtures.Now, customer.LastSeenAt);
+        person.ChangePhone(new PhoneNumber("+79997654321"));
+        Assert.Equal("+79997654321", person.Phone.Value);
+        Assert.Null(person.PhoneVerifiedAt);
+        Assert.Null(person.PhoneConfirmedByOperatorAt);
     }
 
     [Fact]
-    public void Register_TheOrdinaryBookingPath_SetsSourceToBooking_WithNoSourceContactId()
+    public void RecordNoShow_CountsUp_AndMovesLastSeenForward()
     {
         var tenant = CalendarFixtures.Tenant();
-        var customer = CalendarFixtures.Customer(tenant);
+        var person = CalendarFixtures.Person(tenant);
 
-        Assert.Equal(CustomerSource.Booking, customer.Source);
-        Assert.Null(customer.SourceContactId);
+        person.RecordNoShow(CalendarFixtures.Now.AddDays(1));
+        person.RecordNoShow(CalendarFixtures.Now.AddDays(2));
+
+        Assert.Equal(2, person.NoShowCount);
+        Assert.Equal(CalendarFixtures.Now.AddDays(2), person.LastSeenAt);
     }
 }
-
-// `22-05`/`adr/0093`: RoleTests removed - Role and Operator are gone along with the `roles`/
-// `operators` tables they used to back. OperatorIdTests (this directory) covers what replaced them:
-// OperatorId.FromExternalSubjectId's own determinism.

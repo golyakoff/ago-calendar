@@ -8,7 +8,8 @@
 /// <param name="ServiceId">What the customer is booking. Exactly one in v1.</param>
 /// <param name="Phone">As typed. Normalised server-side, so a customer may write it any way they
 /// like and still reach the same lead card.</param>
-/// <param name="DisplayName">Optional. Never overwrites a name an operator already curated.</param>
+/// <param name="DisplayName">Optional. `adr/0184`: not stored by this product - it travels to the
+/// account's person registry (chat) on <c>PersonRegistered</c> for a booking with no chat origin.</param>
 /// <param name="PhoneVerificationId">
 /// `20-10`: the <c>pendingPhoneVerificationId</c> a prior
 /// <c>POST .../phone-verifications/{id}/confirm</c> call returned. Null for a returning customer whose

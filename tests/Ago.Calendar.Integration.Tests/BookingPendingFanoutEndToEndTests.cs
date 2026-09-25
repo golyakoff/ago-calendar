@@ -184,7 +184,7 @@ public sealed class BookingPendingFanoutEndToEndTests(BookingPendingFanoutFixtur
         await db.SaveChangesAsync();
 
         return new SeededTenant(
-            tenant, calendar, worker, service, Customer: null!, OperatorId: default, ExternalSubjectId: "");
+            tenant, calendar, worker, service, Person: null!, OperatorId: default, ExternalSubjectId: "");
     }
 
     private async Task<Event> APendingBookingAsync(SeededTenant seed)
@@ -194,14 +194,14 @@ public sealed class BookingPendingFanoutEndToEndTests(BookingPendingFanoutFixtur
         await using var db = fixture.CreateDbContext();
         await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
 
-        var customer = Customer.Register(new CustomerId(CalendarSeed.NewId()), seed.Tenant.Id, new PhoneNumber("+79996000001"), Now);
-        await new CustomerRepository(db).AddAsync(customer, CancellationToken.None);
+        var customer = PersonRecord.Register(CalendarSeed.NewId(), seed.Tenant.Id, new PhoneNumber("+79996000001"), Now);
+        await new PersonRecordRepository(db).AddAsync(customer, CancellationToken.None);
 
         // Constructed through the aggregate rather than through BookingStore, the identical shape
         // ConfirmationSweepTests' own APendingBookingAsync uses and for the identical reason: what
         // this test needs is a row that is genuinely PendingConfirmation, not a proof of the claim
         // path itself (BookingStoreTests already covers the claim's own half of this item's push).
-        slot.Claim(customer.Id, seed.Service.Id, Now, Now.AddMinutes(15));
+        slot.Claim(customer.PersonId, seed.Service.Id, Now, Now.AddMinutes(15));
         slot.ClearDomainEvents();
         await new EventRepository(db).SaveAsync(slot, CancellationToken.None);
 

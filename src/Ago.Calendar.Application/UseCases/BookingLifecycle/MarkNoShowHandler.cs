@@ -18,7 +18,7 @@ namespace Ago.Calendar.Application.UseCases.BookingLifecycle;
 /// <see cref="EventStatus.NoShow"/> yet and nothing enforces anything.</para>
 ///
 /// <para><b>A gap this handler deliberately leaves, stated rather than hidden.</b>
-/// <see cref="Customer.NoShowCount"/> and <see cref="Customer.RecordNoShow"/> exist since `20-01`,
+/// <see cref="PersonRecord.NoShowCount"/> and <see cref="PersonRecord.RecordNoShow"/> exist since `20-01`,
 /// whose <see cref="EventNoShowRecorded"/> doc comment names the lead card as this event's only
 /// consumer - but `20-04`'s own scope says "just the flag and its persistence", and incrementing a
 /// second aggregate in the same transaction needs a multi-aggregate port this item was not asked to

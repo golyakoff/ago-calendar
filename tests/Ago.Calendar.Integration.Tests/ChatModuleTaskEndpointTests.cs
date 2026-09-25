@@ -159,7 +159,7 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var bookedEventId = new EventId(Guid.Parse(slotAction.Value));
         var stored = await db.Events.SingleAsync(e => e.Id == bookedEventId);
         Assert.Equal(EventStatus.PendingConfirmation, stored.Status);
-        Assert.NotNull(stored.CustomerId);
+        Assert.NotNull(stored.PersonId);
     }
 
     /// <summary>
@@ -303,11 +303,11 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         await using var db = fixture.CreateDbContext();
         var bookedEventId = new EventId(Guid.Parse(slotAction.Value));
         var stored = await db.Events.SingleAsync(e => e.Id == bookedEventId);
-        Assert.NotNull(stored.CustomerId);
-        var customer = await db.Customers.SingleAsync(c => c.Id == stored.CustomerId!.Value);
-        Assert.Equal("+79997000099", customer.Phone.Value);
+        Assert.NotNull(stored.PersonId);
+        var person = await db.PersonRecords.SingleAsync(p => p.PersonId == stored.PersonId!.Value);
+        Assert.Equal("+79997000099", person.Phone.Value);
         // The record says the phone was never verified - not silently equivalent to a verified one.
-        Assert.Null(customer.PhoneVerifiedAt);
+        Assert.Null(person.PhoneVerifiedAt);
     }
 
     /// <summary>
@@ -448,10 +448,10 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         {
             var stolenSlot = await new EventRepository(db).GetByIdAsync(
                 new EventId(Guid.Parse(offeredSlotValues[0])), CancellationToken.None);
-            var customer = Customer.Register(
-                new CustomerId(CalendarSeed.NewId()), _seed.Tenant.Id, new PhoneNumber("+79997000002"), DateTimeOffset.UtcNow);
-            await new CustomerRepository(db).AddAsync(customer, CancellationToken.None);
-            stolenSlot!.Claim(customer.Id, _seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(15));
+            var person = PersonRecord.Register(
+                CalendarSeed.NewId(), _seed.Tenant.Id, new PhoneNumber("+79997000002"), DateTimeOffset.UtcNow);
+            await new PersonRecordRepository(db).AddAsync(person, CancellationToken.None);
+            stolenSlot!.Claim(person.PersonId, _seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(15));
             stolenSlot.ClearDomainEvents();
             await new EventRepository(db).SaveAsync(stolenSlot, CancellationToken.None);
         }

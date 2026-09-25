@@ -55,7 +55,7 @@ public sealed class BookingIdBackfillMigrationTests : IAsyncLifetime
         var calendarId = Guid.NewGuid();
         var workerId = Guid.CreateVersion7(DateTimeOffset.UtcNow);
         var serviceId = Guid.NewGuid();
-        var customerId = Guid.CreateVersion7(DateTimeOffset.UtcNow);
+        var personId = Guid.CreateVersion7(DateTimeOffset.UtcNow);
         var scheduleId = Guid.CreateVersion7(DateTimeOffset.UtcNow);
 
         // Four rows, covering every status this backfill has to tell apart: a row a claim already
@@ -123,9 +123,9 @@ public sealed class BookingIdBackfillMigrationTests : IAsyncLifetime
                 cmd.CommandText =
                     """
                     INSERT INTO customers (id, tenant_id, phone, no_show_count, first_seen_at, last_seen_at)
-                    VALUES (@customerId, @tenantId, '+79990000099', 0, now(), now())
+                    VALUES (@personId, @tenantId, '+79990000099', 0, now(), now())
                     """;
-                cmd.Parameters.AddWithValue("customerId", customerId);
+                cmd.Parameters.AddWithValue("personId", personId);
                 cmd.Parameters.AddWithValue("tenantId", tenantId);
                 await cmd.ExecuteNonQueryAsync();
             }
@@ -138,13 +138,13 @@ public sealed class BookingIdBackfillMigrationTests : IAsyncLifetime
                         (id, tenant_id, calendar_id, worker_id, service_id, customer_id, starts_at, ends_at,
                          local_date, status, confirmation_deadline, created_at)
                     VALUES
-                        (@pendingId, @tenantId, @calendarId, @workerId, @serviceId, @customerId,
+                        (@pendingId, @tenantId, @calendarId, @workerId, @serviceId, @personId,
                          now() + interval '1 day', now() + interval '1 day 30 minutes', current_date + 1,
                          'PendingConfirmation', now() + interval '15 minutes', now()),
-                        (@bookedId, @tenantId, @calendarId, @workerId, @serviceId, @customerId,
+                        (@bookedId, @tenantId, @calendarId, @workerId, @serviceId, @personId,
                          now() + interval '2 day', now() + interval '2 day 30 minutes', current_date + 2,
                          'Booked', NULL, now()),
-                        (@cancelledId, @tenantId, @calendarId, @workerId, @serviceId, @customerId,
+                        (@cancelledId, @tenantId, @calendarId, @workerId, @serviceId, @personId,
                          now() + interval '3 day', now() + interval '3 day 30 minutes', current_date + 3,
                          'Cancelled', NULL, now()),
                         (@availableId, @tenantId, @calendarId, @workerId, NULL, NULL,
@@ -159,7 +159,7 @@ public sealed class BookingIdBackfillMigrationTests : IAsyncLifetime
                 cmd.Parameters.AddWithValue("calendarId", calendarId);
                 cmd.Parameters.AddWithValue("workerId", workerId);
                 cmd.Parameters.AddWithValue("serviceId", serviceId);
-                cmd.Parameters.AddWithValue("customerId", customerId);
+                cmd.Parameters.AddWithValue("personId", personId);
                 await cmd.ExecuteNonQueryAsync();
             }
 

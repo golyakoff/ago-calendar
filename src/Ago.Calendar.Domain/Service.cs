@@ -37,7 +37,7 @@
 /// keeps <c>events.service_id</c> forever (cancelled and no-show rows included), and four read
 /// models resolve a booking's *service name* through <c>left join services s on s.id =
 /// e.service_id</c> - <c>PendingBookingReadStore</c>, <c>ConfirmedBookingReadStore</c>,
-/// <c>WorkerSlotReadStore</c>, <c>CustomerMergePreviewReadStore</c>. Deleting the row would blank
+/// <c>WorkerSlotReadStore</c>. Deleting the row would blank
 /// the service name on every past booking that ever used it, retroactively, in every screen that
 /// renders one. Refusing the delete instead ("option (b)") sounds safer and is worse: because those
 /// rows are never purged, a service booked even once could then never be withdrawn at all, which is
@@ -58,7 +58,7 @@ public sealed class Service
 
     /// <summary>Long enough for real marketing copy ("what this includes, how to prepare") and short
     /// enough that a service list stays a list - the same order of magnitude as
-    /// <see cref="Customer.Notes"/>'s own 4000, chosen smaller because this text is read by a stranger
+    /// the 4000 a free-text note gets elsewhere in this suite, chosen smaller because this text is read by a stranger
     /// deciding whether to book, not by an operator who already knows the shop.</summary>
     private const int MaxDescriptionLength = 1000;
 

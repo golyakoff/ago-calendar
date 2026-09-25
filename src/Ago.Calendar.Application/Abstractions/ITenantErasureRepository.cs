@@ -29,7 +29,7 @@ namespace Ago.Calendar.Application.Abstractions;
 ///
 /// <para><b>No object storage to reach.</b> `personal-data.md` predicted this - "erasure there is
 /// *easier*, because a person is a row rather than a substring of free text." Every table this product
-/// holds for a tenant (`customers`, `events`, `workers`, `operators`, `pending_phone_verifications`,
+/// holds for a tenant (`person_records`, `events`, `workers`, `operators`, `pending_phone_verifications`,
 /// `chat_module_registrations` and the rest of `Stage20CreateCalendarSchema`'s own foreign keys) cascades
 /// from <c>tenants</c> already - this port issues exactly one delete and lets the schema do the rest,
 /// unlike `Ago.Chat.Worker.SiteErasureJob`'s own bounded-batch, multi-step shape, which exists there

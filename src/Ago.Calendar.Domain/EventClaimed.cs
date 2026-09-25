@@ -11,7 +11,7 @@ public sealed record EventClaimed(
     CalendarId CalendarId,
     WorkerId WorkerId,
     ServiceId ServiceId,
-    CustomerId CustomerId,
+    Guid PersonId,
     TimeSlot Slot,
     DateTimeOffset ConfirmationDeadline,
     DateTimeOffset OccurredAt) : IDomainEvent;

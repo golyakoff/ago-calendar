@@ -901,7 +901,7 @@ public class ChatModuleTaskHandlerTests
                 // PhoneVerificationAssertionResolver's own short-circuit never touches either fake
                 // below - see PhoneVerificationAssertionResolver.ResolveAsync's own remarks.
                 new PhoneVerificationAssertionResolver(
-                    new FakeCustomerRepository(), new FakePendingPhoneVerificationRepository()),
+                    new FakePersonRecordRepository(), new FakePendingPhoneVerificationRepository()),
                 idGenerator, clock);
 
             // `22-04`: no more ChatModuleTaskOptions/ModuleCallCredentialOptions - StartModuleTaskHandler

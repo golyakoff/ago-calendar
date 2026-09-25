@@ -69,11 +69,8 @@ public interface IConfirmedBookingReadStore
 /// reasoning. Nullable only because the join itself is a <c>left join</c>, defensively, the same
 /// caution <see cref="WorkerSlotReadStore"/> takes for a foreign key nothing in this product's own
 /// rules lets go stale.</param>
-/// <param name="CustomerId">Resolves the lead card.</param>
-/// <param name="CustomerDisplayName">Null when the customer has never had a name recorded - an
-/// optional field on <see cref="Customer"/>, unrelated to this screen's own permission gate (every row
-/// here already passed <see cref="Permission.CustomerRead"/>, unlike <see cref="PendingBookingRow.Phone"/>'s
-/// two-reasons-for-null story).</param>
+/// <param name="PersonId">`adr/0184`: the opaque person id - the key the console reads the person's
+/// name through, from chat's own Person API; this product no longer serves a name.</param>
 /// <param name="StartsAt">The run's first slot.</param>
 /// <param name="EndsAt">Exclusive - the run's last slot, buffers included.</param>
 /// <param name="LocalDate">The business-local day (adr/0049).</param>
@@ -106,8 +103,7 @@ public readonly record struct ConfirmedBookingRow(
     string WorkerDisplayName,
     ServiceId ServiceId,
     string? ServiceName,
-    CustomerId CustomerId,
-    string? CustomerDisplayName,
+    Guid PersonId,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     DateOnly LocalDate,

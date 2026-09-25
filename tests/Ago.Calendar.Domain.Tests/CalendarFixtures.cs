@@ -25,8 +25,10 @@ internal static class CalendarFixtures
     public static Service Service(Tenant tenant, int minutes = 45, string name = "Haircut") =>
         Domain.Service.Create(new ServiceId(NewId()), tenant.Id, name, TimeSpan.FromMinutes(minutes));
 
-    public static Customer Customer(Tenant tenant, string phone = "+79991234567") =>
-        Domain.Customer.Register(new CustomerId(NewId()), tenant.Id, new PhoneNumber(phone), Now);
+    /// <summary>`adr/0184`: the thin operational record, under a person id minted the way a
+    /// no-chat-origin booking mints one.</summary>
+    public static PersonRecord Person(Tenant tenant, string phone = "+79991234567") =>
+        PersonRecord.Register(NewId(), tenant.Id, new PhoneNumber(phone), Now);
 
     public static Event AvailableSlot(
         Tenant tenant, BookingCalendar calendar, Worker worker, DateTimeOffset? startsAt = null)
@@ -41,10 +43,10 @@ internal static class CalendarFixtures
 
     /// <summary>An event carried all the way to <see cref="EventStatus.Booked"/> - the starting
     /// point for every "you cannot go back" test.</summary>
-    public static Event BookedSlot(Tenant tenant, BookingCalendar calendar, Worker worker, Customer customer, Service service)
+    public static Event BookedSlot(Tenant tenant, BookingCalendar calendar, Worker worker, PersonRecord person, Service service)
     {
         var slot = AvailableSlot(tenant, calendar, worker);
-        slot.Claim(customer.Id, service.Id, Now, Now.AddMinutes(15));
+        slot.Claim(person.PersonId, service.Id, Now, Now.AddMinutes(15));
         slot.Confirm(Now.AddMinutes(15));
         return slot;
     }

@@ -188,7 +188,7 @@ public class BookingRateLimitTests(ConcurrencyFixture fixture)
             // PhoneVerificationAssertionResolver.ResolveAsync is never actually invoked - real
             // repositories rather than fakes only because this test project has no access to
             // Ago.Calendar.Application.Tests' internal fakes across the assembly boundary.
-            new PhoneVerificationAssertionResolver(new CustomerRepository(db), new PendingPhoneVerificationRepository(db)),
+            new PhoneVerificationAssertionResolver(new PersonRecordRepository(db), new PendingPhoneVerificationRepository(db)),
             new UuidV7Generator(),
             new FixedClock(Now));
 

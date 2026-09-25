@@ -7,13 +7,13 @@ namespace Ago.Calendar.Domain;
 /// (`20-07`) rather than the widget calling <see cref="Event"/>'s own handlers directly page by page.
 ///
 /// <para><b>Why this is a new aggregate rather than fields on <see cref="Event"/> or
-/// <see cref="Customer"/>.</b> This is chat-orchestration state - which primitive was last sent and
+/// <see cref="PersonRecord"/>.</b> This is chat-orchestration state - which primitive was last sent and
 /// what has been picked so far in <i>this</i> exchange - not booking-domain state. <see cref="Event"/>
 /// already has a state machine with no "half-picked" status, and it should not grow one for a UI
 /// concern: <c>Available -&gt; PendingConfirmation</c> only happens once the whole thing is decided,
 /// through <see cref="BookingCalendar"/>'s own <c>IBookingStore.TryBookAsync</c> compare-and-set, and
 /// that write is unaware this task ever existed. A row here can be abandoned mid-flow (a visitor who
-/// never replies) and that must not touch a single <see cref="Event"/> or <see cref="Customer"/> row -
+/// never replies) and that must not touch a single <see cref="Event"/> or <see cref="PersonRecord"/> row -
 /// the two lifecycles are genuinely independent, which is the sharpest test for "does this belong on
 /// the aggregate it is about" (clean-architecture.md).</para>
 ///

@@ -5,7 +5,7 @@
 public sealed record EventCancelled(
     EventId EventId,
     TenantId TenantId,
-    CustomerId? CustomerId,
+    Guid? PersonId,
     TimeSlot Slot,
     CancellationReason Reason,
     DateTimeOffset OccurredAt) : IDomainEvent;

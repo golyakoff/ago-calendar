@@ -12,7 +12,7 @@
 ///
 /// <para><b>Ids for anything with a life of its own, values for what is immutably true of this
 /// booking.</b> That is the rule the field list follows.
-/// <see cref="CustomerId"/> resolves to whatever the lead card says at the moment a consumer reads it
+/// <see cref="PersonId"/> resolves to whatever the person's record says at the moment a consumer reads it
 /// - including "no longer there", which is the correct answer after an erasure. A copied name or
 /// phone number would be a snapshot that outlives the row it came from.
 /// <see cref="StartsAt"/>/<see cref="EndsAt"/>/<see cref="LocalDate"/> are values because they cannot
@@ -22,7 +22,7 @@
 ///
 /// <para><b>No phone number, and this is a rule rather than an omission.</b> An integration event
 /// crosses a broker and is read by consumers this product does not control; `20-05` looks the phone
-/// up from <see cref="CustomerId"/> at send time. The same reasoning <c>api-design.md</c> gives for a
+/// up from <see cref="PersonId"/> at send time. The same reasoning <c>api-design.md</c> gives for a
 /// webhook payload carrying no message body: what leaves the write path is what an erasure request
 /// can no longer reach. The outbox table nothing prunes is the concrete cost of getting this
 /// wrong.</para>
@@ -37,7 +37,8 @@
 /// <c>events.tenant_id</c> is carried on the row - a consumer must not have to join to find out which
 /// tenant a message concerns.</param>
 /// <param name="CalendarId">Resolves the IANA zone a time is rendered in.</param>
-/// <param name="CustomerId">Resolves the lead card, and therefore the phone number, at send time.</param>
+/// <param name="PersonId">`adr/0184`: the opaque person id - resolves the calendar's own thin record,
+/// and therefore the phone number, at send time.</param>
 /// <param name="StartsAt">ISO-8601 with an explicit offset, UTC on the wire (date-and-time.md).</param>
 /// <param name="EndsAt">Exclusive, matching <c>TimeSlot</c>'s own half-open bound.</param>
 /// <param name="LocalDate">The business-local day, as the shop names it - stored rather than derived
@@ -49,7 +50,7 @@ public sealed record BookingConfirmed(
     Guid EventId,
     Guid TenantId,
     Guid CalendarId,
-    Guid CustomerId,
+    Guid PersonId,
     DateTimeOffset StartsAt,
     DateTimeOffset EndsAt,
     DateOnly LocalDate,

@@ -52,7 +52,7 @@ public sealed class PendingPhoneVerification
 
     /// <summary>Canonical E.164 form (<see cref="PhoneNumber"/>) - the one normalised string reused
     /// unchanged for the rate-limit key, this column, and the eventual <c>BookingAttempt.PhoneVerifiedAt</c>
-    /// comparison, exactly as `20-09`'s own <c>Customer.Phone</c> already establishes for this
+    /// comparison, exactly as `20-09`'s own <c>PersonRecord.Phone</c> already establishes for this
     /// product.</summary>
     public string Phone { get; } = string.Empty;
 

@@ -71,7 +71,7 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
                     await WriteWorkersAsync(archive, connection, tenantId, cancellationToken);
                     await WriteWorkingHoursRulesAsync(archive, connection, tenantId, cancellationToken);
                     await WriteServicesAsync(archive, connection, tenantId, cancellationToken);
-                    await WriteCustomersAsync(archive, connection, tenantId, cancellationToken);
+                    await WritePersonRecordsAsync(archive, connection, tenantId, cancellationToken);
                     await WriteEventsAsync(archive, connection, tenantId, cancellationToken);
 
                     await WriteManifestAsync(archive, tenantId, tenantExisted, clock.UtcNow, cancellationToken);
@@ -117,7 +117,7 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
             tenantId.Value,
             exportedAt,
             tenantExisted,
-            Stores: ["tenant", "calendars", "workers", "workingHoursRules", "services", "customers", "events"]);
+            Stores: ["tenant", "calendars", "workers", "workingHoursRules", "services", "personRecords", "events"]);
 
         var entry = archive.CreateEntry("manifest.json", CompressionLevel.Fastest);
         await using var entryStream = entry.Open();
@@ -273,44 +273,39 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
         }
     }
 
-    /// <summary>The one entity `personal-data.md` names as the sole natural-person data this product
-    /// holds (<see cref="Customer"/>'s own remarks) - phone, display name and free-text notes travel
-    /// unmasked, unlike <c>ContactsReadStore</c>'s own console-facing read, because a tenant exporting
-    /// their own data is not the "an operator without <c>customer:read</c>" case that store's masking
-    /// exists for.</summary>
-    private static async Task WriteCustomersAsync(
+    /// <summary>`adr/0184`: the one entity `personal-data.md` names as the natural-person data this
+    /// product still holds (<see cref="PersonRecord"/>'s own remarks) - the phone travels unmasked,
+    /// unlike <c>ContactsReadStore</c>'s own console-facing read, because a tenant exporting their own
+    /// data is not the "an operator without <c>customer:read</c>" case that store's masking exists for.
+    /// The person's name and notes are not here because this product does not hold them; chat's own
+    /// export is where they live.</summary>
+    private static async Task WritePersonRecordsAsync(
         ZipArchive archive, NpgsqlConnection connection, TenantId tenantId, CancellationToken cancellationToken)
     {
         const string sql = """
-            select id, phone, source, source_contact_id, display_name, notes, phone_verified_at,
-                   operator_confirmed_phone_at, no_show_count, first_seen_at, last_seen_at,
-                   merged_into_customer_id, merged_at
-            from customers
+            select person_id, phone, phone_verified_at, operator_confirmed_phone_at, no_show_count,
+                   first_seen_at, last_seen_at
+            from person_records
             where tenant_id = @tenantId
-            order by id
+            order by person_id
             """;
         await using var command = new NpgsqlCommand(sql, connection);
         command.Parameters.AddWithValue("tenantId", tenantId.Value);
 
-        var entry = archive.CreateEntry("customers.jsonl", CompressionLevel.Fastest);
+        var entry = archive.CreateEntry("person_records.jsonl", CompressionLevel.Fastest);
         await using var entryStream = entry.Open();
         await using var writer = new StreamWriter(entryStream, Encoding.UTF8);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            var row = new CustomerExportRow(
-                reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetGuid(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
-                reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7),
-                reader.GetInt32(8),
-                reader.GetFieldValue<DateTimeOffset>(9),
-                reader.GetFieldValue<DateTimeOffset>(10),
-                reader.IsDBNull(11) ? null : reader.GetGuid(11),
-                reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12));
+            var row = new PersonRecordExportRow(
+                reader.GetGuid(0), reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetFieldValue<DateTimeOffset>(2),
+                reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+                reader.GetInt32(4),
+                reader.GetFieldValue<DateTimeOffset>(5),
+                reader.GetFieldValue<DateTimeOffset>(6));
             await writer.WriteLineAsync(JsonSerializer.Serialize(row, JsonOptions));
         }
     }
@@ -319,8 +314,8 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
         ZipArchive archive, NpgsqlConnection connection, TenantId tenantId, CancellationToken cancellationToken)
     {
         const string sql = """
-            select id, calendar_id, worker_id, service_id, customer_id, booking_id, starts_at, ends_at,
-                   local_date, status, confirmation_deadline, created_at
+            select id, calendar_id, worker_id, service_id, person_id, booking_id, starts_at, ends_at,
+                   local_date, status, confirmation_deadline, created_at, origin_conversation_id
             from events
             where tenant_id = @tenantId
             order by starts_at, id
@@ -343,7 +338,8 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
                 reader.GetFieldValue<DateTimeOffset>(6), reader.GetFieldValue<DateTimeOffset>(7),
                 reader.GetFieldValue<DateOnly>(8), reader.GetString(9),
                 reader.IsDBNull(10) ? null : reader.GetFieldValue<DateTimeOffset>(10),
-                reader.GetFieldValue<DateTimeOffset>(11));
+                reader.GetFieldValue<DateTimeOffset>(11),
+                reader.IsDBNull(12) ? null : reader.GetGuid(12));
             await writer.WriteLineAsync(JsonSerializer.Serialize(row, JsonOptions));
         }
     }
@@ -371,13 +367,12 @@ public sealed class TenantDataExportWriter(NpgsqlDataSource dataSource, IClock c
         Guid Id, string Name, int DurationMinutes, string? Description, long? PriceMinorUnits,
         string? PriceCurrencyCode, bool PriceIsFrom, bool IsActive);
 
-    private sealed record CustomerExportRow(
-        Guid Id, string Phone, string Source, Guid? SourceContactId, string? DisplayName, string? Notes,
-        DateTimeOffset? PhoneVerifiedAt, DateTimeOffset? PhoneConfirmedByOperatorAt, int NoShowCount,
-        DateTimeOffset FirstSeenAt, DateTimeOffset LastSeenAt, Guid? MergedIntoCustomerId, DateTimeOffset? MergedAt);
+    private sealed record PersonRecordExportRow(
+        Guid PersonId, string Phone, DateTimeOffset? PhoneVerifiedAt, DateTimeOffset? PhoneConfirmedByOperatorAt,
+        int NoShowCount, DateTimeOffset FirstSeenAt, DateTimeOffset LastSeenAt);
 
     private sealed record EventExportRow(
-        Guid Id, Guid CalendarId, Guid WorkerId, Guid? ServiceId, Guid? CustomerId, Guid? BookingId,
+        Guid Id, Guid CalendarId, Guid WorkerId, Guid? ServiceId, Guid? PersonId, Guid? BookingId,
         DateTimeOffset StartsAt, DateTimeOffset EndsAt, DateOnly LocalDate, string Status,
-        DateTimeOffset? ConfirmationDeadline, DateTimeOffset CreatedAt);
+        DateTimeOffset? ConfirmationDeadline, DateTimeOffset CreatedAt, Guid? OriginConversationId);
 }

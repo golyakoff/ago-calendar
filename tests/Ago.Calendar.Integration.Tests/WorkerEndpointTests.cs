@@ -184,7 +184,7 @@ public class WorkerEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         var slot = Event.Materialize(
             new EventId(CalendarSeed.NewId()), seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id,
             new TimeSlot(start, start.AddMinutes(45)), DateOnly.FromDateTime(start.UtcDateTime), CalendarSeed.Now);
-        slot.Claim(seed.Customer.Id, seed.Service.Id, start.AddMinutes(-30), start.AddMinutes(-15));
+        slot.Claim(seed.Person.PersonId, seed.Service.Id, start.AddMinutes(-30), start.AddMinutes(-15));
         slot.Confirm(start.AddMinutes(-15));
         slot.MarkNoShow(start.AddMinutes(50));
         slot.ClearDomainEvents();
@@ -262,7 +262,7 @@ public class WorkerEndpointTests(PostgresFixture fixture) : IAsyncLifetime
             new EventId(CalendarSeed.NewId()), seed.Tenant.Id, seed.Calendar.Id, seed.Worker.Id,
             new TimeSlot(startsAt, startsAt.AddMinutes(45)), DateOnly.FromDateTime(startsAt.UtcDateTime),
             DateTimeOffset.UtcNow);
-        slot.Claim(seed.Customer.Id, seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2));
+        slot.Claim(seed.Person.PersonId, seed.Service.Id, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2));
         slot.ClearDomainEvents();
 
         await using var db = fixture.CreateDbContext();

@@ -90,24 +90,35 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         var mine = await CalendarSeed.WriteAsync(fixture);
         var theirs = await CalendarSeed.WriteAsync(fixture);
 
-        // The same person books at two different shops: two cards, no collision. This is the half of
-        // the index that a global unique constraint would have got wrong.
+        // The same number books at two different shops: two records, no collision - one tenant's
+        // operational facts never reach another's.
         await using (var db = fixture.CreateDbContext())
         {
-            Assert.Equal(mine.Customer.Phone, theirs.Customer.Phone);
-            Assert.NotEqual(mine.Customer.Id, theirs.Customer.Id);
-            Assert.Equal(1, await db.Customers.CountAsync(
-                c => c.Phone == mine.Customer.Phone && c.TenantId == mine.Tenant.Id));
-            Assert.Equal(1, await db.Customers.CountAsync(
-                c => c.Phone == mine.Customer.Phone && c.TenantId == theirs.Tenant.Id));
+            Assert.Equal(mine.Person.Phone, theirs.Person.Phone);
+            Assert.NotEqual(mine.Person.PersonId, theirs.Person.PersonId);
+            Assert.Equal(1, await db.PersonRecords.CountAsync(
+                p => p.Phone == mine.Person.Phone && p.TenantId == mine.Tenant.Id));
+            Assert.Equal(1, await db.PersonRecords.CountAsync(
+                p => p.Phone == mine.Person.Phone && p.TenantId == theirs.Tenant.Id));
         }
 
-        // The same person twice inside one tenant: one card, and the storage says so even when the
-        // application forgot to look first.
+        // `adr/0184`: the same number twice inside one tenant is two records under two person ids, and
+        // the storage allows it - a phone is a hint, not proof (`adr/0147`), and identity is the opaque
+        // person id, never the number. The unique (tenant_id, phone) index `customers` had is gone with it.
         await using (var db = fixture.CreateDbContext())
         {
-            db.Customers.Add(Customer.Register(
-                new CustomerId(CalendarSeed.NewId()), mine.Tenant.Id, mine.Customer.Phone, CalendarSeed.Now));
+            db.PersonRecords.Add(PersonRecord.Register(CalendarSeed.NewId(), mine.Tenant.Id, mine.Person.Phone, CalendarSeed.Now));
+            await db.SaveChangesAsync();
+
+            Assert.Equal(2, await db.PersonRecords.CountAsync(
+                p => p.Phone == mine.Person.Phone && p.TenantId == mine.Tenant.Id));
+        }
+
+        // What IS unique is the person id itself: the same person twice is one row, and the storage
+        // says so even when the application forgot to look first.
+        await using (var db = fixture.CreateDbContext())
+        {
+            db.PersonRecords.Add(PersonRecord.Register(mine.Person.PersonId, mine.Tenant.Id, mine.Person.Phone, CalendarSeed.Now));
 
             var failure = await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
             Assert.Equal(
@@ -226,7 +237,7 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         {
             var repository = new EventRepository(db);
             await repository.AddRangeAsync([available, cancelled], CancellationToken.None);
-            cancelled.Claim(seed.Customer.Id, seed.Service.Id, CalendarSeed.Now, CalendarSeed.Now.AddMinutes(15));
+            cancelled.Claim(seed.Person.PersonId, seed.Service.Id, CalendarSeed.Now, CalendarSeed.Now.AddMinutes(15));
             cancelled.Cancel(CalendarSeed.Now.AddMinutes(1));
             await repository.SaveAsync(cancelled, CancellationToken.None);
         }

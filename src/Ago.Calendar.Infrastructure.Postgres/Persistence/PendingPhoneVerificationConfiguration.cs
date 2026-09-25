@@ -17,7 +17,7 @@ internal sealed class PendingPhoneVerificationConfiguration : IEntityTypeConfigu
         // A plain string column, not IdConverters.Phone: this row's own Phone is compared against a
         // caller-supplied raw phone number by PendingPhoneVerification.IsProofValid, and the aggregate
         // itself already normalises through PhoneNumber before that comparison ever runs (the same
-        // "canonical string in, canonical string compared" shape Customer.Phone follows via
+        // "canonical string in, canonical string compared" shape PersonRecord.Phone follows via
         // IdConverters.Phone) - kept as a plain string here only because the aggregate's own
         // constructor stores PhoneNumber.Value directly rather than a PhoneNumber, mirroring `ago-chat`'s
         // own PendingPhoneVerification.Phone column exactly.

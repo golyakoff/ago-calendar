@@ -57,7 +57,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
     }
 
     [Fact]
-    public async Task AnOccupiedSlot_ShowsNameAndPhone_ToACallerHoldingCustomerRead()
+    public async Task AnOccupiedSlot_ShowsThePhone_ToACallerHoldingCustomerRead()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
         var booking = await ABookedSlotAsync(seed, new DateTimeOffset(2026, 5, 12, 9, 0, 0, TimeSpan.Zero));
@@ -66,16 +66,16 @@ public class WorkerSlotsTests(PostgresFixture fixture)
 
         var row = Assert.Single(rows);
         Assert.Equal(booking.Id, row.EventId);
-        Assert.Equal(seed.Customer.Id, row.CustomerId);
+        Assert.Equal(seed.Person.PersonId, row.PersonId);
         Assert.NotNull(row.Phone);
-        Assert.Equal(seed.Customer.Phone.Value, row.Phone);
+        Assert.Equal(seed.Person.Phone.Value, row.Phone);
     }
 
     [Fact]
-    public async Task TheSameOccupiedSlot_ShowsCustomerIdButHidesNameAndPhone_ToACallerWithoutCustomerRead()
+    public async Task TheSameOccupiedSlot_ShowsPersonIdButHidesThePhone_ToACallerWithoutCustomerRead()
     {
         // `20-12`'s own Done-when, restated for this screen: one underlying booking, two callers, two
-        // different answers about the same two fields - and CustomerId is what proves this is a
+        // different answers about the same field - and PersonId is what proves this is a
         // masking of the *same* row, not a different, filtered one.
         var seed = await CalendarSeed.WriteAsync(fixture);
         var booking = await ABookedSlotAsync(seed, new DateTimeOffset(2026, 5, 12, 9, 0, 0, TimeSpan.Zero));
@@ -85,15 +85,14 @@ public class WorkerSlotsTests(PostgresFixture fixture)
 
         var row = Assert.Single(rows);
         Assert.Equal(booking.Id, row.EventId);
-        // The slot is still shown as occupied - CustomerId is never gated, because it is not personal
-        // data - but the two fields that are stay null, never a stand-in value.
-        Assert.Equal(seed.Customer.Id, row.CustomerId);
-        Assert.Null(row.CustomerDisplayName);
+        // The slot is still shown as occupied - PersonId is never gated, because it is not personal
+        // data - but the phone, which is, stays null, never a stand-in value.
+        Assert.Equal(seed.Person.PersonId, row.PersonId);
         Assert.Null(row.Phone);
     }
 
     [Fact]
-    public async Task AFreeSlot_HasNoCustomerIdEitherWay_SoItIsNeverMistakenForAWithheldOne()
+    public async Task AFreeSlot_HasNoPersonIdEitherWay_SoItIsNeverMistakenForAWithheldOne()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
         var free = CalendarSeed.Slot(seed, new DateTimeOffset(2026, 5, 12, 9, 0, 0, TimeSpan.Zero));
@@ -107,7 +106,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
         var rows = await SlotsAsync(stranger, seed.Tenant.Id, seed.Worker.Id);
 
         var row = Assert.Single(rows);
-        Assert.Null(row.CustomerId);
+        Assert.Null(row.PersonId);
         Assert.Null(row.Phone);
     }
 
@@ -167,23 +166,23 @@ public class WorkerSlotsTests(PostgresFixture fixture)
 
     /// <summary>
     /// **The critical proof**: not merely that this store's own C# happens to null out the contact
-    /// columns, but that the unpermitted SQL constant genuinely never reaches <c>customers</c> at the
+    /// columns, but that the unpermitted SQL constant genuinely never reaches <c>person_records</c> at the
     /// database level. A Postgres role granted <c>SELECT</c> on <c>events</c> and <c>services</c> but
-    /// not on <c>customers</c> can run <see cref="WorkerSlotReadStore.GetForWorkerAsync"/> with
+    /// not on <c>person_records</c> can run <see cref="WorkerSlotReadStore.GetForWorkerAsync"/> with
     /// <c>includeContactData: false</c> to completion - which would be impossible if that query ever
-    /// touched <c>customers</c>, privileged connection or not, since Postgres enforces table grants
+    /// touched <c>person_records</c>, privileged connection or not, since Postgres enforces table grants
     /// regardless of what a query planner might otherwise be able to skip. The same role then fails
     /// with <c>42501 insufficient_privilege</c> the moment it asks for contact data, which is what
     /// proves the split is real - the two constants are not parallel dead code where one of them
     /// happens to never run.
     /// </summary>
     [Fact]
-    public async Task TheUnpermittedQuery_TrulyNeverReadsCustomers_NotJustMasksTheResultInCSharp()
+    public async Task TheUnpermittedQuery_TrulyNeverReadsPersonRecords_NotJustMasksTheResultInCSharp()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
         await ABookedSlotAsync(seed, new DateTimeOffset(2026, 5, 12, 9, 0, 0, TimeSpan.Zero));
 
-        var (roleName, password) = await ARoleWithoutCustomersSelectAsync();
+        var (roleName, password) = await ARoleWithoutPersonRecordsSelectAsync();
         var restrictedConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
         {
             Username = roleName,
@@ -193,21 +192,21 @@ public class WorkerSlotsTests(PostgresFixture fixture)
         await using var restrictedDataSource = NpgsqlDataSource.Create(restrictedConnectionString);
         var store = new WorkerSlotReadStore(restrictedDataSource);
 
-        // The unpermitted query succeeds under a role that is denied SELECT on customers - which it
+        // The unpermitted query succeeds under a role that is denied SELECT on person_records - which it
         // could not do if the query ever named that table.
         var rows = await store.GetForWorkerAsync(
             seed.Tenant.Id, seed.Worker.Id, From, To, includeContactData: false, mask: false, CancellationToken.None);
         Assert.Single(rows);
 
         // The *same* role, asked for contact data, hits the table it was denied - proving
-        // SqlWithContactData really does join customers, so the split above is not two branches that
+        // SqlWithContactData really does join person_records, so the split above is not two branches that
         // happen to produce the same SQL.
         var denied = await Assert.ThrowsAsync<PostgresException>(() => store.GetForWorkerAsync(
             seed.Tenant.Id, seed.Worker.Id, From, To, includeContactData: true, mask: false, CancellationToken.None));
         Assert.Equal("42501", denied.SqlState);
     }
 
-    private async Task<(string RoleName, string Password)> ARoleWithoutCustomersSelectAsync()
+    private async Task<(string RoleName, string Password)> ARoleWithoutPersonRecordsSelectAsync()
     {
         var roleName = $"restricted_{CalendarSeed.NewId():N}"[..28];
         var password = CalendarSeed.NewId().ToString("N");
@@ -254,7 +253,7 @@ public class WorkerSlotsTests(PostgresFixture fixture)
         db.Events.Add(slot);
         await db.SaveChangesAsync();
 
-        slot.Claim(seed.Customer.Id, seed.Service.Id, Now, Now.AddMinutes(30));
+        slot.Claim(seed.Person.PersonId, seed.Service.Id, Now, Now.AddMinutes(30));
         slot.ClearDomainEvents();
         await db.SaveChangesAsync();
 

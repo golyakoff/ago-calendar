@@ -188,18 +188,18 @@ public class OriginAuthorizationTests(PostgresFixture fixture) : IAsyncLifetime
     /// <summary><c>await</c> inside the <c>using</c>: returning the task would dispose the request -
     /// and its content stream - before TestHost had finished reading it.
     ///
-    /// <para>`20-10`: pre-seeds an already-verified <see cref="Customer"/> row for <paramref name="seed"/>'s
+    /// <para>`20-10`: pre-seeds an already-verified <see cref="PersonRecord"/> row for <paramref name="seed"/>'s
     /// own tenant, the same returning-customer-shortcut approach <c>BookingEndpointTests.BookAsync</c>'s
     /// own remarks explain - this file's own concern is the origin boundary, not phone verification,
     /// and every booking call here now has to clear that gate regardless.</para>
     /// </summary>
     private async Task<HttpResponseMessage> BookAsync(SeededTenant seed, Event slot, string? origin, string phone)
     {
-        var customer = Customer.Register(new CustomerId(Guid.CreateVersion7()), seed.Tenant.Id, new PhoneNumber(phone), CalendarSeed.Now);
+        var customer = PersonRecord.Register(Guid.CreateVersion7(), seed.Tenant.Id, new PhoneNumber(phone), CalendarSeed.Now);
         customer.RecordVerifiedPhone(CalendarSeed.Now);
         await using (var db = fixture.CreateDbContext())
         {
-            db.Customers.Add(customer);
+            db.PersonRecords.Add(customer);
             await db.SaveChangesAsync();
         }
 

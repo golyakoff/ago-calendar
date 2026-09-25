@@ -20,7 +20,8 @@ public sealed class AgoCalendarDbContext(DbContextOptions<AgoCalendarDbContext> 
     public DbSet<Worker> Workers => Set<Worker>();
     public DbSet<Service> Services => Set<Service>();
     public DbSet<BookingCalendar> Calendars => Set<BookingCalendar>();
-    public DbSet<Customer> Customers => Set<Customer>();
+    // `adr/0184`: the thin, person-id-keyed operational record that replaced the `customers` copy.
+    public DbSet<PersonRecord> PersonRecords => Set<PersonRecord>();
     public DbSet<WorkingHoursRule> WorkingHoursRules => Set<WorkingHoursRule>();
 
     /// <summary>`20-14`: one worker's own schedule template - slot length, buffer, horizon, and

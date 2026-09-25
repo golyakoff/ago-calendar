@@ -240,7 +240,7 @@ public class RecutScheduleTests(PostgresFixture fixture)
             .FirstAsync();
 
         var claimedAt = target.StartsAt - TimeSpan.FromHours(1);
-        target.Claim(seed.Customer.Id, seed.Service.Id, claimedAt, claimedAt.AddMinutes(15));
+        target.Claim(seed.Person.PersonId, seed.Service.Id, claimedAt, claimedAt.AddMinutes(15));
         target.ClearDomainEvents();
         target.Confirm(claimedAt.AddMinutes(5));
         target.ClearDomainEvents();
@@ -284,7 +284,7 @@ public class RecutScheduleTests(PostgresFixture fixture)
             .OrderBy(e => e.StartsAt)
             .FirstAsync();
 
-        target.Claim(seed.Customer.Id, seed.Service.Id, Monday, Monday.AddMinutes(15));
+        target.Claim(seed.Person.PersonId, seed.Service.Id, Monday, Monday.AddMinutes(15));
         target.ClearDomainEvents();
         await new EventRepository(db).SaveAsync(target, CancellationToken.None);
         return target;

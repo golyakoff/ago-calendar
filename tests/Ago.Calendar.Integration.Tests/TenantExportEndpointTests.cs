@@ -54,10 +54,10 @@ public sealed class TenantExportEndpointTests(PostgresFixture fixture) : IAsyncL
             await connection.ExecuteAsync(
                 """
                 insert into events
-                    (id, tenant_id, calendar_id, worker_id, service_id, customer_id, status,
+                    (id, tenant_id, calendar_id, worker_id, service_id, person_id, status,
                      starts_at, ends_at, local_date, created_at)
                 values
-                    (@id, @tenantId, @calendarId, @workerId, @serviceId, @customerId, 'Confirmed',
+                    (@id, @tenantId, @calendarId, @workerId, @serviceId, @personId, 'Confirmed',
                      @startsAt, @endsAt, (@startsAt at time zone 'utc')::date, @now)
                 """,
                 new
@@ -67,7 +67,7 @@ public sealed class TenantExportEndpointTests(PostgresFixture fixture) : IAsyncL
                     calendarId = seed.Calendar.Id.Value,
                     workerId = seed.Worker.Id.Value,
                     serviceId = seed.Service.Id.Value,
-                    customerId = seed.Customer.Id.Value,
+                    personId = seed.Person.PersonId,
                     startsAt = CalendarSeed.Now,
                     endsAt = CalendarSeed.Now.AddMinutes(45),
                     now = CalendarSeed.Now,
@@ -104,10 +104,10 @@ public sealed class TenantExportEndpointTests(PostgresFixture fixture) : IAsyncL
         var services = await ReadJsonLinesAsync(archive, "services.jsonl");
         Assert.Equal(seed.Service.Id.Value, Assert.Single(services).GetProperty("id").GetGuid());
 
-        var customers = await ReadJsonLinesAsync(archive, "customers.jsonl");
-        var customerRow = Assert.Single(customers);
-        Assert.Equal(seed.Customer.Id.Value, customerRow.GetProperty("id").GetGuid());
-        Assert.Equal("+79991234567", customerRow.GetProperty("phone").GetString());
+        var persons = await ReadJsonLinesAsync(archive, "person_records.jsonl");
+        var personRow = Assert.Single(persons);
+        Assert.Equal(seed.Person.PersonId, personRow.GetProperty("personId").GetGuid());
+        Assert.Equal("+79991234567", personRow.GetProperty("phone").GetString());
 
         var events = await ReadJsonLinesAsync(archive, "events.jsonl");
         Assert.Equal(eventId, Assert.Single(events).GetProperty("id").GetGuid());
@@ -132,7 +132,7 @@ public sealed class TenantExportEndpointTests(PostgresFixture fixture) : IAsyncL
         var tenant = await ReadJsonAsync(archive, "tenant.json");
         Assert.Equal(JsonValueKind.Null, tenant.ValueKind);
 
-        Assert.Empty(await ReadJsonLinesAsync(archive, "customers.jsonl"));
+        Assert.Empty(await ReadJsonLinesAsync(archive, "person_records.jsonl"));
         Assert.Empty(await ReadJsonLinesAsync(archive, "events.jsonl"));
     }
 

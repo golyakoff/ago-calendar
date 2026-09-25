@@ -24,7 +24,7 @@ public sealed class ConfirmedBookingReadStore(NpgsqlDataSource dataSource) : ICo
     /// why a booked worker can never be deleted, only deactivated). <c>services</c> stays a
     /// <c>left join</c>, the same defensive caution <c>WorkerSlotReadStore</c> takes for a foreign key
     /// this product's own rules do not otherwise let go stale - cheaper to leave nullable than to
-    /// assert a second invariant nothing enforces today. <c>customers</c> is joined unconditionally
+    /// assert a second invariant nothing enforces today. <c>person_records</c> is joined unconditionally
     /// too: <see cref="IConfirmedBookingReadStore"/>'s own remarks explain why this store has no
     /// contact-free caller to spare a join for.
     ///
@@ -38,19 +38,19 @@ public sealed class ConfirmedBookingReadStore(NpgsqlDataSource dataSource) : ICo
         """
         select e.booking_id as "EventId", e.calendar_id as "CalendarId", e.worker_id as "WorkerId",
                w.display_name as "WorkerDisplayName", e.service_id as "ServiceId", s.name as "ServiceName",
-               e.customer_id as "CustomerId", c.display_name as "CustomerDisplayName",
+               e.person_id as "PersonId",
                min(e.starts_at) as "StartsAt", max(e.ends_at) as "EndsAt", e.local_date as "LocalDate",
-               c.phone as "Phone", e.origin_conversation_id as "OriginConversationId"
+               p.phone as "Phone", e.origin_conversation_id as "OriginConversationId"
         from events e
         join workers w on w.id = e.worker_id
         left join services s on s.id = e.service_id
-        left join customers c on c.id = e.customer_id
+        left join person_records p on p.person_id = e.person_id
         where e.tenant_id = @TenantId
           and e.status = 'Booked'
           and e.local_date >= @From::date
           and e.local_date <= @To::date
         group by e.booking_id, e.calendar_id, e.worker_id, w.display_name, e.service_id, s.name,
-                 e.customer_id, c.display_name, e.local_date, c.phone, e.origin_conversation_id
+                 e.person_id, e.local_date, p.phone, e.origin_conversation_id
         order by e.local_date, w.display_name, min(e.starts_at)
         """;
 
@@ -79,15 +79,14 @@ public sealed class ConfirmedBookingReadStore(NpgsqlDataSource dataSource) : ICo
         new CalendarId(row.CalendarId),
         new WorkerId(row.WorkerId),
         row.WorkerDisplayName,
-        // Non-null on any Booked row - Event.Claim sets it together with the customer, and no
+        // Non-null on any Booked row - Event.Claim sets it together with the person, and no
         // transition ever clears it. Asserted with `!`, the identical shape
         // PendingBookingReadStore.ToRow already uses for the same two columns: a null here would mean
         // the state machine had been bypassed, and inventing an empty id would hide that instead of
         // surfacing it.
         new ServiceId(row.ServiceId!.Value),
         row.ServiceName,
-        new CustomerId(row.CustomerId!.Value),
-        row.CustomerDisplayName,
+        row.PersonId!.Value,
         new DateTimeOffset(DateTime.SpecifyKind(row.StartsAt, DateTimeKind.Utc)),
         new DateTimeOffset(DateTime.SpecifyKind(row.EndsAt, DateTimeKind.Utc)),
         row.LocalDate,
@@ -112,8 +111,7 @@ public sealed class ConfirmedBookingReadStore(NpgsqlDataSource dataSource) : ICo
         string WorkerDisplayName,
         Guid? ServiceId,
         string? ServiceName,
-        Guid? CustomerId,
-        string? CustomerDisplayName,
+        Guid? PersonId,
         DateTime StartsAt,
         DateTime EndsAt,
         DateOnly LocalDate,

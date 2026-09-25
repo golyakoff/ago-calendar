@@ -98,7 +98,7 @@ public class PhoneVerificationEndpointTests(PostgresFixture fixture) : IAsyncLif
         // now satisfies BookingStore's own "returning customer" shortcut for a future booking too.
         await using (var db = fixture.CreateDbContext())
         {
-            var customer = await db.Customers.SingleAsync(c => c.TenantId == seed.Tenant.Id && c.Phone == new PhoneNumber(phone));
+            var customer = await db.PersonRecords.SingleAsync(c => c.TenantId == seed.Tenant.Id && c.Phone == new PhoneNumber(phone));
             Assert.NotNull(customer.PhoneVerifiedAt);
         }
     }

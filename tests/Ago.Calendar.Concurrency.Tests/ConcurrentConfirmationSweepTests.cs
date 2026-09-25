@@ -171,17 +171,17 @@ public class ConcurrentConfirmationSweepTests(ConcurrencyFixture fixture)
             start = start.AddMinutes(40);
         }
 
-        var customer = Customer.Register(new CustomerId(NewId()), seed.TenantId, new PhoneNumber("+79997100001"), Now);
+        var customer = PersonRecord.Register(NewId(), seed.TenantId, new PhoneNumber("+79997100001"), Now);
 
         await using var db = fixture.CreateDbContext();
-        db.Customers.Add(customer);
+        db.PersonRecords.Add(customer);
         db.Events.AddRange(slots);
         await db.SaveChangesAsync();
 
         var anchorId = slots[0].Id;
         foreach (var slot in slots)
         {
-            slot.Claim(customer.Id, seed.ServiceId, Now, Deadline, anchorId);
+            slot.Claim(customer.PersonId, seed.ServiceId, Now, Deadline, anchorId);
             slot.ClearDomainEvents();
         }
 
@@ -249,15 +249,15 @@ public class ConcurrentConfirmationSweepTests(ConcurrencyFixture fixture)
             new EventId(NewId()), seed.TenantId, seed.CalendarId, seed.WorkerId,
             new TimeSlot(start, start.AddMinutes(45)), DateOnly.FromDateTime(start.UtcDateTime), Now);
 
-        var customer = Customer.Register(
-            new CustomerId(NewId()), seed.TenantId, new PhoneNumber($"+799972000{index:D2}"), Now);
+        var customer = PersonRecord.Register(
+            NewId(), seed.TenantId, new PhoneNumber($"+799972000{index:D2}"), Now);
 
         await using var db = fixture.CreateDbContext();
-        db.Customers.Add(customer);
+        db.PersonRecords.Add(customer);
         db.Events.Add(slot);
         await db.SaveChangesAsync();
 
-        slot.Claim(customer.Id, seed.ServiceId, Now, Deadline);
+        slot.Claim(customer.PersonId, seed.ServiceId, Now, Deadline);
         slot.ClearDomainEvents();
         await db.SaveChangesAsync();
 

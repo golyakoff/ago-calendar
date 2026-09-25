@@ -45,7 +45,7 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
             mine.Tenant.Id, Today, Today.AddDays(1), mask: false, CancellationToken.None);
 
         var row = Assert.Single(rows);
-        Assert.Equal(mine.Customer.Id, row.CustomerId);
+        Assert.Equal(mine.Person.PersonId, row.PersonId);
     }
 
     [Fact]
@@ -61,8 +61,8 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
         Assert.Equal(seed.Worker.DisplayName, row.WorkerDisplayName);
         Assert.Equal(seed.Service.Id, row.ServiceId);
         Assert.Equal(seed.Service.Name, row.ServiceName);
-        Assert.Equal(seed.Customer.Id, row.CustomerId);
-        Assert.Equal(seed.Customer.Phone.Value, row.Phone);
+        Assert.Equal(seed.Person.PersonId, row.PersonId);
+        Assert.Equal(seed.Person.Phone.Value, row.Phone);
         Assert.False(row.Masked);
     }
 
@@ -122,7 +122,7 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
         await using (var db = fixture.CreateDbContext())
         {
             var booking = await db.Events.SingleAsync(e => e.Id == slot.Id);
-            booking.Claim(seed.Customer.Id, seed.Service.Id, Now, Now.AddMinutes(30), slot.Id);
+            booking.Claim(seed.Person.PersonId, seed.Service.Id, Now, Now.AddMinutes(30), slot.Id);
             booking.ClearDomainEvents();
             await db.SaveChangesAsync();
         }
@@ -160,7 +160,7 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
 
         var row = Assert.Single(rows);
         Assert.True(row.Masked);
-        Assert.NotEqual(seed.Customer.Phone.Value, row.Phone);
+        Assert.NotEqual(seed.Person.Phone.Value, row.Phone);
     }
 
     /// <summary>`20-18`'s own shape, restated for a confirmed booking rather than a pending one: a
@@ -193,7 +193,7 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
             foreach (var id in slots.Select(s => s.Id))
             {
                 var eventRow = await db.Events.SingleAsync(e => e.Id == id);
-                eventRow.Claim(seed.Customer.Id, seed.Service.Id, Now, Now.AddMinutes(30), anchorId);
+                eventRow.Claim(seed.Person.PersonId, seed.Service.Id, Now, Now.AddMinutes(30), anchorId);
                 eventRow.ClearDomainEvents();
             }
 
@@ -271,7 +271,7 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var bookings = await response.Content.ReadFromJsonAsync<ConfirmedBookingResponse[]>();
         var booking = Assert.Single(bookings!);
-        Assert.Equal(seed.Customer.Id.Value, booking.CustomerId);
+        Assert.Equal(seed.Person.PersonId, booking.PersonId);
         // `26-121`: the origin conversation survives the full HTTP + JSON round-trip - what the Android
         // «Источник» row and dialog-link bind to.
         Assert.Equal(conversationId, booking.OriginConversationId);
@@ -294,7 +294,7 @@ public class ConfirmedBookingsTests(PostgresFixture fixture)
         {
             var row = await db.Events.SingleAsync(e => e.Id == slot.Id);
             row.Claim(
-                seed.Customer.Id, seed.Service.Id, Now, Now.AddMinutes(30), slot.Id,
+                seed.Person.PersonId, seed.Service.Id, Now, Now.AddMinutes(30), slot.Id,
                 originConversationId: originConversationId);
             row.Confirm(Now.AddMinutes(31));
             row.ClearDomainEvents();

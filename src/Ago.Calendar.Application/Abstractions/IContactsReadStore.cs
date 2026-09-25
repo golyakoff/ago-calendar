@@ -3,20 +3,23 @@
 namespace Ago.Calendar.Application.Abstractions;
 
 /// <summary>
-/// The tenant contacts report (`20-12`): every <see cref="Customer"/> lead card a tenant has
-/// accumulated, in one list.
+/// The tenant contacts report (`20-12`): every <see cref="PersonRecord"/> a tenant has accumulated,
+/// in one list. `adr/0184`: what this lists is the calendar's own operational facts about a person -
+/// the phone they book with, its two verification marks, the no-show count, when they were first and
+/// last seen - keyed by the opaque person id. The person's name and any operator notes are chat's
+/// (the account's person registry) and are read from there by the console, display-merged onto these
+/// rows; nothing here serves them any more.
 ///
 /// <para><b>A read store, not a repository</b> (adr/0004), the same shape
 /// <see cref="IPendingBookingReadStore"/> already established: this returns rows shaped for a screen,
-/// never a <see cref="Customer"/> aggregate with its own invariants to enforce. Modelled after
+/// never a <see cref="PersonRecord"/> aggregate with its own invariants to enforce. Modelled after
 /// `ago-chat`'s <c>OperatorAnalyticsReadStore</c> (`18-08`) as the closest structural precedent - a
 /// Dapper read store, tenant-isolated, gated by a permission the handler checks once - adapted for a
 /// full personal-data listing rather than an aggregate count.</para>
 ///
-/// <para><b>Every field here is personal data</b> - phone, display name, notes, and the no-show count
-/// are exactly the three fields <see cref="Customer"/>'s own remarks name as "the only entity in this
-/// product that describes a natural person". See <c>ago-root/docs/architecture/personal-data.md</c>'s
-/// own `20-12` subsection for what widens as a result of this read store existing.</para>
+/// <para><b>Every field here is personal data</b> - a phone number and a no-show history keyed by a
+/// person are exactly what <see cref="PersonRecord"/>'s own remarks name as the personal data this
+/// product still holds. See <c>ago-root/docs/architecture/personal-data.md</c>.</para>
 ///
 /// <para><b>`23-12`: <paramref name="mask"/> is decided once by <c>GetTenantContactsHandler</c>
 /// (which reads the tenant's rung through <see cref="IContactVisibilityProjectionStore"/>) and handed
@@ -27,15 +30,9 @@ namespace Ago.Calendar.Application.Abstractions;
 /// never crosses into the row at all, so there is no flag a careless caller could ignore and
 /// accidentally forward the unmasked number.</para>
 ///
-/// <para><b>`23-60`/`adr/0147`: excludes a row once <see cref="Customer.MergedIntoCustomerId"/> is
-/// set.</b> A tombstoned row is not a lead card any operator should still be acting on - it exists so
-/// <see cref="Event.CustomerId"/>'s own foreign key and <c>ICustomerMergeReadStore</c>'s own audit
-/// trail still resolve, not so it keeps appearing on the ordinary contacts screen a merge was
-/// performed specifically to clean up. Each surviving row's own
-/// <see cref="ContactRow.DuplicatePhoneCustomerIds"/> is this store's other new fact - "share a phone
-/// or an e-mail" is the item's own Scope line; this product's <see cref="Customer"/> has no e-mail
-/// field to compare (<c>docs/adr/0161-*</c> states this as a scope boundary rather than a gap this
-/// item silently leaves), so the comparison is phone alone.</para>
+/// <para><b>No merge, no duplicate hint (`adr/0184`, author decision O2).</b> `23-60`'s calendar-side
+/// merge and its "shares a phone" hint are retired: one person id per person makes duplicates rare, and
+/// if a merge is ever wanted again it is a chat-side act on the registry, never a calendar one.</para>
 /// </summary>
 public interface IContactsReadStore
 {
@@ -55,31 +52,24 @@ public interface IContactsReadStore
 /// own <c>VisitorContactDetailDto.Masked</c> field gives for itself.</param>
 /// <param name="PhoneVerifiedAt">`20-09`'s own fact, exposed here for the first time: when this
 /// number was proven reachable by SMS code, or <see langword="null"/> if it never has been. See
-/// <see cref="Customer.PhoneVerifiedAt"/>'s own remarks.</param>
+/// <see cref="PersonRecord.PhoneVerifiedAt"/>'s own remarks.</param>
 /// <param name="PhoneConfirmedByOperatorAt">`23-12`'s own distinct fact - when an operator recorded
 /// "I called and it is them", or <see langword="null"/> if nobody has. See
-/// <see cref="Customer.PhoneConfirmedByOperatorAt"/>'s own remarks for why this is never merged with
+/// <see cref="PersonRecord.PhoneConfirmedByOperatorAt"/>'s own remarks for why this is never merged with
 /// <paramref name="PhoneVerifiedAt"/>.</param>
 /// <param name="NoShowCount">Read honestly, not fixed here: `20-04`'s own retro note is that nothing
-/// in production ever writes this counter up, so it is zero for every customer today. `20-12`'s own
+/// in production ever writes this counter up, so it is zero for every person today. `20-12`'s own
 /// item file is explicit that fixing the missing writer is a separate item - this report shows the
 /// real column, whatever it currently holds, rather than inventing a value to make the screen look
 /// more finished than the product is.</param>
-/// <param name="DuplicatePhoneCustomerIds">`23-60`/`adr/0147`: every other live (not tombstoned)
-/// customer in this tenant whose <see cref="Customer.Phone"/> equals this row's own - what the
-/// console's "shares a contact detail" hint and merge action are built from. Empty for the ordinary
-/// case (no known duplicate). Computed by the store from the same rows it already read for this
-/// tenant, never a second query - grouping a list the handler already has in hand costs nothing a
-/// fresh round trip would.</param>
+/// <param name="PersonId">`adr/0184`: the opaque person id - the key the console uses to fetch the
+/// person's name and notes from chat's own Person API and display-merge them onto this row.</param>
 public readonly record struct ContactRow(
-    CustomerId CustomerId,
+    Guid PersonId,
     string Phone,
     bool Masked,
-    string? DisplayName,
-    string? Notes,
     int NoShowCount,
     DateTimeOffset? PhoneVerifiedAt,
     DateTimeOffset? PhoneConfirmedByOperatorAt,
     DateTimeOffset FirstSeenAt,
-    DateTimeOffset LastSeenAt,
-    IReadOnlyList<CustomerId> DuplicatePhoneCustomerIds);
+    DateTimeOffset LastSeenAt);

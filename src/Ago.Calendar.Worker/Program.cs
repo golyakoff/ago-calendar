@@ -73,14 +73,10 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<ContactPhoneRevealPruneJob>();
 
-// `23-59`/`adr/0147`: this product's fourth broker consumer - projects `ago-chat`'s own
-// `ContactCollected` into a `Customer` row, for a tenant that has this product provisioned. See
-// ContactCollectedConsumer's own remarks for the local tenant-existence gate and the phone-kind filter.
-builder.Services
-    .AddOptions<ContactCollectedConsumerOptions>()
-    .Bind(builder.Configuration.GetSection(ContactCollectedConsumerOptions.SectionName))
-    .ValidateOnStart();
-builder.Services.AddHostedService<ContactCollectedConsumer>();
+// `adr/0184`: the `ContactCollected` consumer `23-59` registered here is gone - this product no
+// longer builds a customer out of a chat contact, because it no longer holds a person copy at all.
+// A chat-origin booking carries chat's own person id; a booking with no chat origin publishes
+// `PersonRegistered` the other way (BookingStore's own remarks).
 
 // `23-88`/`adr/0165`: this product's fifth broker consumer, and the first that publishes back rather
 // than only applying an incoming fact - answers chat's own async worker-quota impact question

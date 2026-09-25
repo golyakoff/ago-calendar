@@ -94,7 +94,7 @@ public class SlotOverlapConstraintTests(PostgresFixture fixture)
         {
             var repository = new EventRepository(db);
             await repository.AddRangeAsync([slot], CancellationToken.None);
-            slot.Claim(seed.Customer.Id, seed.Service.Id, CalendarSeed.Now, CalendarSeed.Now.AddMinutes(15));
+            slot.Claim(seed.Person.PersonId, seed.Service.Id, CalendarSeed.Now, CalendarSeed.Now.AddMinutes(15));
             slot.Cancel(CalendarSeed.Now.AddMinutes(1));
             await repository.SaveAsync(slot, CancellationToken.None);
         }

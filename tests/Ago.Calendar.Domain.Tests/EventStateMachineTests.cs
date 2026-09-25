@@ -15,10 +15,10 @@ public class EventStateMachineTests
     {
         var world = new World();
 
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
 
         Assert.Equal(EventStatus.PendingConfirmation, world.Slot.Status);
-        Assert.Equal(world.Customer.Id, world.Slot.CustomerId);
+        Assert.Equal(world.Person.PersonId, world.Slot.PersonId);
         Assert.Equal(world.Service.Id, world.Slot.ServiceId);
         Assert.Equal(Now.AddMinutes(15), world.Slot.ConfirmationDeadline);
         var claimed = Assert.IsType<EventClaimed>(Assert.Single(world.Slot.DomainEvents));
@@ -33,7 +33,7 @@ public class EventStateMachineTests
     {
         var world = new World();
 
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
 
         Assert.Equal(world.Slot.Id, world.Slot.BookingId);
     }
@@ -46,20 +46,20 @@ public class EventStateMachineTests
         var world = new World();
         var anchorId = new EventId(Guid.CreateVersion7(Now));
 
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15), anchorId);
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15), anchorId);
 
         Assert.Equal(anchorId, world.Slot.BookingId);
         Assert.NotEqual(world.Slot.Id, world.Slot.BookingId);
     }
 
     /// <summary>Set by <see cref="Event.Claim"/>, never cleared - the same "history, not current
-    /// state" treatment <see cref="Event.CustomerId"/> already gets, held here through every
+    /// state" treatment <see cref="Event.PersonId"/> already gets, held here through every
     /// transition that follows a claim.</summary>
     [Fact]
     public void BookingId_SurvivesConfirmAndCancel()
     {
         var world = new World();
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
         var bookingId = world.Slot.BookingId;
 
         world.Slot.Confirm(Now.AddMinutes(15));
@@ -73,23 +73,23 @@ public class EventStateMachineTests
     public void Claim_WhenAlreadyPendingConfirmation_Throws()
     {
         var world = new World();
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
 
-        var second = CalendarFixtures.Customer(world.Tenant, "+79995550000");
+        var second = CalendarFixtures.Person(world.Tenant, "+79995550000");
 
         Assert.Throws<InvalidEventStateException>(() =>
-            world.Slot.Claim(second.Id, world.Service.Id, Now, Now.AddMinutes(15)));
+            world.Slot.Claim(second.PersonId, world.Service.Id, Now, Now.AddMinutes(15)));
     }
 
     [Fact]
     public void Claim_WhenAlreadyBooked_Throws_AndThereIsNoRouteBackToAvailable()
     {
         var world = new World();
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
         world.Slot.Confirm(Now.AddMinutes(15));
 
         Assert.Throws<InvalidEventStateException>(() =>
-            world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(30)));
+            world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(30)));
         Assert.Equal(EventStatus.Booked, world.Slot.Status);
     }
 
@@ -103,7 +103,7 @@ public class EventStateMachineTests
         var afterTheSlotStarted = world.Slot.StartsAt.AddMinutes(1);
 
         Assert.Throws<InvalidEventStateException>(() => world.Slot.Claim(
-            world.Customer.Id, world.Service.Id, afterTheSlotStarted, afterTheSlotStarted.AddMinutes(15)));
+            world.Person.PersonId, world.Service.Id, afterTheSlotStarted, afterTheSlotStarted.AddMinutes(15)));
     }
 
     [Fact]
@@ -112,14 +112,14 @@ public class EventStateMachineTests
         var world = new World();
 
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(-1)));
+            world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(-1)));
     }
 
     [Fact]
     public void Confirm_FromPendingConfirmation_ClearsTheDeadline_AndRaisesEventConfirmed()
     {
         var world = new World();
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
         world.Slot.ClearDomainEvents();
 
         world.Slot.Confirm(Now.AddMinutes(15));
@@ -141,7 +141,7 @@ public class EventStateMachineTests
     public void Reject_FromPendingConfirmation_CancelsWithTheRejectionReason()
     {
         var world = new World();
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
         world.Slot.ClearDomainEvents();
 
         world.Slot.Reject(Now.AddMinutes(3));
@@ -152,14 +152,14 @@ public class EventStateMachineTests
 
         // The customer is deliberately kept: who cancelled on whom is the history the lead card is
         // for.
-        Assert.Equal(world.Customer.Id, world.Slot.CustomerId);
+        Assert.Equal(world.Person.PersonId, world.Slot.PersonId);
     }
 
     [Fact]
     public void Reject_AfterConfirmation_Throws_BecauseTheWindowIsOver()
     {
         var world = new World();
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
         world.Slot.Confirm(Now.AddMinutes(15));
 
         Assert.Throws<InvalidEventStateException>(() => world.Slot.Reject(Now.AddMinutes(16)));
@@ -169,7 +169,7 @@ public class EventStateMachineTests
     public void Cancel_FromBooked_CancelsWithTheCancellationReason()
     {
         var world = new World();
-        var booked = CalendarFixtures.BookedSlot(world.Tenant, world.Calendar, world.Worker, world.Customer, world.Service);
+        var booked = CalendarFixtures.BookedSlot(world.Tenant, world.Calendar, world.Worker, world.Person, world.Service);
         booked.ClearDomainEvents();
 
         booked.Cancel(Now.AddHours(1));
@@ -183,7 +183,7 @@ public class EventStateMachineTests
     public void Cancel_Twice_Throws()
     {
         var world = new World();
-        var booked = CalendarFixtures.BookedSlot(world.Tenant, world.Calendar, world.Worker, world.Customer, world.Service);
+        var booked = CalendarFixtures.BookedSlot(world.Tenant, world.Calendar, world.Worker, world.Person, world.Service);
         booked.Cancel(Now.AddHours(1));
 
         Assert.Throws<InvalidEventStateException>(() => booked.Cancel(Now.AddHours(2)));
@@ -193,7 +193,7 @@ public class EventStateMachineTests
     public void MarkNoShow_BeforeTheSlotEnds_Throws()
     {
         var world = new World();
-        var booked = CalendarFixtures.BookedSlot(world.Tenant, world.Calendar, world.Worker, world.Customer, world.Service);
+        var booked = CalendarFixtures.BookedSlot(world.Tenant, world.Calendar, world.Worker, world.Person, world.Service);
 
         // One second before the visit is over is still not a no-show.
         Assert.Throws<InvalidEventStateException>(() => booked.MarkNoShow(booked.EndsAt.AddSeconds(-1)));
@@ -203,7 +203,7 @@ public class EventStateMachineTests
     public void MarkNoShow_OnceTheSlotHasEnded_Records()
     {
         var world = new World();
-        var booked = CalendarFixtures.BookedSlot(world.Tenant, world.Calendar, world.Worker, world.Customer, world.Service);
+        var booked = CalendarFixtures.BookedSlot(world.Tenant, world.Calendar, world.Worker, world.Person, world.Service);
         booked.ClearDomainEvents();
 
         booked.MarkNoShow(booked.EndsAt);
@@ -235,7 +235,7 @@ public class EventStateMachineTests
     public void Block_OnAClaimedSlot_Throws_BecauseACustomerIsWaitingOnIt()
     {
         var world = new World();
-        world.Slot.Claim(world.Customer.Id, world.Service.Id, Now, Now.AddMinutes(15));
+        world.Slot.Claim(world.Person.PersonId, world.Service.Id, Now, Now.AddMinutes(15));
 
         Assert.Throws<InvalidEventStateException>(world.Slot.Block);
     }
@@ -259,7 +259,7 @@ public class EventStateMachineTests
             Calendar = CalendarFixtures.Calendar(Tenant);
             Worker = CalendarFixtures.Worker(Tenant);
             Service = CalendarFixtures.Service(Tenant);
-            Customer = CalendarFixtures.Customer(Tenant);
+            Person = CalendarFixtures.Person(Tenant);
             Worker.JoinCalendar(Calendar);
             Worker.Offer(Service);
             Slot = CalendarFixtures.AvailableSlot(Tenant, Calendar, Worker);
@@ -273,7 +273,7 @@ public class EventStateMachineTests
 
         public Service Service { get; }
 
-        public Customer Customer { get; }
+        public PersonRecord Person { get; }
 
         public Event Slot { get; }
     }

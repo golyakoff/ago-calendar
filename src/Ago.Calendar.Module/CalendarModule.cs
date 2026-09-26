@@ -160,6 +160,11 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<MarkNoShowHandler>();
         services.AddScoped<GetPendingBookingsForTenantHandler>();
 
+        // `26-181`/`26-175` slice A: manual operator confirm, the fourth transition on the same queue -
+        // the sweep's own PendingConfirmation -> Booked path, now reachable by a person as well as a
+        // deadline.
+        services.AddScoped<ConfirmBookingHandler>();
+
         // `25-63`: the fan-out's own resolve step - Ago.Calendar.Worker.BookingPendingFanoutConsumer
         // is the one caller, resolving this per message the same "one DI scope per message" shape
         // TeamChatFanoutConsumer/ConnectionFanoutConsumer already establish in ago-chat.

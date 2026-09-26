@@ -406,6 +406,82 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnOperator_CanConfirmAPendingBookingImmediately()
+    {
+        // `26-181`/`26-175` slice A: the manual confirm route, end to end over real HTTP - the veto
+        // window is skipped entirely rather than shortened, so the row is Booked and its deadline
+        // cleared the instant this call returns, with no sweep tick involved.
+        var seed = await ProvisionAsync();
+        var booking = await APendingBookingAsync(seed, seed.Calendar.Id, seed.Worker.Id);
+
+        var response = await PostAsync($"/api/v1/console/bookings/{booking.Id.Value}/confirm", content: null, seed);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events.SingleAsync(e => e.Id == booking.Id);
+        Assert.Equal(EventStatus.Booked, stored.Status);
+        Assert.Null(stored.ConfirmationDeadline);
+
+        // Confirmed rows leave the pending queue exactly as a rejected one does.
+        Assert.Empty(await GetQueueAsync(seed));
+    }
+
+    [Fact]
+    public async Task AnOperator_CannotConfirmAnotherTenantsBooking()
+    {
+        // The same cross-tenant shape AnOperator_CannotRejectAnotherTenantsBooking proves for reject:
+        // the permission check passes (this operator holds booking:confirm in their own tenant), and
+        // the second check - the tenant on the row - is what refuses, reported as absent.
+        var mine = await ProvisionAsync();
+        var theirs = await ProvisionAsync();
+        var theirBooking = await APendingBookingAsync(theirs, theirs.Calendar.Id, theirs.Worker.Id);
+
+        var response = await PostAsync($"/api/v1/console/bookings/{theirBooking.Id.Value}/confirm", null, mine);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        await using var db = fixture.CreateDbContext();
+        Assert.Equal(EventStatus.PendingConfirmation, (await db.Events.FindAsync(theirBooking.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task ADispatcherWithoutTheConfirmPermission_IsForbidden()
+    {
+        // `ADispatcherAsync` grants booking:reject and booking:cancel only - adr/0016's granularity
+        // argument, held for a fourth permission: a tenant may grant veto/cancel without granting the
+        // early-accept action.
+        var seed = await ProvisionAsync();
+        var dispatcher = await ADispatcherAsync(seed);
+        var booking = await APendingBookingAsync(seed, seed.Calendar.Id, seed.Worker.Id);
+
+        var response = await PostAsync(
+            $"/api/v1/console/bookings/{booking.Id.Value}/confirm", content: null, dispatcher);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        await using var db = fixture.CreateDbContext();
+        Assert.Equal(EventStatus.PendingConfirmation, (await db.Events.FindAsync(booking.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task AnOperator_CannotConfirmABookingThatIsAlreadyBooked()
+    {
+        // `26-181`'s own idempotency case, over real HTTP: the sweep (or a first confirm call) already
+        // won, and a second confirm attempt is refused rather than silently repeated.
+        var seed = await ProvisionAsync();
+        var booking = await APendingBookingAsync(seed, seed.Calendar.Id, seed.Worker.Id);
+
+        var first = await PostAsync($"/api/v1/console/bookings/{booking.Id.Value}/confirm", null, seed);
+        Assert.Equal(HttpStatusCode.NoContent, first.StatusCode);
+
+        var second = await PostAsync($"/api/v1/console/bookings/{booking.Id.Value}/confirm", null, seed);
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+
+        await using var db = fixture.CreateDbContext();
+        Assert.Equal(EventStatus.Booked, (await db.Events.FindAsync(booking.Id))!.Status);
+    }
+
+    [Fact]
     public async Task AnUnknownKeycloakSubject_IsRefusedByThePolicyRatherThanReachingAHandler()
     {
         // A real person who signed in to the realm and is not an operator of this product. adr/0022

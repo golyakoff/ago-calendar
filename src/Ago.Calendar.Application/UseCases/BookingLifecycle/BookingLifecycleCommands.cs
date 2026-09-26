@@ -33,3 +33,17 @@ public readonly record struct CancelBooking(OperatorId OperatorId, TenantId Tena
 /// the flag and the count, and no enforcement.</para>
 /// </summary>
 public readonly record struct MarkNoShow(OperatorId OperatorId, TenantId TenantId, EventId EventId);
+
+/// <summary>
+/// `26-181`/`26-175` slice A: an operator accepts a pending booking right now, instead of waiting for
+/// `ExpiredBookingConfirmer`'s sweep to do it once the veto window closes. <c>PendingConfirmation -&gt;
+/// Booked</c> - the identical transition the sweep already runs, just triggered early by a person
+/// instead of a deadline.
+///
+/// <para><b>Skips the veto window rather than shortening it.</b> The window exists to give the
+/// operator time to decide; an operator who presses "Подтвердить" has already decided, so
+/// <see cref="Event.Confirm"/> clears <c>ConfirmationDeadline</c> unconditionally and there is nothing
+/// left for a later sweep tick to add. `docs/design/26-175-booking-lifecycle-actions.md` §3.3
+/// (product question 4) is where the author ratified this rather than a shortened window.</para>
+/// </summary>
+public readonly record struct ConfirmBooking(OperatorId OperatorId, TenantId TenantId, EventId EventId);

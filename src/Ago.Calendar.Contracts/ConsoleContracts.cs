@@ -293,6 +293,14 @@ public sealed record ConfirmedBookingResponse(
     bool Masked,
     Guid? OriginConversationId);
 
+/// <summary>`26-208`/`adr/0187`: what the console/Android posts to move a confirmed booking - the
+/// route's own <c>{bookingId}</c> names the booking to move (any member of its run), and the body names
+/// the new start slot by its own event id. The day grid the operator is picking from
+/// (<see cref="WorkerSlotResponse.EventId"/>) already carries that id, so the client names the target
+/// the same way <c>BookEvent</c> names the slot a visitor claims - no wall-clock instant, no timezone
+/// on the wire. Same worker, same service, time-only for v1 (`adr/0187`).</summary>
+public sealed record RescheduleBookingRequest(Guid NewStartEventId);
+
 /// <summary>`23-12`: what the console posts to reveal one customer's phone - which screen asked, for
 /// the reveal record's own "which surface" field.</summary>
 public sealed record RevealCustomerPhoneRequest(string Surface);

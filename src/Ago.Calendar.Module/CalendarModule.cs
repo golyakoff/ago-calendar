@@ -165,6 +165,12 @@ public sealed class CalendarModule : IProductModule
         // deadline.
         services.AddScoped<ConfirmBookingHandler>();
 
+        // `26-208`/`26-175` slice D/`adr/0187`: the per-booking operator reschedule - cancel-old +
+        // claim-new in one transaction (IBookingRescheduleStore, registered in
+        // AddCalendarPostgresPersistence). Scoped like the transitions above; it reads the service and
+        // worker schedule to size the new run, then delegates the atomic write to the store.
+        services.AddScoped<RescheduleBookingHandler>();
+
         // `25-63`: the fan-out's own resolve step - Ago.Calendar.Worker.BookingPendingFanoutConsumer
         // is the one caller, resolving this per message the same "one DI scope per message" shape
         // TeamChatFanoutConsumer/ConnectionFanoutConsumer already establish in ago-chat.

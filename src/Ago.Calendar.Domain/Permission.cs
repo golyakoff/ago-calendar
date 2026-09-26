@@ -45,6 +45,16 @@ public readonly record struct Permission(string Value)
     /// <summary>Mark a past visit as a no-show (`20-04`).</summary>
     public static readonly Permission BookingMarkNoShow = new("booking:mark_no_show");
 
+    /// <summary>`26-208`/`adr/0187`: move a <see cref="EventStatus.Booked"/> booking to a new time
+    /// (same worker, same service). Separate from <see cref="BookingCancel"/> on purpose, the same
+    /// adr/0016 granularity argument that already keeps <see cref="BookingReject"/> apart from
+    /// <see cref="BookingCancel"/>: reschedule contains a cancel at the data level (the old run is
+    /// cancelled, a new one claimed - `adr/0187`), but moving an appointment and cancelling it are
+    /// different trusts, and a tenant may want a senior operator to do the first without granting a
+    /// junior one that power independently of who may cancel. Per adr/0093 this string is,
+    /// byte-for-byte, <c>Ago.Chat.Domain.Permission.BookingReschedule</c>.</summary>
+    public static readonly Permission BookingReschedule = new("booking:reschedule");
+
     /// <summary>Read a customer's lead card - name, notes, booking history.</summary>
     public static readonly Permission CustomerRead = new("customer:read");
 

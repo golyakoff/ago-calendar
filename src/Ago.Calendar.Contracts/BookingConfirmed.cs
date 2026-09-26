@@ -16,9 +16,12 @@
 /// - including "no longer there", which is the correct answer after an erasure. A copied name or
 /// phone number would be a snapshot that outlives the row it came from.
 /// <see cref="StartsAt"/>/<see cref="EndsAt"/>/<see cref="LocalDate"/> are values because they cannot
-/// change: the slot a booking took is fixed at claim time, and there is no reschedule in v1
-/// (cancel-and-rebook is the only path). Making a consumer re-read them would be a round trip for
-/// data that cannot have moved.</para>
+/// change: the slot a booking took is fixed at claim time. `26-208`/`adr/0187` added an operator
+/// reschedule, and it does <b>not</b> mutate this event's slot - a reschedule cancels the old booking
+/// and claims a new one with its own anchor id, announced by its own
+/// <see cref="BookingRescheduled"/> (never a fresh <see cref="BookingConfirmed"/>), so a given
+/// confirmed booking's slot still cannot move. Making a consumer re-read them would be a round trip
+/// for data that cannot have moved.</para>
 ///
 /// <para><b>No phone number, and this is a rule rather than an omission.</b> An integration event
 /// crosses a broker and is read by consumers this product does not control; `20-05` looks the phone

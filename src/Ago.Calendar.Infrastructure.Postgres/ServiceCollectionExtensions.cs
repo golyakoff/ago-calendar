@@ -57,6 +57,12 @@ public static class ServiceCollectionExtensions
         // operator-facing handler goes through. Scoped like the rest - both hold the DbContext.
         services.AddScoped<IExpiredBookingConfirmer, ExpiredBookingConfirmer>();
 
+        // `26-208`/`adr/0187`: the operator reschedule - cancel-old + claim-new in one transaction.
+        // Scoped like every other adapter here, because it holds the DbContext whose connection both
+        // the raw claim and the EF cancel run on (the exact reason BookingStore/ExpiredBookingConfirmer
+        // are scoped).
+        services.AddScoped<IBookingRescheduleStore, BookingRescheduleStore>();
+
         // `22-05`/`adr/0093`: the projection replicated from AGO Chat's own `RoleAssignmentsChanged` -
         // the one thing both a permission check and OperatorIdentityClaimsTransformation now read.
         // Same DbContext, same "Infrastructure adapter behind an Application port" shape every other

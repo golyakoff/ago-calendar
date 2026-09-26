@@ -109,6 +109,12 @@ public static class ConsoleEndpoints
         // `Permission.BookingConfirm`'s own remarks). Mirrors the three routes above exactly.
         group.MapPost("/bookings/{bookingId:guid}/confirm", HandleConfirmAsync).WithName("ConfirmBooking");
 
+        // `26-208`/`26-175` slice D/`adr/0187`: the fifth booking transition - move a confirmed booking
+        // to a new time. Gated on `booking:reschedule` (adr/0093 mirror of ago-chat's own catalogue,
+        // granted to the seeded Operator role). Unlike the four above it carries a body: the new start
+        // slot's own event id (RescheduleBookingRequest).
+        group.MapPost("/bookings/{bookingId:guid}/reschedule", HandleRescheduleAsync).WithName("RescheduleBooking");
+
         group.MapPost("/availability/day-off", HandleDayOffAsync).WithName("DeleteDayOff");
         group.MapPost("/availability/day-boundary", HandleDayBoundaryAsync).WithName("EditDayBoundary");
 
@@ -731,6 +737,28 @@ public static class ConsoleEndpoints
                 new ConfirmBooking(principal.GetOperatorId(), principal.GetTenantId(), new Domain.EventId(bookingId)),
                 cancellationToken),
             httpContext);
+
+    private static async Task<IResult> HandleRescheduleAsync(
+        Guid bookingId,
+        RescheduleBookingRequest request,
+        ClaimsPrincipal principal,
+        RescheduleBookingHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        return Complete(
+            await handler.HandleAsync(
+                new RescheduleBooking(
+                    principal.GetOperatorId(), principal.GetTenantId(),
+                    new Domain.EventId(bookingId), new Domain.EventId(request.NewStartEventId)),
+                cancellationToken),
+            httpContext);
+    }
 
     private static async Task<IResult> HandleDayOffAsync(
         DayOffRequest request,

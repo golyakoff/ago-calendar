@@ -129,6 +129,103 @@ internal sealed class FakeEventRepositoryWithSaves : IEventRepository
         throw new NotSupportedException("Not reached by the booking-lifecycle handlers.");
 }
 
+/// <summary>
+/// `26-208`: the reschedule store, faked. <see cref="Requests"/> is the assertion surface for the
+/// positive cases (what run was claimed, which person/service/origin it carried, which one event was
+/// staged) and <see cref="Called"/> is the surface for the negative ones (a refused reschedule must
+/// not have reached the store at all). Models the real store's own contract: on the success path it
+/// stages the request's pre-built <c>BookingRescheduled</c> envelope onto <paramref name="outbox"/>,
+/// exactly as <c>BookingRescheduleStore</c> does inside its transaction - so a handler test can assert
+/// "exactly one BookingRescheduled, and nothing else, is staged" without a database.
+/// </summary>
+internal sealed class FakeBookingRescheduleStore(FakeOutboxWriter outbox) : IBookingRescheduleStore
+{
+    public List<BookingRescheduleRequest> Requests { get; } = [];
+
+    public bool Called => Requests.Count > 0;
+
+    /// <summary>Default true - the ordinary "the new run was claimable" path. Set false to model the
+    /// claim losing the race, the ordinary outcome that leaves the old booking untouched.</summary>
+    public bool SlotIsClaimable { get; set; } = true;
+
+    /// <summary>Set to make the store throw the given exception instead of returning - models the
+    /// cancel-half racing another writer (the handler maps these to invalid_state / concurrency).</summary>
+    public Exception? ThrowOnReschedule { get; set; }
+
+    public Task<bool> TryRescheduleAsync(BookingRescheduleRequest request, CancellationToken cancellationToken)
+    {
+        Requests.Add(request);
+
+        if (ThrowOnReschedule is not null)
+        {
+            throw ThrowOnReschedule;
+        }
+
+        if (!SlotIsClaimable)
+        {
+            return Task.FromResult(false);
+        }
+
+        // The real store stages exactly this one envelope, on the success path, inside its
+        // transaction - modelled here so the caller's fake outbox shows the same one row.
+        outbox.Enqueue(request.RescheduledEvent);
+        return Task.FromResult(true);
+    }
+}
+
+/// <summary>
+/// `26-208`: the event repository the reschedule handler reads through - <see cref="GetByIdAsync"/>
+/// (the old booking, and the target slot), <see cref="ListByBookingIdAsync"/> (the old run) and
+/// <see cref="ListForDayAsync"/> (the target day's grid). Every write method throws: the reschedule
+/// handler never saves an <see cref="Event"/> itself - the atomic write is the store's - so reaching
+/// one is the load-mutate-save regression this fake exists to catch, the same shape
+/// <c>BookingFakes.FakeEventRepository</c> uses for <c>BookEventHandler</c>.
+/// </summary>
+internal sealed class FakeRescheduleEventRepository(IReadOnlyList<Event> events) : IEventRepository
+{
+    public List<EventId> Loaded { get; } = [];
+
+    public Task<Event?> GetByIdAsync(EventId id, CancellationToken cancellationToken)
+    {
+        Loaded.Add(id);
+        return Task.FromResult(events.FirstOrDefault(e => e.Id == id));
+    }
+
+    public Task<IReadOnlyList<Event>> ListByBookingIdAsync(EventId bookingId, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<Event>>(
+            [.. events.Where(e => e.BookingId == bookingId).OrderBy(e => e.StartsAt)]);
+
+    public Task<IReadOnlyList<Event>> ListForDayAsync(
+        CalendarId calendarId, WorkerId workerId, DateOnly localDate, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<Event>>(
+            [.. events
+                .Where(e => e.CalendarId == calendarId && e.WorkerId == workerId && e.LocalDate == localDate)
+                .OrderBy(e => e.StartsAt)]);
+
+    public Task AddRangeAsync(IReadOnlyCollection<Event> events, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by RescheduleBookingHandler.");
+
+    public Task<IReadOnlySet<DateOnly>> ListMaterializedLocalDatesAsync(
+        CalendarId calendarId, WorkerId workerId, DateOnly from, DateOnly to, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by RescheduleBookingHandler.");
+
+    public Task<int> InsertAvailableSlotsAsync(IReadOnlyCollection<Event> slots, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by RescheduleBookingHandler.");
+
+    public Task ReplaceDayAsync(
+        CalendarId calendarId, WorkerId workerId, DateOnly localDate,
+        IReadOnlyCollection<Event> replacements, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by RescheduleBookingHandler.");
+
+    public Task SaveAsync(Event @event, CancellationToken cancellationToken) =>
+        throw new NotSupportedException(
+            "RescheduleBookingHandler must never save an Event aggregate - the cancel-old + claim-new " +
+            "write is the store's, in one transaction. Reaching this is the regression the item forbids.");
+
+    public Task SaveRangeAsync(IReadOnlyCollection<Event> events, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by RescheduleBookingHandler - the store owns the write.");
+}
+
 /// <summary>The shared queue, faked. <see cref="AskedFor"/> is what proves the read is tenant-scoped
 /// and never narrowed to one operator or one calendar; its <c>IncludeContactData</c> flag is what
 /// `20-12`'s own handler tests assert against, to prove the phone-visibility decision is made once, in

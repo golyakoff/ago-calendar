@@ -16,8 +16,9 @@ using Ago.Platform.Kernel;
 namespace Ago.Calendar.Api.Configuration;
 
 /// <summary>
-/// Everything the operator console calls: tenant setup, the shared pending queue and the three
-/// booking transitions, and `20-02`'s two manual day edits.
+/// Everything the operator console calls: tenant setup, the shared pending queue and the four
+/// booking transitions (`26-181` added manual confirm to the original three), and `20-02`'s two
+/// manual day edits.
 ///
 /// <para><b>The tenant is never in a route, a body or a query string - it comes from the token.</b>
 /// Every command below reads <c>tenant_id</c> off the principal that
@@ -102,6 +103,11 @@ public static class ConsoleEndpoints
         group.MapPost("/bookings/{bookingId:guid}/reject", HandleRejectAsync).WithName("RejectBooking");
         group.MapPost("/bookings/{bookingId:guid}/cancel", HandleCancelAsync).WithName("CancelBooking");
         group.MapPost("/bookings/{bookingId:guid}/no-show", HandleNoShowAsync).WithName("MarkNoShow");
+
+        // `26-181`/`26-175` slice A: the fourth booking transition on this group, gated on
+        // `booking:confirm` (already declared and granted to the seeded Operator role - see
+        // `Permission.BookingConfirm`'s own remarks). Mirrors the three routes above exactly.
+        group.MapPost("/bookings/{bookingId:guid}/confirm", HandleConfirmAsync).WithName("ConfirmBooking");
 
         group.MapPost("/availability/day-off", HandleDayOffAsync).WithName("DeleteDayOff");
         group.MapPost("/availability/day-boundary", HandleDayBoundaryAsync).WithName("EditDayBoundary");
@@ -711,6 +717,18 @@ public static class ConsoleEndpoints
         Complete(
             await handler.HandleAsync(
                 new MarkNoShow(principal.GetOperatorId(), principal.GetTenantId(), new Domain.EventId(bookingId)),
+                cancellationToken),
+            httpContext);
+
+    private static async Task<IResult> HandleConfirmAsync(
+        Guid bookingId,
+        ClaimsPrincipal principal,
+        ConfirmBookingHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken) =>
+        Complete(
+            await handler.HandleAsync(
+                new ConfirmBooking(principal.GetOperatorId(), principal.GetTenantId(), new Domain.EventId(bookingId)),
                 cancellationToken),
             httpContext);
 

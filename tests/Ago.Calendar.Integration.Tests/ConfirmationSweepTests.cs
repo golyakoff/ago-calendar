@@ -1,7 +1,9 @@
 ﻿using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Application.UseCases.BookingLifecycle;
 using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Calendar.Infrastructure.Postgres;
+using Ago.Calendar.Infrastructure.Postgres.Persistence;
 using Ago.Platform.Kernel;
 using Ago.Platform.Persistence.Postgres;
 using Microsoft.EntityFrameworkCore;
@@ -191,6 +193,56 @@ public class ConfirmationSweepTests(PostgresFixture fixture)
         Assert.Equal(0, await SweepAsync(seed.Tenant.Id, at: Deadline));
         Assert.Equal(EventStatus.Cancelled, await StatusOfAsync(booking.Id));
         Assert.Empty(await OutboxRowsAsync(seed.Tenant.Id));
+    }
+
+    /// <summary>
+    /// `26-181`/`26-175` slice A: the mirror image of <see cref="ARejectedBooking_IsNeverSwept"/> - the
+    /// operator won the race this time, by confirming early instead of vetoing. <see cref="Event.Confirm"/>
+    /// clears <see cref="Event.ConfirmationDeadline"/> unconditionally, so the sweep's own claim
+    /// predicate (<c>status = 'PendingConfirmation'</c>) simply stops matching the row - the identical
+    /// "no interlock needed, the predicate is the mechanism" property the rejected case already proves,
+    /// generalised to the other destination state.
+    /// </summary>
+    [Fact]
+    public async Task AnOperatorConfirmedBooking_IsNeverSweptAgain()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var booking = await APendingBookingAsync(seed, "+79997000010");
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            var result = await new ConfirmBookingHandler(
+                    new EventRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
+                    new EfOutboxWriter<AgoCalendarDbContext>(db), new UuidV7Generator(), new FixedClock(Now))
+                .HandleAsync(
+                    new ConfirmBooking(seed.OperatorId, seed.Tenant.Id, booking.Id), CancellationToken.None);
+
+            Assert.True(result.IsSuccess, result.Error?.Message);
+        }
+
+        // The sweep runs after the operator already confirmed it, past the same deadline it would
+        // otherwise have swept this row on - and finds nothing, because the row already left
+        // PendingConfirmation.
+        Assert.Equal(0, await SweepAsync(seed.Tenant.Id, at: Deadline));
+        Assert.Equal(EventStatus.Booked, await StatusOfAsync(booking.Id));
+
+        // Exactly the operator's own BookingConfirmed, and nothing further from a sweep that had
+        // nothing left to confirm - a double-staged BookingConfirmed here would mean the sweep and the
+        // operator both thought they were first. OutboxRowsAsync's own join is keyed on `outbox.id =
+        // events.id`, which only ever matches BookingConfirmedMapper's row (its MessageId is the
+        // booking's own id); BookingPendingStateChangedMapper mints a fresh MessageId by design (see
+        // its own doc comment), so that second, genuinely-staged row is invisible to this query - the
+        // identical "one row visible here, not two" shape ASecondSweepAfterTheFirst_ConfirmsNothingAndStagesNothing
+        // above already holds for the sweep's own identical pair.
+        Assert.Equal(nameof(BookingConfirmed), Assert.Single(await OutboxRowsAsync(seed.Tenant.Id)).Type);
+    }
+
+    /// <summary>A fixed instant, for constructing a handler directly against real Postgres outside
+    /// this file's own sweep helpers - the same per-file shape <c>SharedPendingQueueTests</c> already
+    /// establishes for the identical need.</summary>
+    private sealed class FixedClock(DateTimeOffset now) : IClock
+    {
+        public DateTimeOffset UtcNow => now;
     }
 
     [Fact]

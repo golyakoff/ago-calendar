@@ -221,6 +221,125 @@ public class BookingLifecycleHandlerTests
     }
 
     [Fact]
+    public async Task Confirm_TransitionsAPendingBookingToBooked()
+    {
+        var world = new World(BookingFixtures.PendingBooking());
+
+        var result = await world.ConfirmAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(EventStatus.Booked, Assert.Single(world.Events.Saved).Status);
+
+        // `26-181`: the same two contracts the sweep stages from the anchor - a future consumer must
+        // not be able to tell an operator confirmed this from the sweep having done it.
+        Assert.Equal(2, world.Outbox.Enqueued.Count);
+        Assert.Contains(world.Outbox.Enqueued, e => e.Type == nameof(Ago.Calendar.Contracts.BookingConfirmed));
+        Assert.Contains(
+            world.Outbox.Enqueued, e => e.Type == nameof(Ago.Calendar.Contracts.BookingPendingStateChanged));
+    }
+
+    [Fact]
+    public async Task Confirm_WithoutThePermission_IsRefusedAndWritesNothing()
+    {
+        var world = new World(BookingFixtures.PendingBooking());
+        world.Permissions.Deny(Permission.BookingConfirm);
+
+        var result = await world.ConfirmAsync();
+
+        Assert.True(result.IsFailure);
+        Assert.Equal("booking.forbidden", result.Error!.Value.Code);
+
+        // Never loaded, never saved - the identical "the check comes first" shape every other
+        // lifecycle handler holds.
+        Assert.Empty(world.Events.Saved);
+        Assert.Empty(world.Events.Loaded);
+    }
+
+    [Fact]
+    public async Task Confirm_OnAMissingBooking_IsReportedAsAbsent()
+    {
+        var world = new World(booking: null);
+
+        Assert.Equal("booking.not_found", (await world.ConfirmAsync()).Error!.Value.Code);
+    }
+
+    [Fact]
+    public async Task Confirm_OnAnotherTenantsBooking_IsReportedAsAbsentRatherThanForbidden()
+    {
+        // The same cross-tenant-leak concern AnotherTenantsBooking_IsReportedAsAbsentRatherThanForbidden
+        // holds for Reject, generalised to Confirm.
+        var world = new World(BookingFixtures.PendingBooking(tenantId: BookingFixtures.OtherTenantId));
+
+        var result = await world.ConfirmAsync();
+
+        Assert.Equal("booking.not_found", result.Error!.Value.Code);
+        Assert.Empty(world.Events.Saved);
+    }
+
+    [Fact]
+    public async Task Confirm_OnABookingTheSweepAlreadyConfirmed_IsAnOrdinaryInvalidState()
+    {
+        // `26-181`'s own idempotency case: the sweep won the race a moment earlier, or the operator's
+        // own double-click reached the handler twice. Event.Confirm only transitions
+        // PendingConfirmation, so the second attempt - whoever it comes from - is refused rather than
+        // silently re-confirming or staging a second BookingConfirmed.
+        var world = new World(BookingFixtures.ConfirmedBooking());
+
+        var result = await world.ConfirmAsync();
+
+        Assert.Equal("booking.invalid_state", result.Error!.Value.Code);
+        Assert.Empty(world.Events.Saved);
+        Assert.Empty(world.Outbox.Enqueued);
+    }
+
+    [Fact]
+    public async Task Confirm_OnARejectedBooking_IsAnOrdinaryInvalidState()
+    {
+        // Symmetric to the already-confirmed case: an operator who confirms a booking somebody already
+        // rejected gets the same kind of refusal, not a crash.
+        var pending = BookingFixtures.PendingBooking();
+        pending.Reject(BookingFixtures.Now);
+        pending.ClearDomainEvents();
+        var world = new World(pending);
+
+        var result = await world.ConfirmAsync();
+
+        Assert.Equal("booking.invalid_state", result.Error!.Value.Code);
+        Assert.Empty(world.Events.Saved);
+    }
+
+    [Fact]
+    public async Task AConcurrentWriterThatWinsFirst_SurfacesAsAConflictNotAnOrmException_ForConfirmToo()
+    {
+        // The same race RejectBookingHandler's own equivalent test proves, generalised to Confirm: the
+        // sweep (or another operator) committed between this handler's load and its save.
+        var world = new World(BookingFixtures.PendingBooking());
+        world.Events.FailNextSaveWithConflict = true;
+
+        var result = await world.ConfirmAsync();
+
+        Assert.Equal("booking.concurrency_conflict", result.Error!.Value.Code);
+    }
+
+    /// <summary>`20-18`'s own Done-when, proven for Confirm: every row of a multi-slot run is confirmed
+    /// together, and exactly one <c>BookingConfirmed</c>/<c>BookingPendingStateChanged</c> pair is
+    /// staged for the whole booking - not one pair per slot, which `20-05`'s SMS consumer would turn
+    /// into duplicate texts.</summary>
+    [Fact]
+    public async Task Confirm_OnAThreeSlotBooking_ConfirmsEveryRow_WithExactlyOneOutboxPair()
+    {
+        var group = BookingFixtures.PendingBookingGroup(3);
+        var world = new World(group, routeEventId: group[1].Id);
+
+        var result = await world.ConfirmAsync();
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, world.Events.Saved.Count);
+        Assert.All(world.Events.Saved, e => Assert.Equal(EventStatus.Booked, e.Status));
+        Assert.Equal(2, world.Outbox.Enqueued.Count);
+    }
+
+    [Fact]
     public async Task MarkNoShow_OnAThreeSlotBooking_FlagsEveryRow_OnlyAfterTheWholeRunHasEnded()
     {
         var group = BookingFixtures.ConfirmedBookingGroup(3);
@@ -248,6 +367,7 @@ public class BookingLifecycleHandlerTests
         private readonly RejectBookingHandler _reject;
         private readonly CancelBookingHandler _cancel;
         private readonly MarkNoShowHandler _noShow;
+        private readonly ConfirmBookingHandler _confirm;
 
         private readonly EventId _routeEventId;
 
@@ -268,6 +388,7 @@ public class BookingLifecycleHandlerTests
             _reject = new RejectBookingHandler(Events, Permissions, Outbox, IdGenerator, clock);
             _cancel = new CancelBookingHandler(Events, Permissions, Outbox, IdGenerator, clock);
             _noShow = new MarkNoShowHandler(Events, Permissions, clock);
+            _confirm = new ConfirmBookingHandler(Events, Permissions, Outbox, IdGenerator, clock);
         }
 
         public FakeEventRepositoryWithSaves Events { get; }
@@ -292,5 +413,9 @@ public class BookingLifecycleHandlerTests
         public Task<Ago.Platform.Kernel.Result> MarkNoShowAsync() =>
             _noShow.HandleAsync(
                 new MarkNoShow(Operator, BookingFixtures.TenantId, _routeEventId), CancellationToken.None);
+
+        public Task<Ago.Platform.Kernel.Result> ConfirmAsync() =>
+            _confirm.HandleAsync(
+                new ConfirmBooking(Operator, BookingFixtures.TenantId, _routeEventId), CancellationToken.None);
     }
 }

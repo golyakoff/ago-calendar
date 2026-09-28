@@ -55,6 +55,15 @@ public readonly record struct Permission(string Value)
     /// byte-for-byte, <c>Ago.Chat.Domain.Permission.BookingReschedule</c>.</summary>
     public static readonly Permission BookingReschedule = new("booking:reschedule");
 
+    /// <summary>`26-268`: an operator entering a booking taken by phone, claiming a run straight into
+    /// <see cref="EventStatus.Booked"/> with no veto window. Gates the manual-entry handler alone - not
+    /// paired with <see cref="CustomerEdit"/>, because the client it creates is the booking's own
+    /// trusted side-effect (the same way a widget booking mints a person with no permission check at
+    /// all), so pairing it with a permission that guards a different, never-invoked sub-operation would
+    /// be decorative. Per adr/0093 this string is, byte-for-byte,
+    /// <c>Ago.Chat.Domain.Permission.BookingCreate</c>.</summary>
+    public static readonly Permission BookingCreate = new("booking:create");
+
     /// <summary>Read a customer's lead card - name, notes, booking history.</summary>
     public static readonly Permission CustomerRead = new("customer:read");
 

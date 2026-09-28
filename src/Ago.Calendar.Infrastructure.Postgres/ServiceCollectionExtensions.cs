@@ -128,6 +128,10 @@ public static class ServiceCollectionExtensions
         // singleton again, for the identical reason.
         services.AddScoped<IConfirmedBookingReadStore, ConfirmedBookingReadStore>();
 
+        // `26-269`: one person's own held-status bookings, past and upcoming - `23-34`'s own sibling,
+        // the same shared NpgsqlDataSource singleton again, for the identical reason.
+        services.AddScoped<IPersonBookingReadStore, PersonBookingReadStore>();
+
         // `23-23`: "can this tenant take a booking right now, and if not, which precondition is
         // unmet" - the same shared NpgsqlDataSource singleton again, for the identical reason.
         services.AddScoped<IBookingReadinessReadStore, BookingReadinessReadStore>();

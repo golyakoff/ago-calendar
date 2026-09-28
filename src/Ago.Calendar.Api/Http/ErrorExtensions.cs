@@ -89,9 +89,12 @@ public static class ErrorExtensions
             // inventing their own; the reasoning is unchanged. `23-34` folds in
             // `confirmed_bookings.forbidden` for the identical reason - an authenticated operator of a
             // known tenant, entitled to be told "you may not" rather than shown a 404.
+            // `26-269`'s own read - the identical 403 shape `confirmed_bookings.forbidden` gives its
+            // own sibling, and for the same reason: an authenticated operator of a known tenant, simply
+            // lacking `customer:read`, is entitled to be told "you may not" rather than shown a 404.
             "booking.forbidden" or "availability.forbidden" or "configuration.forbidden"
-                or "recut.forbidden" or "worker_slots.forbidden" or "confirmed_bookings.forbidden" =>
-                StatusCodes.Status403Forbidden,
+                or "recut.forbidden" or "worker_slots.forbidden" or "confirmed_bookings.forbidden"
+                or "person_bookings.forbidden" => StatusCodes.Status403Forbidden,
             "booking.not_found" or "configuration.not_found" => StatusCodes.Status404NotFound,
             // `22-20`. A worker id that does not resolve in this tenant - the same "does not exist,
             // or belongs to someone else" vagueness `ConfigurationErrors.NotFound`'s own remarks give

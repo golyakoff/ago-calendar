@@ -8,6 +8,7 @@ using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.UseCases.ManualBooking;
+using Ago.Calendar.Application.UseCases.PersonBookings;
 using Ago.Calendar.Application.UseCases.RecutSchedule;
 using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Contracts;
@@ -140,6 +141,12 @@ public static class ConsoleEndpoints
         // `23-12`: "I called and it is them" - a distinct fact from the SMS code's own verification.
         group.MapPost("/contacts/{personId:guid}/confirm-phone", HandleConfirmOperatorVerifiedPhoneAsync)
             .WithName("ConfirmOperatorVerifiedPhone");
+        // `26-269`: this person's own bookings, past and upcoming - the client-detail hub's own read,
+        // gated inside the handler on `customer:read` alone, the identical divergence from this group's
+        // `OperatorPolicy` that `GetConfirmedBookingsForTenantHandler`'s own doc comment explains for its
+        // tenant-wide sibling.
+        group.MapGet("/contacts/{personId:guid}/bookings", HandlePersonBookingsAsync)
+            .WithName("GetPersonBookings");
         // `23-12`'s own audit view - individual reveals, never an aggregated count
         // (`decisions.md` §5's amendment).
         group.MapGet("/contacts/phone-reveals", HandlePhoneRevealsAsync).WithName("GetPhoneReveals");
@@ -921,6 +928,42 @@ public static class ConsoleEndpoints
         return result.IsSuccess
             ? Results.Ok(new ConfirmOperatorVerifiedPhoneResponse(result.Value))
             : result.Error!.Value.ToProblem(httpContext);
+    }
+
+    private static async Task<IResult> HandlePersonBookingsAsync(
+        Guid personId,
+        ClaimsPrincipal principal,
+        GetPersonBookingsHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetPersonBookings(principal.GetOperatorId(), principal.GetTenantId(), personId),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok(result.Value
+            .Select(row => new PersonBookingResponse(
+                row.BookingId.Value,
+                row.CalendarId.Value,
+                row.WorkerId.Value,
+                row.WorkerDisplayName,
+                row.ServiceId.Value,
+                row.ServiceName,
+                row.PersonId,
+                row.StartsAt,
+                row.EndsAt,
+                row.LocalDate,
+                row.Weekday,
+                row.Phone,
+                row.Masked,
+                row.OriginConversationId,
+                row.Status.ToString()))
+            .ToArray());
     }
 
     private static async Task<IResult> HandlePhoneRevealsAsync(

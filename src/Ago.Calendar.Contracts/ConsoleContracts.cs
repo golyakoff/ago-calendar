@@ -293,6 +293,49 @@ public sealed record ConfirmedBookingResponse(
     bool Masked,
     Guid? OriginConversationId);
 
+/// <summary>
+/// `26-269`: one of this person's own bookings - <see cref="ConfirmedBookingResponse"/>'s own field
+/// shape verbatim, plus <see cref="Status"/>, the one thing a person's own held history needs that a
+/// tenant-wide *confirmed* list does not (that screen only ever shows one status). Field names match
+/// <c>Ago.Calendar.Application.Abstractions.PersonBookingRow</c> verbatim.
+/// </summary>
+/// <param name="WorkerDisplayName">Never gated - a worker's own name is the shop's own roster, not
+/// personal data about a customer, the same reasoning <see cref="ConfirmedBookingResponse.WorkerDisplayName"/>
+/// already carries.</param>
+/// <param name="ServiceName">Never gated, the same reasoning <see cref="ConfirmedBookingResponse.ServiceName"/>
+/// already carries.</param>
+/// <param name="PersonId">Echoed back verbatim - the caller already named it in the route.</param>
+/// <param name="Weekday">0 = Sunday, computed server-side - see <see cref="ConfirmedBookingResponse.Weekday"/>'s
+/// own remarks on why.</param>
+/// <param name="Phone">Always populated - masked or real, never <see langword="null"/>, because every
+/// row on this screen already passed <c>customer:read</c>.</param>
+/// <param name="Masked">`23-12`: whether <see cref="Phone"/> is the tenant's own rung-masked display
+/// value rather than the real number.</param>
+/// <param name="OriginConversationId">`26-121`/`26-136`/`adr/0184`: the chat conversation this booking
+/// came in through, or <see langword="null"/> for a booking with no chat origin - the same meaning
+/// <see cref="ConfirmedBookingResponse.OriginConversationId"/> already carries, what the client-detail
+/// hub's own «Открыть диалог» affordance reads.</param>
+/// <param name="Status">`26-269`'s own new field: the domain enum's wire name verbatim -
+/// <c>"PendingConfirmation"</c>, <c>"Booked"</c> or <c>"NoShow"</c>; this list never carries any other
+/// status (<c>IPersonBookingReadStore</c>'s own remarks on why <c>Cancelled</c> and <c>Available</c> are
+/// excluded). What the client-detail hub's Предстоящие/Прошедшие split and no-show marker read.</param>
+public sealed record PersonBookingResponse(
+    Guid BookingId,
+    Guid CalendarId,
+    Guid WorkerId,
+    string WorkerDisplayName,
+    Guid ServiceId,
+    string? ServiceName,
+    Guid PersonId,
+    DateTimeOffset StartsAt,
+    DateTimeOffset EndsAt,
+    DateOnly LocalDate,
+    int Weekday,
+    string Phone,
+    bool Masked,
+    Guid? OriginConversationId,
+    string Status);
+
 /// <summary>`26-208`/`adr/0187`: what the console/Android posts to move a confirmed booking - the
 /// route's own <c>{bookingId}</c> names the booking to move (any member of its run), and the body names
 /// the new start slot by its own event id. The day grid the operator is picking from

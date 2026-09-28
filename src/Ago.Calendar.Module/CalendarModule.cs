@@ -7,6 +7,7 @@ using Ago.Calendar.Application.UseCases.Cors;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Application.UseCases.ManualBooking;
 using Ago.Calendar.Application.UseCases.MaterializeAvailability;
 using Ago.Calendar.Application.UseCases.PhoneVerification;
 using Ago.Calendar.Application.UseCases.Provisioning;
@@ -170,6 +171,13 @@ public sealed class CalendarModule : IProductModule
         // AddCalendarPostgresPersistence). Scoped like the transitions above; it reads the service and
         // worker schedule to size the new run, then delegates the atomic write to the store.
         services.AddScoped<RescheduleBookingHandler>();
+
+        // `26-268`/`adr/0188`: the operator manual-entry write - claims a run straight into `Booked`
+        // for a client entered by hand (taken by phone before this product existed for the tenant),
+        // minting a fresh person and staging PersonRegistered + BookingConfirmed rather than reaching
+        // the shared pending queue at all. IManualBookingStore is registered in
+        // AddCalendarPostgresPersistence, the same split every other booking-lifecycle handler here uses.
+        services.AddScoped<EnterManualBookingHandler>();
 
         // `25-63`: the fan-out's own resolve step - Ago.Calendar.Worker.BookingPendingFanoutConsumer
         // is the one caller, resolving this per message the same "one DI scope per message" shape

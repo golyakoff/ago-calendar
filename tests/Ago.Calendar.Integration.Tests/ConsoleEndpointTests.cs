@@ -482,6 +482,80 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task AnOperator_CanEnterAManualBooking_AndTheSlotLandsBookedWithNoConversation()
+    {
+        // `26-268`/`adr/0188`, end to end over real HTTP: a client taken by phone is blocked straight
+        // into Booked, with no veto window and no chat conversation - a direct command against the
+        // calendar, not a visitor chat (`adr/0188`/§4).
+        var seed = await ProvisionAsync();
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, seed, horizonDays: 30, slotMinutes: 45, bufferMinutes: 0);
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var response = await PostAsync(
+            "/api/v1/console/bookings/manual",
+            new ManualBookingRequest(
+                seed.Calendar.Id.Value, seed.Service.Id.Value, seed.Worker.Id.Value, slot.Id.Value,
+                "Anna", "+79990000070"),
+            seed);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var confirmed = await response.Content.ReadFromJsonAsync<BookingConfirmedResponse>();
+        Assert.Equal(slot.Id.Value, confirmed!.BookingId);
+        Assert.Equal(seed.Worker.Id.Value, confirmed.WorkerId);
+
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events.SingleAsync(e => e.Id == slot.Id);
+        Assert.Equal(EventStatus.Booked, stored.Status);
+        Assert.Null(stored.ConfirmationDeadline);
+        Assert.Null(stored.OriginConversationId);
+
+        // A freshly minted person, confirmed by the operator over the phone - never verified by SMS.
+        var record = await db.PersonRecords.SingleAsync(p => p.PersonId == stored.PersonId);
+        Assert.Equal("+79990000070", record.Phone.Value);
+        Assert.Null(record.PhoneVerifiedAt);
+        Assert.NotNull(record.PhoneConfirmedByOperatorAt);
+    }
+
+    [Fact]
+    public async Task AnOperatorWithoutBookingCreate_CannotEnterAManualBooking()
+    {
+        var seed = await ProvisionAsync();
+        var dispatcher = await ADispatcherAsync(seed);
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, seed, horizonDays: 30, slotMinutes: 45, bufferMinutes: 0);
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var response = await PostAsync(
+            "/api/v1/console/bookings/manual",
+            new ManualBookingRequest(
+                seed.Calendar.Id.Value, seed.Service.Id.Value, seed.Worker.Id.Value, slot.Id.Value,
+                "Anna", "+79990000071"),
+            dispatcher);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        await using var db = fixture.CreateDbContext();
+        Assert.Equal(EventStatus.Available, (await db.Events.FindAsync(slot.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task AManualBooking_WithAMalformedPhone_Returns400()
+    {
+        var seed = await ProvisionAsync();
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, seed, horizonDays: 30, slotMinutes: 45, bufferMinutes: 0);
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var response = await PostAsync(
+            "/api/v1/console/bookings/manual",
+            new ManualBookingRequest(
+                seed.Calendar.Id.Value, seed.Service.Id.Value, seed.Worker.Id.Value, slot.Id.Value,
+                "Anna", "12345"),
+            seed);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("booking.invalid_phone", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AnUnknownKeycloakSubject_IsRefusedByThePolicyRatherThanReachingAHandler()
     {
         // A real person who signed in to the realm and is not an operator of this product. adr/0022
@@ -725,6 +799,26 @@ public class ConsoleEndpointTests(PostgresFixture fixture) : IAsyncLifetime
         await using var db = fixture.CreateDbContext();
         db.Events.Add(slot);
         await db.SaveChangesAsync();
+        return slot;
+    }
+
+    /// <summary>`26-268`/`adr/0188`: an <see cref="EventStatus.Available"/> slot for the manual-entry
+    /// endpoint to claim - unlike <see cref="APendingBookingAsync"/>, never claimed first, since a
+    /// manual entry claims straight from <c>Available</c>.</summary>
+    private async Task<Event> AnAvailableSlotAsync(SeededTenant seed)
+    {
+        var startsAt = DateTimeOffset.UtcNow.AddDays(11).AddMinutes(Random.Shared.Next(0, 600));
+        var slot = Event.Materialize(
+            new EventId(CalendarSeed.NewId()),
+            seed.Tenant.Id,
+            seed.Calendar.Id,
+            seed.Worker.Id,
+            new TimeSlot(startsAt, startsAt.AddMinutes(45)),
+            DateOnly.FromDateTime(startsAt.UtcDateTime),
+            DateTimeOffset.UtcNow);
+
+        await using var db = fixture.CreateDbContext();
+        await new EventRepository(db).AddRangeAsync([slot], CancellationToken.None);
         return slot;
     }
 

@@ -50,7 +50,53 @@ public static class BookingConfirmedMapper
             // choice, the same call MessageAcceptedMapper made for the same reason.
             CorrelationId: idGenerator.NewId(domainEvent.OccurredAt));
 
-        return new EventEnvelope(
+        return ToEnvelope(contract);
+    }
+
+    /// <summary>
+    /// `26-268`/`adr/0188`: the manual-entry overload - raw values rather than an
+    /// <see cref="EventConfirmed"/> domain event, the identical reason <see cref="BookingRescheduledMapper"/>
+    /// gives for its own plain-value signature. A manual booking claims straight into
+    /// <see cref="EventStatus.Booked"/> with one raw <c>UPDATE</c> (<c>ManualBookingStore</c>) and never
+    /// runs <see cref="Event.Confirm"/>, so there is no <see cref="EventConfirmed"/> to map from - only
+    /// the values <c>EnterManualBookingHandler</c> already resolved (the target slot it read, the run's
+    /// own end, the person it minted).
+    /// </summary>
+    /// <param name="eventId">The run's own anchor id - the first slot the operator picked, exactly as
+    /// <see cref="BookingConfirmed.EventId"/>'s own remarks describe for the ordinary confirm path.</param>
+    /// <param name="startsAt">The run's own start - the picked slot's own <c>StartsAt</c>.</param>
+    /// <param name="endsAt">The run's own end - the last claimed slot's own <c>EndsAt</c>, buffers
+    /// included, the identical "the run's own whole span" the domain-event overload's own
+    /// <c>groupEndsAt</c> parameter states above.</param>
+    public static EventEnvelope ToEnvelope(
+        EventId eventId,
+        TenantId tenantId,
+        CalendarId calendarId,
+        Guid personId,
+        DateTimeOffset startsAt,
+        DateTimeOffset endsAt,
+        DateOnly localDate,
+        DateTimeOffset occurredAt,
+        IIdGenerator idGenerator)
+    {
+        ArgumentNullException.ThrowIfNull(idGenerator);
+
+        var contract = new BookingConfirmed(
+            EventId: eventId.Value,
+            TenantId: tenantId.Value,
+            CalendarId: calendarId.Value,
+            PersonId: personId,
+            StartsAt: startsAt,
+            EndsAt: endsAt,
+            LocalDate: localDate,
+            OccurredAt: occurredAt,
+            CorrelationId: idGenerator.NewId(occurredAt));
+
+        return ToEnvelope(contract);
+    }
+
+    private static EventEnvelope ToEnvelope(BookingConfirmed contract) =>
+        new(
             // The event's own id, not a second one: an outbox row and the fact it carries are the
             // same thing, and a consumer deduplicating on MessageId is deduplicating on "this
             // booking was confirmed" - which is exactly the idempotency key it wants, since a
@@ -66,5 +112,4 @@ public static class BookingConfirmedMapper
             OccurredAt: contract.OccurredAt,
             CorrelationId: contract.CorrelationId,
             Payload: JsonSerializer.Serialize(contract));
-    }
 }

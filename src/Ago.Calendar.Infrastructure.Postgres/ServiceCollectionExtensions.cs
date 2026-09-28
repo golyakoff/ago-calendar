@@ -63,6 +63,12 @@ public static class ServiceCollectionExtensions
         // are scoped).
         services.AddScoped<IBookingRescheduleStore, BookingRescheduleStore>();
 
+        // `26-268`/`adr/0188`: the operator manual-entry write - a fresh person insert and a claim
+        // straight into `Booked`, in one transaction. Scoped like every other adapter here, for the
+        // identical reason: it holds the DbContext whose connection both raw statements and the outbox
+        // SaveChangesAsync run on.
+        services.AddScoped<IManualBookingStore, ManualBookingStore>();
+
         // `22-05`/`adr/0093`: the projection replicated from AGO Chat's own `RoleAssignmentsChanged` -
         // the one thing both a permission check and OperatorIdentityClaimsTransformation now read.
         // Same DbContext, same "Infrastructure adapter behind an Application port" shape every other

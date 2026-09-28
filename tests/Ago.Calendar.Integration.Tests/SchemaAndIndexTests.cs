@@ -184,7 +184,9 @@ public class SchemaAndIndexTests(PostgresFixture fixture)
         var storedPermissions = await new RoleAssignmentProjectionStore(reader)
             .GetPermissionsAsync(seed.OperatorId, seed.Tenant.Id, CancellationToken.None);
         Assert.Contains(Permission.BookingConfirm.Value, storedPermissions);
-        Assert.Equal(7, storedPermissions.Count);
+        // `26-268`/`adr/0188` added `booking:create` to CalendarSeed.AllPermissions - eight now, not
+        // seven.
+        Assert.Equal(8, storedPermissions.Count);
 
         // The worker's own two joins come back loaded, which is what makes WorksIn/Offers safe to
         // ask after a load.

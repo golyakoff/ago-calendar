@@ -41,6 +41,11 @@ internal static class CalendarSeed
         Permission.BookingConfirm.Value, Permission.BookingReject.Value, Permission.BookingCancel.Value,
         Permission.BookingMarkNoShow.Value, Permission.CustomerRead.Value, Permission.CustomerEdit.Value,
         Permission.CalendarConfigure.Value,
+        // `26-268`/`adr/0188`: the manual-entry gate - granted to the seeded Operator/Admin roles in
+        // production (RegisterSiteHandler.OperatorRolePermissions), added here so a seeded operator can
+        // exercise POST /bookings/manual over real HTTP the same way it already can every other v1
+        // action.
+        Permission.BookingCreate.Value,
     ];
 
     /// <param name="publicKey">`20-06`. Unique per seeded tenant by default, because

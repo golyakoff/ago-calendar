@@ -7,6 +7,7 @@ using Ago.Calendar.Application.UseCases.ConfirmedBookings;
 using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
+using Ago.Calendar.Application.UseCases.ManualBooking;
 using Ago.Calendar.Application.UseCases.RecutSchedule;
 using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Contracts;
@@ -114,6 +115,14 @@ public static class ConsoleEndpoints
         // granted to the seeded Operator role). Unlike the four above it carries a body: the new start
         // slot's own event id (RescheduleBookingRequest).
         group.MapPost("/bookings/{bookingId:guid}/reschedule", HandleRescheduleAsync).WithName("RescheduleBooking");
+
+        // `26-268`/`adr/0188`: an operator blocks a slot for a client entered by hand - taken by phone
+        // before this product existed for the tenant. Gated inside the handler on `booking:create`
+        // alone (adr/0093 mirror of ago-chat's own catalogue, granted to the seeded Operator and Admin
+        // roles) - not this group's own `OperatorPolicy` doing anything more than authenticating the
+        // caller. Unlike the five transitions above, this creates a booking rather than transitioning
+        // one that already existed, so it answers 201 (HandleManualBookingAsync's own remarks).
+        group.MapPost("/bookings/manual", HandleManualBookingAsync).WithName("EnterManualBooking");
 
         group.MapPost("/availability/day-off", HandleDayOffAsync).WithName("DeleteDayOff");
         group.MapPost("/availability/day-boundary", HandleDayBoundaryAsync).WithName("EditDayBoundary");
@@ -758,6 +767,51 @@ public static class ConsoleEndpoints
                     new Domain.EventId(bookingId), new Domain.EventId(request.NewStartEventId)),
                 cancellationToken),
             httpContext);
+    }
+
+    /// <summary>
+    /// `26-268`/`adr/0188`: unlike the five booking transitions above, this genuinely creates a
+    /// booking - the identical "201 with a <c>Location</c>, because there is a real new resource"
+    /// reasoning <c>HandleCreateCalendarAsync</c>'s own remarks give, and the opposite of `20-03`'s
+    /// public <c>POST .../book</c>, which transitions a row that already existed and stays <c>200</c>.
+    /// There is no single-booking <c>GET</c> on this product's console API yet, so the <c>Location</c>
+    /// points at the confirmed-bookings list the new row will appear on rather than at a resource this
+    /// version cannot serve.
+    /// </summary>
+    private static async Task<IResult> HandleManualBookingAsync(
+        ManualBookingRequest request,
+        ClaimsPrincipal principal,
+        EnterManualBookingHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return Results.BadRequest();
+        }
+
+        var result = await handler.HandleAsync(
+            new EnterManualBooking(
+                principal.GetOperatorId(), principal.GetTenantId(),
+                new CalendarId(request.CalendarId), new ServiceId(request.ServiceId),
+                new WorkerId(request.WorkerId), new Domain.EventId(request.StartEventId),
+                request.Name, request.Phone),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        var booking = result.Value;
+        return Results.Created(
+            "/api/v1/console/confirmed-bookings",
+            new BookingConfirmedResponse(
+                booking.BookingId.Value,
+                booking.WorkerId.Value,
+                booking.Slot.StartsAt,
+                booking.Slot.EndsAt,
+                booking.LocalDate));
     }
 
     private static async Task<IResult> HandleDayOffAsync(

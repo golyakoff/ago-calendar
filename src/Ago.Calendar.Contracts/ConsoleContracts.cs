@@ -301,6 +301,20 @@ public sealed record ConfirmedBookingResponse(
 /// on the wire. Same worker, same service, time-only for v1 (`adr/0187`).</summary>
 public sealed record RescheduleBookingRequest(Guid NewStartEventId);
 
+/// <summary>`26-268`/`adr/0188`: what the console/Android posts to block a slot for a client entered by
+/// hand - a booking that was taken by phone before this product existed for the tenant. Named the same
+/// four axes the visitor's own booking flow picks (service, worker, date, slot - the slot by its own
+/// grid <c>eventId</c>, the same convention <see cref="RescheduleBookingRequest"/> and <c>BookEvent</c>
+/// both use), plus who the client is. <see cref="Email"/> is deliberately absent - `26-268`'s own slice
+/// #3 carries it end to end once <c>PersonRegistered</c> grows the field; until then a stray
+/// <c>email</c> property on the wire is simply ignored by this version's handler.</summary>
+/// <param name="Name">The client's name as the operator typed it over the phone. Trimmed and
+/// normalised to <see langword="null"/> when blank by the handler, never here.</param>
+/// <param name="Phone">The client's phone, raw as the operator typed it - validated by
+/// <c>PhoneNumber</c>'s own constructor.</param>
+public sealed record ManualBookingRequest(
+    Guid CalendarId, Guid ServiceId, Guid WorkerId, Guid StartEventId, string Name, string Phone);
+
 /// <summary>`23-12`: what the console posts to reveal one customer's phone - which screen asked, for
 /// the reveal record's own "which surface" field.</summary>
 public sealed record RevealCustomerPhoneRequest(string Surface);

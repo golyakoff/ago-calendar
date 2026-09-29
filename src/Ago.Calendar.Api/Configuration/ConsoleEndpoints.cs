@@ -7,6 +7,7 @@ using Ago.Calendar.Application.UseCases.ConfirmedBookings;
 using Ago.Calendar.Application.UseCases.Contacts;
 using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
+using Ago.Calendar.Application.UseCases.ErasePerson;
 using Ago.Calendar.Application.UseCases.ManualBooking;
 using Ago.Calendar.Application.UseCases.PersonBookings;
 using Ago.Calendar.Application.UseCases.PersonRecognition;
@@ -160,6 +161,13 @@ public static class ConsoleEndpoints
         // `23-12`'s own audit view - individual reveals, never an aggregated count
         // (`decisions.md` §5's amendment).
         group.MapGet("/contacts/phone-reveals", HandlePhoneRevealsAsync).WithName("GetPhoneReveals");
+
+        // `26-275`/`adr/0189`: an Admin erases a client - hard, irreversible, calendar-initiated
+        // (`ErasePersonHandler`'s own remarks on why this product decides, not chat). Gated inside the
+        // handler on `customer:erase` alone, the identical divergence from this group's own
+        // `OperatorPolicy` every other `/contacts/{personId}` route already takes - no new claim on the
+        // group, only a narrower permission the handler itself checks.
+        group.MapDelete("/contacts/{personId:guid}", HandleErasePersonAsync).WithName("ErasePerson");
 
         // `adr/0184` (author decision O2): the `23-60` merge routes (`/contacts/merge-preview`,
         // `/contacts/merge`, `/contacts/merges`) are retired with the calendar-side merge - see
@@ -1035,6 +1043,22 @@ public static class ConsoleEndpoints
                 item.Id, item.OccurredAt, item.PersonId, item.OperatorId, item.Surface))],
             page.NextBeforeId));
     }
+
+    /// <summary>`26-275`/`adr/0189`. 204 on success, the identical shape <see cref="Complete"/> already
+    /// gives every other command that transitions or removes a resource the route already names rather
+    /// than creating one. A blocked (future bookings) or not-found outcome becomes a problem response
+    /// through <see cref="ErrorExtensions"/>'s own mapping, never a bare 500.</summary>
+    private static async Task<IResult> HandleErasePersonAsync(
+        Guid personId,
+        ClaimsPrincipal principal,
+        ErasePersonHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken) =>
+        Complete(
+            await handler.HandleAsync(
+                new ErasePerson(principal.GetOperatorId(), principal.GetTenantId(), personId),
+                cancellationToken),
+            httpContext);
 
     private static async Task<IResult> HandleWorkerSlotsAsync(
         Guid workerId,

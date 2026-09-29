@@ -31,10 +31,14 @@ namespace Ago.Calendar.Application.UseCases.ManualBooking;
 /// ids to ask the claim for</i> (rule 8). The store's own claim is the only step that changes
 /// anything.</para>
 ///
-/// <para><b>Always mints a new person (`adr/0188`/§3.4).</b> Phone-based recognition - "is this number
-/// already a client" - is deferred to its own slice; this handler mints
-/// (<see cref="IIdGenerator.NewId"/>) every time, exactly as <c>BookEventHandler</c> does for the
-/// public/operator path with no chat origin.</para>
+/// <para><b>Mints a new person, unless the operator asked to reuse one (`26-268`§2a/`adr/0188`).</b>
+/// Phone-based recognition - "is this number already a client" - is a separate read
+/// (<c>GetPersonCandidatesByPhoneHandler</c>) the dialog calls *before* this one; this handler never
+/// looks a phone up itself. It only ever does one of two things with <c>command.ReusePersonId</c>: mint a
+/// fresh id (<see cref="IIdGenerator.NewId"/>, exactly as <c>BookEventHandler</c> does for the
+/// public/operator path with no chat origin) when it is <see langword="null"/>, or verify and reuse the
+/// id the operator named when it is not. Either way the *decision* of which happens was already made by
+/// a human before this handler ever ran - this is composition, not a second recognition step.</para>
 /// </summary>
 public sealed class EnterManualBookingHandler(
     IBookingCalendarRepository calendars,
@@ -42,6 +46,7 @@ public sealed class EnterManualBookingHandler(
     IServiceRepository services,
     IWorkerScheduleRepository schedules,
     IEventRepository events,
+    IPersonRecordRepository personRecords,
     IManualBookingStore store,
     IPermissionChecker permissions,
     IIdGenerator idGenerator,
@@ -130,21 +135,52 @@ public sealed class EnterManualBookingHandler(
 
         var now = clock.UtcNow;
 
-        // `adr/0188`/§3.4: always a fresh person in this slice - phone-based recognition is its own,
-        // later slice. The same `IIdGenerator` every other minted id on this product's write paths
-        // comes from.
-        var personId = idGenerator.NewId(now);
+        Guid personId;
+        EventEnvelope? personRegistered;
+
+        if (command.ReusePersonId is { } reusePersonId)
+        {
+            // `26-268`§2a/`adr/0188`: the operator already chose this person from
+            // `GetPersonCandidatesByPhoneHandler`'s own list - this is the one place that choice is
+            // trusted, and only after it is re-checked against this tenant. A caller-supplied id is never
+            // taken at face value (the identical "the calendar/service/worker ids are checked against
+            // this operator's own tenant" discipline every read above already applies) - reusing a person
+            // from another tenant would let an operator of tenant A silently attach a booking to a person
+            // id that belongs to tenant B's own customer.
+            var existing = await personRecords.GetByIdAsync(reusePersonId, cancellationToken);
+            if (existing is null || existing.TenantId != command.TenantId)
+            {
+                // Collapsed into one not-found, the identical cross-tenant info-hiding shape
+                // `BookingLifecycleErrors.WrongTenant` and `ContactsErrors.CustomerNotFound` both already
+                // use: an operator of tenant A must not learn that a person id is real but belongs to
+                // tenant B.
+                return BookingLifecycleErrors.PersonNotFound(reusePersonId);
+            }
+
+            personId = reusePersonId;
+            // No PersonRegistered here - `IManualBookingStore.TryEnterAsync`'s own remarks: a reused
+            // person already has a chat-side registration from whichever earlier booking created their
+            // record, and announcing it again would tell chat to register an id it already knows.
+            personRegistered = null;
+        }
+        else
+        {
+            // `adr/0188`/§3.4: the unconditional-mint path, unchanged since before §2a existed. The same
+            // `IIdGenerator` every other minted id on this product's write paths comes from.
+            personId = idGenerator.NewId(now);
+
+            var displayName = string.IsNullOrWhiteSpace(command.DisplayName) ? null : command.DisplayName.Trim();
+
+            // Built here (Application - clean-architecture.md's own placement for the domain-to-contract
+            // mapping), from facts this handler already resolved, and handed to the store to stage on the
+            // success path only, inside its transaction (rule 4): a minted person for a claim that never
+            // happened must never reach chat.
+            personRegistered = PersonRegisteredMapper.ToEnvelope(
+                personId, command.TenantId, phone, displayName, now, idGenerator);
+        }
 
         var lastSlot = dayEvents.Single(slot => slot.Id == run[^1]);
-        var displayName = string.IsNullOrWhiteSpace(command.DisplayName) ? null : command.DisplayName.Trim();
 
-        // Both envelopes built here (Application - clean-architecture.md's own placement for the
-        // domain-to-contract mapping), from facts this handler already resolved, and handed to the
-        // store to stage on the success path only, inside its transaction (rule 4): a minted person or
-        // a "confirmed" fact for a claim that never happened must never reach chat or a downstream
-        // consumer.
-        var personRegistered = PersonRegisteredMapper.ToEnvelope(
-            personId, command.TenantId, phone, displayName, now, idGenerator);
         var bookingConfirmed = BookingConfirmedMapper.ToEnvelope(
             eventId: run[0],
             tenantId: command.TenantId,

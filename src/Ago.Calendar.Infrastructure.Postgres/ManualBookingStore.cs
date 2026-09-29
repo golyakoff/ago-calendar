@@ -18,15 +18,22 @@ namespace Ago.Calendar.Infrastructure.Postgres;
 ///
 /// <para><b>Person first, claim second</b> - <see cref="BookingStore"/>'s own ordering, restated for
 /// the same reason: the person row is locked before the contended claim runs, so two writers can never
-/// deadlock against each other by locking the two rows in opposite orders. Here the person id is always
-/// freshly minted (`adr/0188`/§3.4), so the <c>ON CONFLICT</c> arm below is unreachable in production
-/// traffic - kept for the identical defensive symmetry <see cref="BookingStore"/>'s own upsert has,
-/// rather than assuming a caller can never hand this port a colliding id.</para>
+/// deadlock against each other by locking the two rows in opposite orders. Before `26-268`§2a the person
+/// id was always freshly minted (`adr/0188`/§3.4), so the <c>ON CONFLICT</c> arm below was unreachable in
+/// production traffic, kept only for the identical defensive symmetry <see cref="BookingStore"/>'s own
+/// upsert has. §2a's reuse path makes it reachable for real: reusing a recognised client re-runs this
+/// same statement against an id that already has a row, which is exactly the "re-confirm phone, bump
+/// last-seen" update the <c>ON CONFLICT</c> clause below already expresses - no SQL change was needed to
+/// support it.</para>
 /// </summary>
 public sealed class ManualBookingStore(AgoCalendarDbContext db, IOutboxWriter outbox) : IManualBookingStore
 {
     /// <summary>
-    /// The freshly minted person's thin operational record. <c>phone_verified_at</c> stays
+    /// The person's thin operational record - inserted fresh on a mint, or re-confirmed on a
+    /// `26-268`§2a reuse (the <c>ON CONFLICT</c> arm: phone, last-seen and the operator-confirmed
+    /// timestamp all move forward; <c>phone_verified_at</c> and <c>no_show_count</c> are deliberately
+    /// absent from the <c>SET</c> list so a reuse never clobbers an SMS proof or a no-show history the
+    /// existing row already holds). On a fresh mint, <c>phone_verified_at</c> stays
     /// <see langword="null"/> - this person has proven nothing by SMS - and
     /// <c>operator_confirmed_phone_at</c> is set to <paramref name="attempt"/>'s own <c>Now</c>: the
     /// operator's "I called and it is them" fact (`23-12`/§3.3), the same column
@@ -96,7 +103,16 @@ public sealed class ManualBookingStore(AgoCalendarDbContext db, IOutboxWriter ou
         // the person insert (rule 4) - the identical "stage inside the transaction, flush with one
         // SaveChangesAsync on the ambient transaction" shape BookingStore and BookingRescheduleStore both
         // already use.
-        outbox.Enqueue(attempt.PersonRegisteredEvent);
+        //
+        // `26-268`§2a/`adr/0188`: PersonRegisteredEvent is null on the reuse path - the person already
+        // has a chat-side registration from whichever earlier booking created this PersonId's own
+        // record, and staging it again would tell chat to register an id it already knows. BookingConfirmed
+        // stages unconditionally: a real booking was made either way.
+        if (attempt.PersonRegisteredEvent is { } personRegistered)
+        {
+            outbox.Enqueue(personRegistered);
+        }
+
         outbox.Enqueue(attempt.BookingConfirmedEvent);
 
         await db.SaveChangesAsync(cancellationToken);

@@ -179,6 +179,12 @@ public sealed class CalendarModule : IProductModule
         // AddCalendarPostgresPersistence, the same split every other booking-lifecycle handler here uses.
         services.AddScoped<EnterManualBookingHandler>();
 
+        // `26-268`§2a/`adr/0188`: the phone-based recognition read the manual-entry dialog calls before
+        // the write above - "who has already booked with this number", so the operator can reuse a
+        // client instead of always minting. A plain read, so it sits beside the write's own registration
+        // rather than needing anything from AddCalendarPostgresPersistence beyond its own read store.
+        services.AddScoped<Application.UseCases.PersonRecognition.GetPersonCandidatesByPhoneHandler>();
+
         // `25-63`: the fan-out's own resolve step - Ago.Calendar.Worker.BookingPendingFanoutConsumer
         // is the one caller, resolving this per message the same "one DI scope per message" shape
         // TeamChatFanoutConsumer/ConnectionFanoutConsumer already establish in ago-chat.

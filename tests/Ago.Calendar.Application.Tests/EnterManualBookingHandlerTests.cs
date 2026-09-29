@@ -10,7 +10,9 @@ namespace Ago.Calendar.Application.Tests;
 /// refusal reports, which refusals never reach the store at all, and - the assertions that matter
 /// most - that a successful entry stages exactly two events (<c>PersonRegistered</c>,
 /// <c>BookingConfirmed</c>) with a freshly minted person id, and that a lost claim race is an ordinary
-/// rejection rather than a fault.
+/// rejection rather than a fault. `26-268`§2a adds the reuse branch: a valid, same-tenant
+/// <c>ReusePersonId</c> claims under that id and stages no <c>PersonRegistered</c>; an invalid one (wrong
+/// tenant, or no such id) is refused before the store is ever reached.
 /// </summary>
 public class EnterManualBookingHandlerTests
 {
@@ -36,11 +38,14 @@ public class EnterManualBookingHandlerTests
         Assert.NotEqual(Guid.Empty, attempt.PersonId);
 
         // Exactly the two events `adr/0188`/§3.5 names, and no third - never
-        // BookingPendingStateChanged, since this booking was never pending.
-        Assert.Equal("PersonRegistered", attempt.PersonRegisteredEvent.Type);
+        // BookingPendingStateChanged, since this booking was never pending. Non-null on the mint path -
+        // `26-268`§2a's own reuse path is what leaves this null, and this test never reuses.
+        Assert.NotNull(attempt.PersonRegisteredEvent);
+        var personRegisteredEvent = attempt.PersonRegisteredEvent!;
+        Assert.Equal("PersonRegistered", personRegisteredEvent.Type);
         Assert.Equal("BookingConfirmed", attempt.BookingConfirmedEvent.Type);
 
-        var registered = JsonSerializer.Deserialize<PersonRegistered>(attempt.PersonRegisteredEvent.Payload)!;
+        var registered = JsonSerializer.Deserialize<PersonRegistered>(personRegisteredEvent.Payload)!;
         Assert.Equal(BookingFixtures.Phone, registered.Phone);
         Assert.Equal(attempt.PersonId, registered.PersonId);
         Assert.Equal("Anna", registered.Name);
@@ -58,7 +63,8 @@ public class EnterManualBookingHandlerTests
         await world.HandleAsync(Command(displayName: "   "));
 
         var attempt = Assert.Single(world.Store.Attempts);
-        var registered = JsonSerializer.Deserialize<PersonRegistered>(attempt.PersonRegisteredEvent.Payload)!;
+        Assert.NotNull(attempt.PersonRegisteredEvent);
+        var registered = JsonSerializer.Deserialize<PersonRegistered>(attempt.PersonRegisteredEvent!.Payload)!;
         Assert.Null(registered.Name);
     }
 
@@ -189,6 +195,56 @@ public class EnterManualBookingHandlerTests
     }
 
     [Fact]
+    public async Task AReuseOfAnExistingPersonInThisTenant_ClaimsUnderThatId_AndStagesNoPersonRegistered()
+    {
+        // `26-268`§2a/`adr/0188`: the operator chose «Это он» - the write must claim under the existing
+        // id and must NOT announce a second registration for a person chat already knows about.
+        var existing = PersonRecord.Register(
+            new Guid("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), BookingFixtures.TenantId,
+            new PhoneNumber(BookingFixtures.Phone), BookingFixtures.Now);
+        var world = new World(existingPerson: existing);
+
+        var result = await world.HandleAsync(Command(reusePersonId: existing.PersonId));
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        var attempt = Assert.Single(world.Store.Attempts);
+        Assert.Equal(existing.PersonId, attempt.PersonId);
+        Assert.Equal(existing.PersonId, result.Value.PersonId);
+
+        // Exactly BookingConfirmed - never PersonRegistered for an already-registered person.
+        Assert.Null(attempt.PersonRegisteredEvent);
+        Assert.Equal("BookingConfirmed", attempt.BookingConfirmedEvent.Type);
+    }
+
+    [Fact]
+    public async Task AReuseOfAPersonBelongingToAnotherTenant_IsReportedAsNotFound_AndNeverReachesTheStore()
+    {
+        // The identical cross-tenant info-hiding shape every other lifecycle handler applies: an
+        // operator of tenant A must not learn that a person id is real but belongs to tenant B.
+        var otherTenantsPerson = PersonRecord.Register(
+            new Guid("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            new TenantId(new Guid("77777777-7777-7777-7777-777777777777")),
+            new PhoneNumber(BookingFixtures.Phone), BookingFixtures.Now);
+        var world = new World(existingPerson: otherTenantsPerson);
+
+        var result = await world.HandleAsync(Command(reusePersonId: otherTenantsPerson.PersonId));
+
+        Assert.Equal("booking.person_not_found", result.Error!.Value.Code);
+        Assert.Empty(world.Store.Attempts);
+    }
+
+    [Fact]
+    public async Task AReuseOfAnUnknownPersonId_IsReportedAsNotFound_AndNeverReachesTheStore()
+    {
+        var world = new World();
+
+        var result = await world.HandleAsync(Command(reusePersonId: Guid.NewGuid()));
+
+        Assert.Equal("booking.person_not_found", result.Error!.Value.Code);
+        Assert.Empty(world.Store.Attempts);
+    }
+
+    [Fact]
     public async Task ALostClaimRace_IsAnOrdinaryRejection_NotAnException()
     {
         var world = new World();
@@ -206,10 +262,12 @@ public class EnterManualBookingHandlerTests
     }
 
     private static EnterManualBooking Command(
-        string? phone = null, ServiceId? serviceId = null, string displayName = "Anna") =>
+        string? phone = null, ServiceId? serviceId = null, string displayName = "Anna",
+        Guid? reusePersonId = null) =>
         new(
             Operator, BookingFixtures.TenantId, BookingFixtures.CalendarId, serviceId ?? BookingFixtures.ServiceId,
-            BookingFixtures.WorkerId, BookingFixtures.EventId, displayName, phone ?? BookingFixtures.Phone);
+            BookingFixtures.WorkerId, BookingFixtures.EventId, displayName, phone ?? BookingFixtures.Phone,
+            reusePersonId);
 
     private static BookingCalendar OtherTenantsCalendar()
     {
@@ -234,12 +292,14 @@ public class EnterManualBookingHandlerTests
             Service? service = null,
             WorkerSchedule? schedule = null,
             bool noSchedule = false,
-            IReadOnlyList<Event>? day = null)
+            IReadOnlyList<Event>? day = null,
+            PersonRecord? existingPerson = null)
         {
             var resolvedService = service ?? BookingFixtures.HaircutService();
             var resolvedCalendar = calendar ?? BookingFixtures.Calendar();
             var resolvedSchedule = noSchedule ? null : schedule ?? BookingFixtures.Schedule();
             var resolvedDay = day ?? [BookingFixtures.AvailableSlot()];
+            PersonRecords = new FakePersonRecordRepository(existingPerson);
 
             _handler = new EnterManualBookingHandler(
                 new FakeCalendarRepository(calendarExists ? resolvedCalendar : null),
@@ -247,6 +307,7 @@ public class EnterManualBookingHandlerTests
                 new FakeServiceRepository(resolvedService),
                 new FakeWorkerScheduleRepository(resolvedSchedule),
                 new FakeEventRepository(resolvedDay),
+                PersonRecords,
                 Store,
                 Permissions,
                 new SequentialIdGenerator(),
@@ -256,6 +317,12 @@ public class EnterManualBookingHandlerTests
         public FakeManualBookingStore Store { get; } = new();
 
         public FakePermissionChecker Permissions { get; } = new();
+
+        /// <summary>`26-268`§2a: holds no record by default - the ordinary "no reuse in play" world
+        /// every test before §2a already ran in, where <c>ReusePersonId</c> is always null and this port
+        /// is never even asked. A test proving the reuse branch constructs a <c>World</c> with an
+        /// existing record here first.</summary>
+        public FakePersonRecordRepository PersonRecords { get; }
 
         public Task<Ago.Platform.Kernel.Result<Ago.Calendar.Application.Abstractions.BookingConfirmation>> HandleAsync(
             EnterManualBooking command) =>

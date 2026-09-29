@@ -352,11 +352,41 @@ public sealed record RescheduleBookingRequest(Guid NewStartEventId);
 /// #3 carries it end to end once <c>PersonRegistered</c> grows the field; until then a stray
 /// <c>email</c> property on the wire is simply ignored by this version's handler.</summary>
 /// <param name="Name">The client's name as the operator typed it over the phone. Trimmed and
-/// normalised to <see langword="null"/> when blank by the handler, never here.</param>
+/// normalised to <see langword="null"/> when blank by the handler, never here. Ignored by the handler
+/// when <see cref="ReusePersonId"/> is set - a recognised client's name is not re-typed
+/// (`docs/backlog/26-268-manual-booking-entry.md` §3.4: "a recognized client skips name/email
+/// re-entry").</param>
 /// <param name="Phone">The client's phone, raw as the operator typed it - validated by
-/// <c>PhoneNumber</c>'s own constructor.</param>
+/// <c>PhoneNumber</c>'s own constructor. Still sent on a reuse: it is what the operator searched
+/// <c>GET /contacts/by-phone</c> with, and the store re-confirms it onto the existing
+/// <c>PersonRecord</c> (<c>ManualBookingStore</c>'s own remarks on its <c>ON CONFLICT</c> arm).</param>
+/// <param name="ReusePersonId">`26-268`§2a/`adr/0188`: set when the operator picked a candidate from
+/// <c>GET /contacts/by-phone</c> («Это он» or a pick-list row) instead of «Новый клиент». The one place
+/// the operator's own recognition decision reaches the write - see <c>EnterManualBooking.ReusePersonId</c>'s
+/// own remarks for why nothing upstream of this field ever resolves a phone to a person on its
+/// own.</param>
 public sealed record ManualBookingRequest(
-    Guid CalendarId, Guid ServiceId, Guid WorkerId, Guid StartEventId, string Name, string Phone);
+    Guid CalendarId, Guid ServiceId, Guid WorkerId, Guid StartEventId, string Name, string Phone,
+    Guid? ReusePersonId = null);
+
+/// <summary>`26-268`§2a/`adr/0188`: one row of <c>GET /contacts/by-phone</c>'s own answer - an existing
+/// client the operator can reuse instead of minting a new one. See
+/// <c>Ago.Calendar.Application.Abstractions.PersonRecognitionCandidateRow</c> for the full field-by-field
+/// reasoning this mirrors verbatim; carries no display name for the identical `adr/0184` reason
+/// <see cref="ContactResponse"/> does not, either - the console/Android display-merges the name from chat
+/// by <see cref="PersonId"/>.</summary>
+/// <param name="BookingCount">The "returning client" hint («Постоянный клиент · N записи») -
+/// <c>PersonRecognitionCandidateRow.BookingCount</c>'s own remarks.</param>
+public sealed record PersonRecognitionCandidateResponse(
+    Guid PersonId,
+    string Phone,
+    bool Masked,
+    int NoShowCount,
+    int BookingCount,
+    DateTimeOffset? PhoneVerifiedAt,
+    DateTimeOffset? PhoneConfirmedByOperatorAt,
+    DateTimeOffset FirstSeenAt,
+    DateTimeOffset LastSeenAt);
 
 /// <summary>`23-12`: what the console posts to reveal one customer's phone - which screen asked, for
 /// the reveal record's own "which surface" field.</summary>

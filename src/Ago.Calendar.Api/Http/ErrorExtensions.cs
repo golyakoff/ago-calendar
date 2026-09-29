@@ -195,6 +195,17 @@ public static class ErrorExtensions
             // such row" info-hiding shape `booking.*_not_found` arms already use, never a different,
             // more informative code that would confirm a real id belonging to another tenant.
             "contacts.customer_not_found" => StatusCodes.Status404NotFound,
+            // `26-275`/`adr/0189`: the erase-a-client route's own three outcomes. Forbidden is the
+            // identical 403 shape `contacts.forbidden` already gives its own sibling - an authenticated
+            // operator of a known tenant, simply lacking `customer:erase`, is entitled to be told "you
+            // may not" rather than shown a 404. Not-found is the identical wrong-tenant-reads-like-
+            // absent shape `contacts.customer_not_found` gives one arm up. Future-bookings is 409, not
+            // 400 - the request is well-formed and the person exists; what refuses it is a state the
+            // guard itself protects, the identical shape `configuration.worker_has_booking_history`
+            // already gives its own sibling below.
+            "person_erase.forbidden" => StatusCodes.Status403Forbidden,
+            "person_erase.not_found" => StatusCodes.Status404NotFound,
+            "person_erase.future_bookings" => StatusCodes.Status409Conflict,
             // 2026-09-01: PublicBookingApiGate's own kill switch. 403, not the 404 that
             // booking.surface_not_found/booking.origin_not_allowed use two cases above - those hide a
             // caller-specific fact (whether a tenant/origin exists); this refusal is identical for

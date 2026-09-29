@@ -293,6 +293,10 @@ public sealed class CalendarModule : IProductModule
         services.AddScoped<ConfirmOperatorVerifiedPhoneHandler>();
         services.AddScoped<GetPhoneRevealsForTenantHandler>();
 
+        // `26-275`/`adr/0189`: an Admin erases a client - the calendar-initiated half of full person
+        // erasure. Gated inside the handler on `customer:erase` (Admin-only, `26-275` slice #1).
+        services.AddScoped<Application.UseCases.ErasePerson.ErasePersonHandler>();
+
         // `22-14`/`adr/0100`: the switcher's own read - "which tenants may I act in here". Not an
         // identity-management endpoint of the kind `22-05` deleted above: it manages nothing and
         // grants nothing, it reports what the projection `ago-chat` replicates already says.

@@ -69,6 +69,12 @@ public static class ServiceCollectionExtensions
         // SaveChangesAsync run on.
         services.AddScoped<IManualBookingStore, ManualBookingStore>();
 
+        // `26-275`/`adr/0189`: the person-erasure write - a guarded delete plus an anonymising update
+        // of that person's own past events, in one transaction. Scoped like every other adapter here,
+        // for the identical reason: it holds the DbContext whose connection both raw statements and the
+        // outbox SaveChangesAsync run on.
+        services.AddScoped<IPersonEraseStore, PersonEraseStore>();
+
         // `22-05`/`adr/0093`: the projection replicated from AGO Chat's own `RoleAssignmentsChanged` -
         // the one thing both a permission check and OperatorIdentityClaimsTransformation now read.
         // Same DbContext, same "Infrastructure adapter behind an Application port" shape every other

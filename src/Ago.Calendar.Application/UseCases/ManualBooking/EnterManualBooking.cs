@@ -28,6 +28,12 @@ namespace Ago.Calendar.Application.UseCases.ManualBooking;
 /// <c>PersonRegistration.DisplayName</c>.</param>
 /// <param name="Phone">The client's phone, raw as the operator typed it - validated by
 /// <see cref="PhoneNumber"/>'s own constructor before anything else runs.</param>
+/// <param name="Email">`26-268`§3/`adr/0188`: optional - "hard to justify on a phone call and
+/// error-prone by ear" (`26-268` §0). Shape-validated when non-blank, the identical
+/// <see cref="System.Net.Mail.MailAddress"/> check <c>CreateOperatorInviteHandler.ValidateEmail</c>
+/// already uses in `ago-chat`. Only ever reaches the store on the mint branch - a reused person already
+/// has a chat-side registration, so there is nothing new to carry (<see cref="ReusePersonId"/>'s own
+/// remarks).</param>
 /// <param name="ReusePersonId">`26-268`§2a/`adr/0188`: when the operator recognised this client from
 /// <c>GetPersonCandidatesByPhoneHandler</c>'s own list and chose «Это он» (or a specific row of a
 /// pick-list), the person id they picked - carried here as the console/Android's own explicit act, never
@@ -45,4 +51,5 @@ public readonly record struct EnterManualBooking(
     EventId StartEventId,
     string DisplayName,
     string Phone,
+    string? Email = null,
     Guid? ReusePersonId = null);

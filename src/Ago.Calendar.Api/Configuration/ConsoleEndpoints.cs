@@ -812,7 +812,7 @@ public static class ConsoleEndpoints
                 principal.GetOperatorId(), principal.GetTenantId(),
                 new CalendarId(request.CalendarId), new ServiceId(request.ServiceId),
                 new WorkerId(request.WorkerId), new Domain.EventId(request.StartEventId),
-                request.Name, request.Phone, request.ReusePersonId),
+                request.Name, request.Phone, request.Email, request.ReusePersonId),
             cancellationToken);
 
         if (!result.IsSuccess)

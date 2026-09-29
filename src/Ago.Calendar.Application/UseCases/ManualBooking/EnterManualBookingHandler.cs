@@ -1,4 +1,5 @@
-﻿using Ago.Calendar.Application.Abstractions;
+﻿using System.Net.Mail;
+using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.Mapping;
 using Ago.Calendar.Application.UseCases.BookEvent;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
@@ -72,6 +73,24 @@ public sealed class EnterManualBookingHandler(
             // The one place a domain constructor's exception is turned into an ordinary rejection -
             // BookEventHandler's own precedent. An operator who fat-fingered a number is not a bug.
             return BookingErrors.InvalidPhone(exception.Message);
+        }
+
+        // `26-268`§3/`adr/0188`: email is optional, so a blank one is not an error - only a non-blank,
+        // malformed one is. `System.Net.Mail.MailAddress`'s own constructor is the identical BCL
+        // shape-validator `CreateOperatorInviteHandler.ValidateEmail` already uses in `ago-chat`; there
+        // is no shared helper for it in either codebase (adr/0012: separate repos, no shared type), so
+        // this is the second, independent caller rather than a hand-rolled regex.
+        string? email = null;
+        if (!string.IsNullOrWhiteSpace(command.Email))
+        {
+            try
+            {
+                email = new MailAddress(command.Email.Trim()).Address;
+            }
+            catch (FormatException)
+            {
+                return BookingErrors.InvalidEmail("That does not look like a valid email address.");
+            }
         }
 
         var calendar = await calendars.GetByIdAsync(command.CalendarId, cancellationToken);
@@ -160,7 +179,10 @@ public sealed class EnterManualBookingHandler(
             personId = reusePersonId;
             // No PersonRegistered here - `IManualBookingStore.TryEnterAsync`'s own remarks: a reused
             // person already has a chat-side registration from whichever earlier booking created their
-            // record, and announcing it again would tell chat to register an id it already knows.
+            // record, and announcing it again would tell chat to register an id it already knows. Any
+            // `email` the operator typed on this branch is validated above but never carried anywhere -
+            // `26-268`§3.4's own "a recognized client skips name/email re-entry," restated for the write
+            // side: there is no envelope for a reused person to carry it on.
             personRegistered = null;
         }
         else
@@ -176,7 +198,7 @@ public sealed class EnterManualBookingHandler(
             // success path only, inside its transaction (rule 4): a minted person for a claim that never
             // happened must never reach chat.
             personRegistered = PersonRegisteredMapper.ToEnvelope(
-                personId, command.TenantId, phone, displayName, now, idGenerator);
+                personId, command.TenantId, phone, displayName, email, now, idGenerator);
         }
 
         var lastSlot = dayEvents.Single(slot => slot.Id == run[^1]);

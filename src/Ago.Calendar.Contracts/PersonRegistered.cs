@@ -26,10 +26,18 @@
 /// <param name="Phone">E.164, the same canonical form <c>PhoneNumber.Value</c> holds.</param>
 /// <param name="Name">What the person typed as their name, trimmed, or <see langword="null"/> when
 /// they typed nothing.</param>
+/// <param name="Email">`26-268`§3/`adr/0188`: the client's email, when the operator typed one on a
+/// manual entry's mint path - shape-validated by <c>EnterManualBookingHandler</c> before this envelope
+/// is ever built, trimmed, or <see langword="null"/> when the operator left it blank (it is optional -
+/// "hard to justify on a phone call and error-prone by ear," `26-268` §0). Always <see langword="null"/>
+/// for a widget booking today: the public <c>BookEventHandler</c> collects no email. Additive: an
+/// un-updated chat consumer simply ignores this field on the wire, which is why slice #2 could ship
+/// before this one.</param>
 public sealed record PersonRegistered(
     Guid PersonId,
     Guid AccountId,
     string Phone,
     string? Name,
+    string? Email,
     DateTimeOffset OccurredAt,
     Guid CorrelationId);

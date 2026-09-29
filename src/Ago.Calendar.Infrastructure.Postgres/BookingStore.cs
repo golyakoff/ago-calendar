@@ -220,8 +220,11 @@ public sealed class BookingStore(
         // knows that person.
         if (attempt.RegisterPerson is { } registration)
         {
+            // `26-268`§3/`adr/0188`: always null here - the public visitor booking form collects no
+            // email today. Only the manual-entry mint path (`ManualBookingStore`) ever passes a real one.
             outbox.Enqueue(PersonRegisteredMapper.ToEnvelope(
-                attempt.PersonId, attempt.TenantId, attempt.Phone, registration.DisplayName, attempt.Now, idGenerator));
+                attempt.PersonId, attempt.TenantId, attempt.Phone, registration.DisplayName, email: null,
+                attempt.Now, idGenerator));
         }
 
         await db.SaveChangesAsync(cancellationToken);

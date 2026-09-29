@@ -155,7 +155,7 @@ public class ManualBookingStoreTests(PostgresFixture fixture)
     }
 
     private async Task<BookingConfirmation?> EnterAsync(
-        SeededTenant seed, EventId slotId, Guid personId, string phone, bool reuse = false)
+        SeededTenant seed, EventId slotId, Guid personId, string phone, bool reuse = false, string? email = null)
     {
         var idGenerator = new UuidV7Generator();
         var phoneNumber = new PhoneNumber(phone);
@@ -164,7 +164,7 @@ public class ManualBookingStoreTests(PostgresFixture fixture)
         // `EnterManualBookingHandler`/`IManualBookingStore` both state.
         var personRegistered = reuse
             ? null
-            : PersonRegisteredMapper.ToEnvelope(personId, seed.Tenant.Id, phoneNumber, "Anna", Now, idGenerator);
+            : PersonRegisteredMapper.ToEnvelope(personId, seed.Tenant.Id, phoneNumber, "Anna", email, Now, idGenerator);
         var bookingConfirmed = BookingConfirmedMapper.ToEnvelope(
             eventId: slotId,
             tenantId: seed.Tenant.Id,

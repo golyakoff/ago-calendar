@@ -348,9 +348,7 @@ public sealed record RescheduleBookingRequest(Guid NewStartEventId);
 /// hand - a booking that was taken by phone before this product existed for the tenant. Named the same
 /// four axes the visitor's own booking flow picks (service, worker, date, slot - the slot by its own
 /// grid <c>eventId</c>, the same convention <see cref="RescheduleBookingRequest"/> and <c>BookEvent</c>
-/// both use), plus who the client is. <see cref="Email"/> is deliberately absent - `26-268`'s own slice
-/// #3 carries it end to end once <c>PersonRegistered</c> grows the field; until then a stray
-/// <c>email</c> property on the wire is simply ignored by this version's handler.</summary>
+/// both use), plus who the client is.</summary>
 /// <param name="Name">The client's name as the operator typed it over the phone. Trimmed and
 /// normalised to <see langword="null"/> when blank by the handler, never here. Ignored by the handler
 /// when <see cref="ReusePersonId"/> is set - a recognised client's name is not re-typed
@@ -360,6 +358,10 @@ public sealed record RescheduleBookingRequest(Guid NewStartEventId);
 /// <c>PhoneNumber</c>'s own constructor. Still sent on a reuse: it is what the operator searched
 /// <c>GET /contacts/by-phone</c> with, and the store re-confirms it onto the existing
 /// <c>PersonRecord</c> (<c>ManualBookingStore</c>'s own remarks on its <c>ON CONFLICT</c> arm).</param>
+/// <param name="Email">`26-268`§3/`adr/0188`: optional, shape-validated by the handler when non-blank.
+/// Carried end to end through <c>PersonRegistered</c> to AGO Chat's own <c>Email</c> contact detail on
+/// the mint branch only - ignored by the handler, the same way <see cref="Name"/> is, when
+/// <see cref="ReusePersonId"/> is set (§3.4: a recognized client skips name/email re-entry).</param>
 /// <param name="ReusePersonId">`26-268`§2a/`adr/0188`: set when the operator picked a candidate from
 /// <c>GET /contacts/by-phone</c> («Это он» or a pick-list row) instead of «Новый клиент». The one place
 /// the operator's own recognition decision reaches the write - see <c>EnterManualBooking.ReusePersonId</c>'s
@@ -367,7 +369,7 @@ public sealed record RescheduleBookingRequest(Guid NewStartEventId);
 /// own.</param>
 public sealed record ManualBookingRequest(
     Guid CalendarId, Guid ServiceId, Guid WorkerId, Guid StartEventId, string Name, string Phone,
-    Guid? ReusePersonId = null);
+    string? Email = null, Guid? ReusePersonId = null);
 
 /// <summary>`26-268`§2a/`adr/0188`: one row of <c>GET /contacts/by-phone</c>'s own answer - an existing
 /// client the operator can reuse instead of minting a new one. See

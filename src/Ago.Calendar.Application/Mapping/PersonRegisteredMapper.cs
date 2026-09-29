@@ -11,13 +11,13 @@ namespace Ago.Calendar.Application.Mapping;
 public static class PersonRegisteredMapper
 {
     public static EventEnvelope ToEnvelope(
-        Guid personId, TenantId tenantId, PhoneNumber phone, string? name, DateTimeOffset occurredAt,
+        Guid personId, TenantId tenantId, PhoneNumber phone, string? name, string? email, DateTimeOffset occurredAt,
         IIdGenerator idGenerator)
     {
         ArgumentNullException.ThrowIfNull(idGenerator);
 
         var correlationId = idGenerator.NewId(occurredAt);
-        var contract = new PersonRegistered(personId, tenantId.Value, phone.Value, name, occurredAt, correlationId);
+        var contract = new PersonRegistered(personId, tenantId.Value, phone.Value, name, email, occurredAt, correlationId);
 
         return new EventEnvelope(
             MessageId: idGenerator.NewId(occurredAt),

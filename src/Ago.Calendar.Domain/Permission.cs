@@ -70,6 +70,14 @@ public readonly record struct Permission(string Value)
     /// <summary>Edit a lead card's name and notes.</summary>
     public static readonly Permission CustomerEdit = new("customer:edit");
 
+    /// <summary>`26-275`: delete a client - a person-scoped erasure, a third, distinct blast radius
+    /// alongside chat's <c>site:erase</c>/<c>conversation:erase</c> (neither one-conversation nor
+    /// one-whole-account). Gates the calendar's client-erase endpoint (a later slice) that refuses while
+    /// future bookings exist and otherwise deletes this person's <c>PersonRecord</c> and stages
+    /// <c>PersonErased</c> for chat to consume. Admin-role-only, never granted to Operator. Per adr/0093
+    /// this string is, byte-for-byte, <c>Ago.Chat.Domain.Permission.CustomerErase</c>.</summary>
+    public static readonly Permission CustomerErase = new("customer:erase");
+
     /// <summary>Configure calendars, workers, services and working hours. No caller until
     /// `20-06`.</summary>
     public static readonly Permission CalendarConfigure = new("calendar:configure");

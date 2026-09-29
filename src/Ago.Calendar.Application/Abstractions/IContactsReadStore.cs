@@ -36,8 +36,13 @@ namespace Ago.Calendar.Application.Abstractions;
 /// </summary>
 public interface IContactsReadStore
 {
+    /// <param name="now">`26-282`: the instant that decides <see cref="ContactRow.UpcomingBookingCount"/> -
+    /// handed down from <see cref="Ago.Platform.Abstractions.IClock"/> by the handler rather than read
+    /// from the database's own clock, the same "time comes from <c>IClock</c>, never from inside a
+    /// store" rule every other booking-window read in this product already follows
+    /// (<c>BookEventHandler</c>'s <c>attempt.Now</c>).</param>
     Task<IReadOnlyList<ContactRow>> ListForTenantAsync(
-        TenantId tenantId, bool mask, CancellationToken cancellationToken);
+        TenantId tenantId, bool mask, DateTimeOffset now, CancellationToken cancellationToken);
 }
 
 /// <param name="Phone">The already-formatted display value - masked (<see cref="PhoneNumber.Masked"/>)
@@ -64,6 +69,13 @@ public interface IContactsReadStore
 /// more finished than the product is.</param>
 /// <param name="PersonId">`adr/0184`: the opaque person id - the key the console uses to fetch the
 /// person's name and notes from chat's own Person API and display-merge them onto this row.</param>
+/// <param name="UpcomingBookingCount">`26-282`: bookings in <see cref="EventStatus.PendingConfirmation"/>
+/// or <see cref="EventStatus.Booked"/> whose start is still ahead of <c>now</c> - the count the Клиенты
+/// list row and its «С предстоящей записью» filter both need, and the list read did not carry before this
+/// item. <see cref="EventStatus.NoShow"/> is excluded on purpose: by the time a row is marked no-show its
+/// start has already passed, so it can never be upcoming - the same "has not happened yet" line
+/// <see cref="IPersonBookingReadStore"/>'s own remarks leave for the client to draw, drawn here instead
+/// because this read has no per-row detail for a caller to draw it from.</param>
 public readonly record struct ContactRow(
     Guid PersonId,
     string Phone,
@@ -72,4 +84,5 @@ public readonly record struct ContactRow(
     DateTimeOffset? PhoneVerifiedAt,
     DateTimeOffset? PhoneConfirmedByOperatorAt,
     DateTimeOffset FirstSeenAt,
-    DateTimeOffset LastSeenAt);
+    DateTimeOffset LastSeenAt,
+    int UpcomingBookingCount);

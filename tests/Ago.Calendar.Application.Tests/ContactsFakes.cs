@@ -8,12 +8,12 @@ namespace Ago.Calendar.Application.Tests;
 /// control and never did; it only ever shared a file with the fakes that did.</summary>
 internal sealed class FakeContactsReadStore(params ContactRow[] rows) : IContactsReadStore
 {
-    public List<(TenantId TenantId, bool Mask)> AskedFor { get; } = [];
+    public List<(TenantId TenantId, bool Mask, DateTimeOffset Now)> AskedFor { get; } = [];
 
     public Task<IReadOnlyList<ContactRow>> ListForTenantAsync(
-        TenantId tenantId, bool mask, CancellationToken cancellationToken)
+        TenantId tenantId, bool mask, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        AskedFor.Add((tenantId, mask));
+        AskedFor.Add((tenantId, mask, now));
         return Task.FromResult<IReadOnlyList<ContactRow>>([.. rows]);
     }
 }

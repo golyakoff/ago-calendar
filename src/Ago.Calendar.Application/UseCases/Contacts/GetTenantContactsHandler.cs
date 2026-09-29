@@ -1,5 +1,6 @@
 ﻿using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Domain;
+using Ago.Platform.Abstractions;
 using Ago.Platform.Kernel;
 
 namespace Ago.Calendar.Application.UseCases.Contacts;
@@ -19,7 +20,8 @@ namespace Ago.Calendar.Application.UseCases.Contacts;
 /// the whole list anyway.</para>
 /// </summary>
 public sealed class GetTenantContactsHandler(
-    IContactsReadStore contacts, IPermissionChecker permissions, IContactVisibilityProjectionStore visibility)
+    IContactsReadStore contacts, IPermissionChecker permissions, IContactVisibilityProjectionStore visibility,
+    IClock clock)
 {
     public async Task<Result<IReadOnlyList<ContactRow>>> HandleAsync(
         GetTenantContacts query, CancellationToken cancellationToken)
@@ -34,7 +36,7 @@ public sealed class GetTenantContactsHandler(
         var rung = await visibility.GetAsync(query.TenantId, cancellationToken);
         var mask = rung == ContactVisibility.MaskedWithReveal;
 
-        var rows = await contacts.ListForTenantAsync(query.TenantId, mask, cancellationToken);
+        var rows = await contacts.ListForTenantAsync(query.TenantId, mask, clock.UtcNow, cancellationToken);
         return Result<IReadOnlyList<ContactRow>>.Success(rows);
     }
 }

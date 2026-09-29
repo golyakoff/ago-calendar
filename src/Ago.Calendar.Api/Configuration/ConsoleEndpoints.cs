@@ -905,7 +905,8 @@ public static class ConsoleEndpoints
                 row.PhoneVerifiedAt,
                 row.PhoneConfirmedByOperatorAt,
                 row.FirstSeenAt,
-                row.LastSeenAt))
+                row.LastSeenAt,
+                row.UpcomingBookingCount))
             .ToArray());
     }
 

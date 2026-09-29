@@ -19,15 +19,19 @@ public class ContactsHandlerTests
     [Fact]
     public async Task WithCustomerRead_ReturnsTheStoresRows()
     {
-        var row = new ContactRow(Guid.CreateVersion7(Now), "+79990000001", false, 0, null, null, Now, Now);
+        var row = new ContactRow(Guid.CreateVersion7(Now), "+79990000001", false, 0, null, null, Now, Now, 0);
         var store = new FakeContactsReadStore(row);
-        var handler = new GetTenantContactsHandler(store, Permissive(), new FakeContactVisibilityProjectionStore());
+        var handler = new GetTenantContactsHandler(
+            store, Permissive(), new FakeContactVisibilityProjectionStore(), new FakeClock(Now));
 
         var result = await handler.HandleAsync(new GetTenantContacts(Caller, TenantId), CancellationToken.None);
 
         Assert.True(result.IsSuccess, result.Error?.Message);
         Assert.Equal(row.PersonId, Assert.Single(result.Value).PersonId);
         Assert.Equal(TenantId, Assert.Single(store.AskedFor).TenantId);
+        // `26-282`: the handler hands the store its own clock's instant, never lets the store read one
+        // of its own - the same "time comes from IClock" discipline BookEventHandler's own tests assert.
+        Assert.Equal(Now, Assert.Single(store.AskedFor).Now);
     }
 
     [Fact]
@@ -36,7 +40,8 @@ public class ContactsHandlerTests
         var store = new FakeContactsReadStore();
         var permissions = new FakePermissionChecker();
         permissions.Deny(Permission.CustomerRead);
-        var handler = new GetTenantContactsHandler(store, permissions, new FakeContactVisibilityProjectionStore());
+        var handler = new GetTenantContactsHandler(
+            store, permissions, new FakeContactVisibilityProjectionStore(), new FakeClock(Now));
 
         var result = await handler.HandleAsync(new GetTenantContacts(Caller, TenantId), CancellationToken.None);
 
@@ -47,10 +52,10 @@ public class ContactsHandlerTests
     [Fact]
     public async Task OnTheMaskedRung_AsksTheStoreToMask()
     {
-        var row = new ContactRow(Guid.CreateVersion7(Now), "+79990000001", false, 0, null, null, Now, Now);
+        var row = new ContactRow(Guid.CreateVersion7(Now), "+79990000001", false, 0, null, null, Now, Now, 0);
         var store = new FakeContactsReadStore(row);
         var visibility = new FakeContactVisibilityProjectionStore(ContactVisibility.MaskedWithReveal);
-        var handler = new GetTenantContactsHandler(store, Permissive(), visibility);
+        var handler = new GetTenantContactsHandler(store, Permissive(), visibility, new FakeClock(Now));
 
         var result = await handler.HandleAsync(new GetTenantContacts(Caller, TenantId), CancellationToken.None);
 
@@ -63,7 +68,7 @@ public class ContactsHandlerTests
     {
         var store = new FakeContactsReadStore();
         var visibility = new FakeContactVisibilityProjectionStore(ContactVisibility.Visible);
-        var handler = new GetTenantContactsHandler(store, Permissive(), visibility);
+        var handler = new GetTenantContactsHandler(store, Permissive(), visibility, new FakeClock(Now));
 
         var result = await handler.HandleAsync(new GetTenantContacts(Caller, TenantId), CancellationToken.None);
 

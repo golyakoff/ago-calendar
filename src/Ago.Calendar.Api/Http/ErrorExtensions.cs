@@ -32,8 +32,11 @@ public static class ErrorExtensions
             // own placement already gives: the request was well-formed but incomplete, and 400 (not
             // 403 - nobody is being denied a permission they hold) is what tells a caller integrating
             // against this endpoint that no retry of this exact request will ever succeed.
-            "booking.invalid_phone" or "booking.service_not_offered" or "booking.phone_not_verified" =>
-                StatusCodes.Status400BadRequest,
+            // `26-268`§2a/`adr/0188`: the recognition read's own malformed-phone rejection - the
+            // identical placement and reasoning `booking.invalid_phone` already gives for itself: a
+            // well-formed-but-invalid request, 400 rather than 403, since no permission is at stake.
+            "booking.invalid_phone" or "booking.service_not_offered" or "booking.phone_not_verified"
+                or "person_recognition.invalid_phone" => StatusCodes.Status400BadRequest,
             "booking.rate_limited" => StatusCodes.Status429TooManyRequests,
             // `20-10`. Mirrors `ago-chat`'s own `14-15` mapping for the identical five confirm
             // outcomes, not by reference: a wrong code is the caller's own mistake to fix (400, the
@@ -92,10 +95,20 @@ public static class ErrorExtensions
             // `26-269`'s own read - the identical 403 shape `confirmed_bookings.forbidden` gives its
             // own sibling, and for the same reason: an authenticated operator of a known tenant, simply
             // lacking `customer:read`, is entitled to be told "you may not" rather than shown a 404.
+            // `26-268`§2a/`adr/0188`: the phone-based recognition read's own permission refusal - the
+            // identical 403 shape and reasoning `person_bookings.forbidden` already gives its sibling
+            // read one line up: an authenticated operator of a known tenant, simply lacking
+            // `customer:read`, is entitled to be told "you may not" rather than shown a 404.
             "booking.forbidden" or "availability.forbidden" or "configuration.forbidden"
                 or "recut.forbidden" or "worker_slots.forbidden" or "confirmed_bookings.forbidden"
-                or "person_bookings.forbidden" => StatusCodes.Status403Forbidden,
-            "booking.not_found" or "configuration.not_found" => StatusCodes.Status404NotFound,
+                or "person_bookings.forbidden" or "person_recognition.forbidden" =>
+                StatusCodes.Status403Forbidden,
+            // `26-268`§2a/`adr/0188`: the manual-entry handler's own reuse-lookup - a `ReusePersonId`
+            // that does not exist, or belongs to another tenant, collapsed into the identical "wrong
+            // tenant reads like no such row" 404 `contacts.customer_not_found` already gives for the
+            // same cross-tenant-leak reason.
+            "booking.not_found" or "configuration.not_found" or "booking.person_not_found" =>
+                StatusCodes.Status404NotFound,
             // `22-20`. A worker id that does not resolve in this tenant - the same "does not exist,
             // or belongs to someone else" vagueness `ConfigurationErrors.NotFound`'s own remarks give
             // for the identical cross-tenant-leak reason, kept as its own arm because these two

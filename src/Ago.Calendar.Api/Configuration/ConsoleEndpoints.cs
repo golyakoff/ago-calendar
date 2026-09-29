@@ -9,6 +9,7 @@ using Ago.Calendar.Application.UseCases.DeleteDayOff;
 using Ago.Calendar.Application.UseCases.EditDayBoundary;
 using Ago.Calendar.Application.UseCases.ManualBooking;
 using Ago.Calendar.Application.UseCases.PersonBookings;
+using Ago.Calendar.Application.UseCases.PersonRecognition;
 using Ago.Calendar.Application.UseCases.RecutSchedule;
 using Ago.Calendar.Application.UseCases.WorkerSlots;
 using Ago.Calendar.Contracts;
@@ -133,6 +134,15 @@ public static class ConsoleEndpoints
         // there is no longer a calendar-owned `operators`/`roles` table to manage. The account side's
         // own console is where a person is granted `calendar:configure` and friends now (`22-06`).
         group.MapGet("/contacts", HandleContactsAsync).WithName("GetContacts");
+
+        // `26-268`§2a/`adr/0188`: the manual-entry dialog's own first step - before minting, look up
+        // whether this number already belongs to a client of this tenant. Gated inside the handler on
+        // `customer:read` alone, the identical divergence from this group's own `OperatorPolicy` that
+        // `GetTenantContactsHandler`'s own doc comment explains for itself - no new permission, confirmed
+        // against the design pass. Sits beside `/contacts` rather than under `/bookings/manual` because
+        // it answers the same "who is this person" question the rest of the `/contacts` family
+        // answers, just filtered by phone instead of listed wholesale.
+        group.MapGet("/contacts/by-phone", HandleContactsByPhoneAsync).WithName("GetContactsByPhone");
 
         // `23-12`/`decisions.md` §5: masked, revealed on demand, and the reveal is recorded. `adr/0184`:
         // the route names the opaque person id now - the same value chat's own Person API is keyed by.
@@ -802,7 +812,7 @@ public static class ConsoleEndpoints
                 principal.GetOperatorId(), principal.GetTenantId(),
                 new CalendarId(request.CalendarId), new ServiceId(request.ServiceId),
                 new WorkerId(request.WorkerId), new Domain.EventId(request.StartEventId),
-                request.Name, request.Phone),
+                request.Name, request.Phone, request.ReusePersonId),
             cancellationToken);
 
         if (!result.IsSuccess)
@@ -884,6 +894,42 @@ public static class ConsoleEndpoints
                 row.Phone,
                 row.Masked,
                 row.NoShowCount,
+                row.PhoneVerifiedAt,
+                row.PhoneConfirmedByOperatorAt,
+                row.FirstSeenAt,
+                row.LastSeenAt))
+            .ToArray());
+    }
+
+    /// <summary>`26-268`§2a/`adr/0188`: takes a raw phone in the query string (never in a route segment -
+    /// this is a search, not a resource lookup) and hands back every candidate
+    /// <see cref="GetPersonCandidatesByPhoneHandler"/> found, in the identical shape
+    /// <see cref="HandleContactsAsync"/>'s own mapping already establishes for
+    /// <see cref="ContactResponse"/>. An empty array, never an error, for "nobody matches" - the same
+    /// honest-empty-state posture every other read in this console API takes.</summary>
+    private static async Task<IResult> HandleContactsByPhoneAsync(
+        string phone,
+        ClaimsPrincipal principal,
+        GetPersonCandidatesByPhoneHandler handler,
+        HttpContext httpContext,
+        CancellationToken cancellationToken)
+    {
+        var result = await handler.HandleAsync(
+            new GetPersonCandidatesByPhone(principal.GetOperatorId(), principal.GetTenantId(), phone),
+            cancellationToken);
+
+        if (!result.IsSuccess)
+        {
+            return result.Error!.Value.ToProblem(httpContext);
+        }
+
+        return Results.Ok(result.Value
+            .Select(row => new PersonRecognitionCandidateResponse(
+                row.PersonId,
+                row.Phone,
+                row.Masked,
+                row.NoShowCount,
+                row.BookingCount,
                 row.PhoneVerifiedAt,
                 row.PhoneConfirmedByOperatorAt,
                 row.FirstSeenAt,

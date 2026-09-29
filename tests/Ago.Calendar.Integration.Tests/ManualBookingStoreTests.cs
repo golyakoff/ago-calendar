@@ -80,6 +80,39 @@ public class ManualBookingStoreTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task AReusedPerson_ClaimsUnderTheExistingId_ReConfirmsThePhone_AndStagesNoPersonRegistered()
+    {
+        // `26-268`§2a/`adr/0188`: the operator recognised an existing client and chose «Это он» - the
+        // claim must land under that same person id, the existing PersonRecord must be re-confirmed
+        // (not replaced), and no second PersonRegistered must reach chat for a person it already knows.
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        var slot = await AnAvailableSlotAsync(seed);
+
+        var confirmation = await EnterAsync(
+            seed, slot.Id, seed.Person.PersonId, seed.Person.Phone.Value, reuse: true);
+
+        Assert.NotNull(confirmation);
+        Assert.Equal(seed.Person.PersonId, confirmation.Value.PersonId);
+
+        await using var db = fixture.CreateDbContext();
+        var stored = await db.Events.SingleAsync(e => e.Id == slot.Id);
+        Assert.Equal(EventStatus.Booked, stored.Status);
+        Assert.Equal(seed.Person.PersonId, stored.PersonId);
+
+        // The existing record, re-confirmed - not a second row, and not replaced.
+        var records = await db.PersonRecords.Where(p => p.PersonId == seed.Person.PersonId).ToListAsync();
+        var record = Assert.Single(records);
+        Assert.Equal(Now, record.PhoneConfirmedByOperatorAt);
+
+        // BookingConfirmed stages, exactly as the mint path does...
+        var confirmedRows = await OutboxRowsOfTypeAsync(nameof(BookingConfirmed));
+        Assert.Single(confirmedRows, r => r.PartitionKey == slot.Id.Value.ToString());
+
+        // ...but PersonRegistered must not - this person was never (re-)announced to chat.
+        Assert.Empty(await OutboxRowsOfTypeAsync(nameof(PersonRegistered), seed.Person.PersonId));
+    }
+
+    [Fact]
     public async Task WhenTheSlotWasTakenInTheRace_TheWholeTransactionRollsBack_AndStagesNothing()
     {
         var seed = await CalendarSeed.WriteAsync(fixture);
@@ -122,13 +155,16 @@ public class ManualBookingStoreTests(PostgresFixture fixture)
     }
 
     private async Task<BookingConfirmation?> EnterAsync(
-        SeededTenant seed, EventId slotId, Guid personId, string phone)
+        SeededTenant seed, EventId slotId, Guid personId, string phone, bool reuse = false)
     {
         var idGenerator = new UuidV7Generator();
         var phoneNumber = new PhoneNumber(phone);
 
-        var personRegistered = PersonRegisteredMapper.ToEnvelope(
-            personId, seed.Tenant.Id, phoneNumber, "Anna", Now, idGenerator);
+        // `26-268`§2a/`adr/0188`: no PersonRegistered on a reuse - the identical rule
+        // `EnterManualBookingHandler`/`IManualBookingStore` both state.
+        var personRegistered = reuse
+            ? null
+            : PersonRegisteredMapper.ToEnvelope(personId, seed.Tenant.Id, phoneNumber, "Anna", Now, idGenerator);
         var bookingConfirmed = BookingConfirmedMapper.ToEnvelope(
             eventId: slotId,
             tenantId: seed.Tenant.Id,

@@ -231,8 +231,9 @@ internal sealed class FakeWorkerRepository(Worker? worker) : IWorkerRepository
 }
 
 /// <summary>`20-10`/`adr/0184`: <see cref="PhoneVerificationAssertionResolver"/>'s own "this number was
-/// already verified here" shortcut. Defaults to "never verified" - the identical no-op-by-default shape
-/// every other fake in this file uses, so a test that never mentions phone verification exercises the
+/// already verified here" shortcut, and - since `26-268`§2a - <c>EnterManualBookingHandler</c>'s own
+/// reuse-lookup. Defaults to "never verified"/"no such id" - the identical no-op-by-default shape every
+/// other fake in this file uses, so a test that never mentions phone verification or reuse exercises the
 /// exact same path it always did.</summary>
 internal sealed class FakePersonRecordRepository(PersonRecord? record = null) : IPersonRecordRepository
 {
@@ -242,14 +243,17 @@ internal sealed class FakePersonRecordRepository(PersonRecord? record = null) : 
                 ? record.PhoneVerifiedAt
                 : null);
 
+    /// <summary>`26-268`§2a: <c>EnterManualBookingHandler</c>'s own reuse-lookup - re-checks the
+    /// operator-named <c>ReusePersonId</c> against this tenant before trusting it. Holds at most one
+    /// record, matching every other fake's "one row is all a handler test needs" shape.</summary>
     public Task<PersonRecord?> GetByIdAsync(Guid personId, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
+        Task.FromResult(record is not null && record.PersonId == personId ? record : null);
 
     public Task AddAsync(PersonRecord record, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
+        throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver or EnterManualBookingHandler.");
 
     public Task SaveAsync(PersonRecord record, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver.");
+        throw new NotSupportedException("Not reached by PhoneVerificationAssertionResolver or EnterManualBookingHandler.");
 }
 
 /// <summary>`20-10`: backs both <see cref="PhoneVerificationAssertionResolver"/>'s own fresh-proof

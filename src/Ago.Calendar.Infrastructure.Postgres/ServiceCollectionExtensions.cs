@@ -110,6 +110,11 @@ public static class ServiceCollectionExtensions
         // connection pool for a second read store.
         services.AddScoped<IContactsReadStore, ContactsReadStore>();
 
+        // `26-268`§2a/`adr/0188`: the phone-based client recognition read - the same shared
+        // NpgsqlDataSource singleton again, for the identical reason ContactsReadStore's own remark
+        // gives.
+        services.AddScoped<IPersonRecognitionReadStore, PersonRecognitionReadStore>();
+
         // `23-12`: the reveal record's own write side - raw Npgsql like the read stores above rather
         // than the DbContext, IContactPhoneRevealRepository's own remarks on why this has no
         // aggregate to hold it.

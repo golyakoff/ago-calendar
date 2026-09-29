@@ -28,6 +28,14 @@ namespace Ago.Calendar.Application.UseCases.ManualBooking;
 /// <c>PersonRegistration.DisplayName</c>.</param>
 /// <param name="Phone">The client's phone, raw as the operator typed it - validated by
 /// <see cref="PhoneNumber"/>'s own constructor before anything else runs.</param>
+/// <param name="ReusePersonId">`26-268`§2a/`adr/0188`: when the operator recognised this client from
+/// <c>GetPersonCandidatesByPhoneHandler</c>'s own list and chose «Это он» (or a specific row of a
+/// pick-list), the person id they picked - carried here as the console/Android's own explicit act, never
+/// inferred from the phone alone. <see langword="null"/> is «Новый клиент» (or a number with no match at
+/// all): the unconditional-mint path this handler always took before §2a, unchanged. This is the one
+/// place the operator's confirmation - the human act `adr/0147` requires before a phone-matched candidate
+/// becomes a decision - reaches this handler; nothing upstream of this field ever resolves a phone to a
+/// person on its own.</param>
 public readonly record struct EnterManualBooking(
     OperatorId OperatorId,
     TenantId TenantId,
@@ -36,4 +44,5 @@ public readonly record struct EnterManualBooking(
     WorkerId WorkerId,
     EventId StartEventId,
     string DisplayName,
-    string Phone);
+    string Phone,
+    Guid? ReusePersonId = null);

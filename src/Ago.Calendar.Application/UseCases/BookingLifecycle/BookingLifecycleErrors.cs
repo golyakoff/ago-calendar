@@ -52,4 +52,12 @@ public static class BookingLifecycleErrors
     public static Error ConcurrencyConflict(EventId eventId) => new(
         "booking.concurrency_conflict",
         $"Booking {eventId.Value} changed while you were acting on it. Reload it and try again.");
+
+    /// <summary>`26-268`§2a/`adr/0188`: the operator's own «Это он» reuse named a person id that either
+    /// does not exist or belongs to another tenant. Collapsed into one not-found, the identical
+    /// cross-tenant info-hiding shape <see cref="WrongTenant"/> above and
+    /// <c>ContactsErrors.CustomerNotFound</c> both already use - an operator of tenant A must not learn
+    /// that a person id is real but belongs to tenant B.</summary>
+    public static Error PersonNotFound(Guid personId) => new(
+        "booking.person_not_found", $"Person {personId} does not exist in this tenant.");
 }

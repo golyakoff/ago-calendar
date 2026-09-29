@@ -56,6 +56,79 @@ public class EnterManualBookingHandlerTests
     }
 
     [Fact]
+    public async Task AnEmail_IsCarriedIntoThePersonRegisteredPayload_OnTheMintPath()
+    {
+        // `26-268`§3/`adr/0188`: the one promise this slice adds - an optional email reaches
+        // PersonRegistered on the path that actually announces a new person.
+        var world = new World();
+
+        await world.HandleAsync(Command(email: "anna@example.com"));
+
+        var attempt = Assert.Single(world.Store.Attempts);
+        Assert.NotNull(attempt.PersonRegisteredEvent);
+        var registered = JsonSerializer.Deserialize<PersonRegistered>(attempt.PersonRegisteredEvent!.Payload)!;
+        Assert.Equal("anna@example.com", registered.Email);
+    }
+
+    [Fact]
+    public async Task NoEmail_LeavesThePersonRegisteredPayloadsEmailNull()
+    {
+        // The additive, backward-safe case: a manual booking with no email still succeeds and carries
+        // a null Email - an un-updated chat consumer ignoring the field is exactly the point.
+        var world = new World();
+
+        await world.HandleAsync(Command());
+
+        var attempt = Assert.Single(world.Store.Attempts);
+        var registered = JsonSerializer.Deserialize<PersonRegistered>(attempt.PersonRegisteredEvent!.Payload)!;
+        Assert.Null(registered.Email);
+    }
+
+    [Fact]
+    public async Task AMalformedEmail_IsRejectedBeforeTheStoreIsReached()
+    {
+        var world = new World();
+
+        var result = await world.HandleAsync(Command(email: "not-an-email"));
+
+        Assert.Equal("booking.invalid_email", result.Error!.Value.Code);
+        Assert.Empty(world.Store.Attempts);
+    }
+
+    [Fact]
+    public async Task ABlankEmail_IsNotAnError_AndIsNormalisedToNull()
+    {
+        // Optional means optional - a blank string (the console/Android's own "nothing typed" shape)
+        // is not a malformed email, it is no email at all.
+        var world = new World();
+
+        var result = await world.HandleAsync(Command(email: "   "));
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        var attempt = Assert.Single(world.Store.Attempts);
+        var registered = JsonSerializer.Deserialize<PersonRegistered>(attempt.PersonRegisteredEvent!.Payload)!;
+        Assert.Null(registered.Email);
+    }
+
+    [Fact]
+    public async Task AnEmail_OnTheReusePath_IsValidatedButNeverCarried_BecauseNoPersonRegisteredIsStaged()
+    {
+        // `26-268`§3.4/§3: a recognized client skips name/email re-entry - reuse stages no
+        // PersonRegistered at all (the §2a rule), so a well-formed email on this branch has nowhere to
+        // go; it must not make the write fail either.
+        var existing = PersonRecord.Register(
+            new Guid("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), BookingFixtures.TenantId,
+            new PhoneNumber(BookingFixtures.Phone), BookingFixtures.Now);
+        var world = new World(existingPerson: existing);
+
+        var result = await world.HandleAsync(Command(email: "anna@example.com", reusePersonId: existing.PersonId));
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        var attempt = Assert.Single(world.Store.Attempts);
+        Assert.Null(attempt.PersonRegisteredEvent);
+    }
+
+    [Fact]
     public async Task ABlankDisplayName_IsNormalisedToNull_InThePersonRegisteredPayload()
     {
         var world = new World();
@@ -263,11 +336,11 @@ public class EnterManualBookingHandlerTests
 
     private static EnterManualBooking Command(
         string? phone = null, ServiceId? serviceId = null, string displayName = "Anna",
-        Guid? reusePersonId = null) =>
+        string? email = null, Guid? reusePersonId = null) =>
         new(
             Operator, BookingFixtures.TenantId, BookingFixtures.CalendarId, serviceId ?? BookingFixtures.ServiceId,
             BookingFixtures.WorkerId, BookingFixtures.EventId, displayName, phone ?? BookingFixtures.Phone,
-            reusePersonId);
+            Email: email, ReusePersonId: reusePersonId);
 
     private static BookingCalendar OtherTenantsCalendar()
     {

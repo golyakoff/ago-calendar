@@ -26,6 +26,11 @@ public static class BookingErrors
 
     public static Error InvalidPhone(string reason) => new("booking.invalid_phone", reason);
 
+    /// <summary>`26-268`§3/`adr/0188`: the manual-entry operator typed a non-blank email that is not
+    /// shape-valid. Email is optional on that path, so a blank one never reaches this - only a
+    /// non-blank, malformed one does (<c>EnterManualBookingHandler</c>'s own remarks).</summary>
+    public static Error InvalidEmail(string reason) => new("booking.invalid_email", reason);
+
     /// <summary>`20-09`: the caller supplied no <c>PhoneVerifiedAt</c> assertion at all. Distinct from
     /// <see cref="SlotUnavailable"/> deliberately, unlike that error's own "collapse every reason into
     /// one vague code" choice - this is not a fact about the slot two callers could legitimately race

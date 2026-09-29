@@ -35,8 +35,13 @@ public static class ErrorExtensions
             // `26-268`§2a/`adr/0188`: the recognition read's own malformed-phone rejection - the
             // identical placement and reasoning `booking.invalid_phone` already gives for itself: a
             // well-formed-but-invalid request, 400 rather than 403, since no permission is at stake.
-            "booking.invalid_phone" or "booking.service_not_offered" or "booking.phone_not_verified"
-                or "person_recognition.invalid_phone" => StatusCodes.Status400BadRequest,
+            // `26-268`§3: the manual-entry handler's own malformed-email rejection joins the identical
+            // group, for the identical reason - a non-blank, malformed email is a caller mistake, not a
+            // fault, and this product's own precedent for its own optional-field validator
+            // (`CreateOperatorInviteHandler`'s `MailAddress` check in `ago-chat`).
+            "booking.invalid_phone" or "booking.invalid_email" or "booking.service_not_offered"
+                or "booking.phone_not_verified" or "person_recognition.invalid_phone" =>
+                StatusCodes.Status400BadRequest,
             "booking.rate_limited" => StatusCodes.Status429TooManyRequests,
             // `20-10`. Mirrors `ago-chat`'s own `14-15` mapping for the identical five confirm
             // outcomes, not by reference: a wrong code is the caller's own mistake to fix (400, the

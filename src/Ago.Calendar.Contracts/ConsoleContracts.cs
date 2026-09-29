@@ -234,6 +234,11 @@ public sealed record PendingBookingResponse(
 /// response used to carry (<c>DisplayName</c>/<c>Notes</c>) are chat's now - the console reads them
 /// through this id from chat's own Person API and display-merges them onto this row. The `23-60`
 /// duplicate-phone hint is gone with the calendar-side merge (author decision O2).</param>
+/// <param name="UpcomingBookingCount">`26-282`: how many of this person's bookings are still ahead of
+/// them - <c>PendingConfirmation</c> or <c>Booked</c> with a start in the future, counted the same way
+/// <see cref="PersonRecognitionCandidateResponse.BookingCount"/> counts its own (held-status) total,
+/// narrowed to "has not happened yet". Additive: existing readers of this response that do not know the
+/// field are unaffected.</param>
 public sealed record ContactResponse(
     Guid PersonId,
     string Phone,
@@ -242,7 +247,8 @@ public sealed record ContactResponse(
     DateTimeOffset? PhoneVerifiedAt,
     DateTimeOffset? PhoneConfirmedByOperatorAt,
     DateTimeOffset FirstSeenAt,
-    DateTimeOffset LastSeenAt);
+    DateTimeOffset LastSeenAt,
+    int UpcomingBookingCount);
 
 /// <summary>`23-12`: the response to a deliberate reveal - the real number, and nothing else. Never
 /// returned by any list endpoint.</summary>

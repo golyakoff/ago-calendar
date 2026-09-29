@@ -90,7 +90,7 @@ public sealed class ContactPhoneRevealTests(PostgresFixture fixture)
 
         await using var reader = fixture.CreateDbContext();
         var contacts = await new ContactsReadStore(fixture.DataSource)
-            .ListForTenantAsync(seed.Tenant.Id, mask: false, CancellationToken.None);
+            .ListForTenantAsync(seed.Tenant.Id, mask: false, Now, CancellationToken.None);
         var row = Assert.Single(contacts);
         Assert.Equal(Now, row.PhoneVerifiedAt);
         Assert.Equal(confirmedAt, row.PhoneConfirmedByOperatorAt);

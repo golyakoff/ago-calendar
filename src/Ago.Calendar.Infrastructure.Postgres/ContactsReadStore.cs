@@ -28,24 +28,36 @@ public sealed class ContactsReadStore(NpgsqlDataSource dataSource) : IContactsRe
 {
     /// <summary>Newest-first: a tenant reviewing their own contacts most plausibly wants "who have we
     /// heard from lately" at the top, the same ordering choice a lead list in any CRM defaults
-    /// to.</summary>
+    /// to.
+    ///
+    /// <para>`26-282`: one added aggregate, the identical <c>left join events</c> +
+    /// <c>count(distinct booking_id) filter (...)</c> shape <c>PersonRecognitionReadStore</c>'s own
+    /// <c>BookingCount</c> already uses, narrowed from "held" to "held and still ahead of <c>@Now</c>" -
+    /// see <see cref="ContactRow.UpcomingBookingCount"/>'s own remarks for why <c>NoShow</c> is left out
+    /// of the status list here.</para></summary>
     private const string Sql =
         """
-        select person_id as "PersonId", phone as "Phone",
-               no_show_count as "NoShowCount", phone_verified_at as "PhoneVerifiedAt",
-               operator_confirmed_phone_at as "PhoneConfirmedByOperatorAt",
-               first_seen_at as "FirstSeenAt", last_seen_at as "LastSeenAt"
-        from person_records
-        where tenant_id = @TenantId
-        order by last_seen_at desc
+        select p.person_id as "PersonId", p.phone as "Phone",
+               p.no_show_count as "NoShowCount", p.phone_verified_at as "PhoneVerifiedAt",
+               p.operator_confirmed_phone_at as "PhoneConfirmedByOperatorAt",
+               p.first_seen_at as "FirstSeenAt", p.last_seen_at as "LastSeenAt",
+               count(distinct e.booking_id) filter (
+                   where e.status in ('PendingConfirmation', 'Booked') and e.starts_at > @Now
+               ) as "UpcomingBookingCount"
+        from person_records p
+        left join events e on e.person_id = p.person_id and e.tenant_id = p.tenant_id
+        where p.tenant_id = @TenantId
+        group by p.person_id, p.phone, p.no_show_count, p.phone_verified_at, p.operator_confirmed_phone_at,
+                 p.first_seen_at, p.last_seen_at
+        order by p.last_seen_at desc
         """;
 
     public async Task<IReadOnlyList<ContactRow>> ListForTenantAsync(
-        TenantId tenantId, bool mask, CancellationToken cancellationToken)
+        TenantId tenantId, bool mask, DateTimeOffset now, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         var rows = await connection.QueryAsync<ContactQueryRow>(new CommandDefinition(
-            Sql, new { TenantId = tenantId.Value }, cancellationToken: cancellationToken));
+            Sql, new { TenantId = tenantId.Value, Now = now }, cancellationToken: cancellationToken));
 
         return [.. rows.Select(row => ToRow(row, mask))];
     }
@@ -60,7 +72,8 @@ public sealed class ContactsReadStore(NpgsqlDataSource dataSource) : IContactsRe
             ? null
             : new DateTimeOffset(DateTime.SpecifyKind(row.PhoneConfirmedByOperatorAt.Value, DateTimeKind.Utc)),
         new DateTimeOffset(DateTime.SpecifyKind(row.FirstSeenAt, DateTimeKind.Utc)),
-        new DateTimeOffset(DateTime.SpecifyKind(row.LastSeenAt, DateTimeKind.Utc)));
+        new DateTimeOffset(DateTime.SpecifyKind(row.LastSeenAt, DateTimeKind.Utc)),
+        (int)row.UpcomingBookingCount);
 
     private sealed record ContactQueryRow(
         Guid PersonId,
@@ -69,5 +82,6 @@ public sealed class ContactsReadStore(NpgsqlDataSource dataSource) : IContactsRe
         DateTime? PhoneVerifiedAt,
         DateTime? PhoneConfirmedByOperatorAt,
         DateTime FirstSeenAt,
-        DateTime LastSeenAt);
+        DateTime LastSeenAt,
+        long UpcomingBookingCount);
 }

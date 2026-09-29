@@ -36,7 +36,7 @@ public class ContactsReportTests(PostgresFixture fixture)
         }
 
         var store = new ContactsReadStore(fixture.DataSource);
-        var rows = await store.ListForTenantAsync(mine.Tenant.Id, mask: false, CancellationToken.None);
+        var rows = await store.ListForTenantAsync(mine.Tenant.Id, mask: false, CalendarSeed.Now, CancellationToken.None);
 
         Assert.Equal(2, rows.Count);
         Assert.Contains(rows, r => r.PersonId == mine.Person.PersonId);
@@ -56,7 +56,7 @@ public class ContactsReportTests(PostgresFixture fixture)
 
         var result = await new GetTenantContactsHandler(
                 new ContactsReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
-                new ContactVisibilityProjectionStore(db))
+                new ContactVisibilityProjectionStore(db), new FixedClock(CalendarSeed.Now))
             .HandleAsync(new GetTenantContacts(seed.OperatorId, seed.Tenant.Id), CancellationToken.None);
 
         Assert.True(result.IsSuccess, result.Error?.Message);
@@ -89,11 +89,60 @@ public class ContactsReportTests(PostgresFixture fixture)
         await using var reader = fixture.CreateDbContext();
         var result = await new GetTenantContactsHandler(
                 new ContactsReadStore(fixture.DataSource), new PermissionChecker(new RoleAssignmentProjectionStore(reader)),
-                new ContactVisibilityProjectionStore(reader))
+                new ContactVisibilityProjectionStore(reader), new FixedClock(CalendarSeed.Now))
             .HandleAsync(new GetTenantContacts(strangerId, seed.Tenant.Id), CancellationToken.None);
 
         Assert.True(result.IsFailure);
         Assert.Equal("contacts.forbidden", result.Error!.Value.Code);
+    }
+
+    [Fact]
+    public async Task TheReadStore_CountsOnlyBookingsStillAheadOfNow_NeverPastOrCancelledOnes()
+    {
+        // `26-282`: one person with three bookings - one genuinely upcoming, one already in the past
+        // (Booked, but its start has since gone by), one Cancelled outright ahead of now. Only the
+        // first should count.
+        var seed = await CalendarSeed.WriteAsync(fixture);
+
+        var upcoming = CalendarSeed.Slot(seed, CalendarSeed.Now.AddDays(1));
+        var past = CalendarSeed.Slot(seed, CalendarSeed.Now.AddHours(-2));
+        var cancelled = CalendarSeed.Slot(seed, CalendarSeed.Now.AddDays(2));
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            db.Events.AddRange(upcoming, past, cancelled);
+            await db.SaveChangesAsync();
+        }
+
+        await using (var db = fixture.CreateDbContext())
+        {
+            var rows = await db.Events
+                .Where(e => e.Id == upcoming.Id || e.Id == past.Id || e.Id == cancelled.Id)
+                .ToListAsync();
+            var upcomingRow = rows.Single(e => e.Id == upcoming.Id);
+            var pastRow = rows.Single(e => e.Id == past.Id);
+            var cancelledRow = rows.Single(e => e.Id == cancelled.Id);
+
+            upcomingRow.Claim(seed.Person.PersonId, seed.Service.Id, CalendarSeed.Now, CalendarSeed.Now.AddMinutes(1), upcomingRow.Id);
+            upcomingRow.Confirm(CalendarSeed.Now.AddMinutes(2));
+            upcomingRow.ClearDomainEvents();
+
+            pastRow.Claim(seed.Person.PersonId, seed.Service.Id, CalendarSeed.Now.AddHours(-3), CalendarSeed.Now.AddHours(-3).AddMinutes(1), pastRow.Id);
+            pastRow.Confirm(CalendarSeed.Now.AddHours(-3).AddMinutes(2));
+            pastRow.ClearDomainEvents();
+
+            cancelledRow.Claim(seed.Person.PersonId, seed.Service.Id, CalendarSeed.Now, CalendarSeed.Now.AddMinutes(1), cancelledRow.Id);
+            cancelledRow.Cancel(CalendarSeed.Now.AddMinutes(2));
+            cancelledRow.ClearDomainEvents();
+
+            await db.SaveChangesAsync();
+        }
+
+        var store = new ContactsReadStore(fixture.DataSource);
+        var contactRows = await store.ListForTenantAsync(seed.Tenant.Id, mask: false, CalendarSeed.Now, CancellationToken.None);
+
+        var row = Assert.Single(contactRows);
+        Assert.Equal(1, row.UpcomingBookingCount);
     }
 
     [Fact]

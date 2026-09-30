@@ -84,6 +84,11 @@ public class TenantOriginCorsPolicyProviderTests(PostgresFixture fixture)
         Assert.NotNull(policy);
         Assert.Contains("Authorization", policy.Headers);
 
+        // `26-314`: the console legitimately deletes calendar resources (a working-hours rule, a
+        // service, a worker, a calendar), so DELETE must be preflight-allowed for its own origin -
+        // its absence is what silently blocked every console delete before this item.
+        Assert.Contains("DELETE", policy.Methods);
+
         // `22-14`/`adr/0100`: a custom request header a preflight does not name is a header the
         // browser refuses to send, so this line is the difference between the tenant switcher working
         // and every calendar call failing with a CORS error that names nothing.
@@ -102,6 +107,11 @@ public class TenantOriginCorsPolicyProviderTests(PostgresFixture fixture)
 
         Assert.NotNull(policy);
         Assert.DoesNotContain("Authorization", policy.Headers);
+
+        // `26-314`: the boundary the other direction - the public tenant-origin policy must NOT allow
+        // DELETE. A booking widget reads and books; it never deletes tenant configuration, and the
+        // console's DELETE allowance must not leak onto a tenant-listed origin.
+        Assert.DoesNotContain("DELETE", policy.Methods);
 
         // And it cannot name a tenant either: the public policy carries neither header, so a tenant
         // that listed the console's origin gains no way to send `22-14`'s active-tenant signal.

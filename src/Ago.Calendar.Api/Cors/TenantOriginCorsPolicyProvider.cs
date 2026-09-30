@@ -54,7 +54,13 @@ public sealed class TenantOriginCorsPolicyProvider(
         {
             return new CorsPolicyBuilder()
                 .WithOrigins(origin)
-                .WithMethods("GET", "POST", "PUT", "OPTIONS")
+                // `26-314`: DELETE was missing here, so every console delete on a calendar resource
+                // (a working-hours rule, a service, a worker, a calendar) failed its cross-origin
+                // preflight silently - the browser refuses a method the preflight does not name, so
+                // the request never left the browser and never reached this API. GET/POST/PUT worked,
+                // which is exactly why it went unnoticed. The public tenant-origin policy below stays
+                // without DELETE on purpose: a booking widget never deletes tenant configuration.
+                .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 // The console sends adr/0022's bearer token and, since `22-14`/`adr/0100`, the
                 // tenant it chose. A custom request header is not on the CORS safelist, so a browser
                 // will not send it at all unless the preflight names it - and this deployment really

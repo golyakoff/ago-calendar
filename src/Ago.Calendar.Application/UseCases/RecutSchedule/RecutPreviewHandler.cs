@@ -22,12 +22,25 @@ namespace Ago.Calendar.Application.UseCases.RecutSchedule;
 /// layered on top for the contact columns only</b> - the identical two-layer shape
 /// <c>GetWorkerSlotsHandler</c> already established for the same read store, and `20-12`'s own
 /// precedent before that.</para>
+///
+/// <para><b>`26-315`: one deliberate exception to "built entirely on <see cref="IWorkerSlotReadStore"/>",
+/// stated above.</b> This handler also takes <see cref="IEventRepository"/>, write-side though it is,
+/// for exactly one call: <see cref="IEventRepository.ListMaterializedLocalDatesAsync"/>, to answer "has
+/// this worker ever been materialised at all" before the regression checks below run. That question has
+/// to be asked before <see cref="RecutPreview.From"/> is validated against
+/// <see cref="WorkerSchedule.MaterializeFrom"/>, because a schedule that has never been cut sits at its
+/// own initial cursor - never past anything - so every one of those checks refuses every <c>From</c> an
+/// operator could send, which is this item's own root cause: a correctly configured worker for which
+/// «Пересчёт» has no reachable input at all, not merely one that re-cuts zero rows. This call returns a
+/// set of dates, never an <see cref="Event"/> aggregate, so it does not reintroduce the aggregate
+/// loading this handler's own read-only design exists to avoid.</para>
 /// </summary>
 public sealed class RecutPreviewHandler(
     IBookingCalendarRepository calendars,
     IWorkerRepository workers,
     IWorkerScheduleRepository schedules,
     IWorkerSlotReadStore slots,
+    IEventRepository events,
     IWallClockResolver wallClock,
     IPermissionChecker permissions,
     IContactVisibilityProjectionStore visibility,
@@ -68,6 +81,19 @@ public sealed class RecutPreviewHandler(
         }
 
         var today = wallClock.ToLocalDate(calendar.TimeZone, clock.UtcNow);
+        var lastDay = today.AddDays(schedule.HorizonDays);
+
+        // `26-315`: the bootstrap check, ahead of every regression check below - see this class's own
+        // remarks for why a never-materialised schedule cannot satisfy them at all. Zero materialised
+        // days anywhere in the worker's own bookable window means there is nothing yet to preview or
+        // destroy; the caller's own `From` does not matter in that state, so it is deliberately never
+        // read below this point.
+        var materializedDays = await events.ListMaterializedLocalDatesAsync(
+            calendar.Id, worker.Id, today, lastDay, cancellationToken);
+        if (materializedDays.Count == 0)
+        {
+            return new RecutPreviewResult([], RecutFingerprint.Compute([]), IsBootstrap: true);
+        }
 
         if (query.From < today)
         {
@@ -79,7 +105,6 @@ public sealed class RecutPreviewHandler(
             return RecutErrors.NotARegression(query.From, schedule.MaterializeFrom);
         }
 
-        var lastDay = today.AddDays(schedule.HorizonDays);
         if (lastDay < query.From)
         {
             return RecutErrors.HorizonBeforeFrom(query.From, lastDay);

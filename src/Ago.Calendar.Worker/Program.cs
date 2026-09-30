@@ -112,6 +112,18 @@ builder.Services
     .ValidateOnStart();
 builder.Services.AddHostedService<SiteErasedConsumer>();
 
+// `26-315`: this product's seventh broker consumer, and the first that reacts to its own
+// WorkerScheduleSaved (staged by SaveWorkerScheduleHandler) rather than another product's event -
+// materialises a calendar within seconds of its first schedule being saved, rather than waiting for
+// AvailabilityMaterializationJob's own daily tick to reach it. Same registration shape as every
+// consumer above; unlike them, no inbox row (WorkerScheduleSavedMaterializationConsumer's own remarks:
+// the action itself, MaterializeAvailabilityHandler, is already idempotent).
+builder.Services
+    .AddOptions<WorkerScheduleSavedMaterializationConsumerOptions>()
+    .Bind(builder.Configuration.GetSection(WorkerScheduleSavedMaterializationConsumerOptions.SectionName))
+    .ValidateOnStart();
+builder.Services.AddHostedService<WorkerScheduleSavedMaterializationConsumer>();
+
 // `25-44`: this host's own outbox dispatcher - drains the `outbox` table to RabbitMQ, the identical
 // mechanism `Ago.Chat.Worker.OutboxDispatcher` already runs for chat. Every row this product stages
 // (`BookingConfirmed` since `20-04`, `ModuleQuantityImpactComputed` staged by the consumer just above)

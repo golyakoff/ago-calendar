@@ -43,9 +43,19 @@ public readonly record struct RecutConfirm(
 /// the day was decided <see cref="RecutDecision.Keep"/> or was a <see cref="EventStatus.NoShow"/> row
 /// that cannot be decided at all. <see cref="RecutDays"/> and <see cref="SkippedDays"/> partition
 /// <c>[From, today + HorizonDays]</c> exactly - every day in range is in exactly one of the two.</param>
+/// <param name="Bootstrapped">`26-315`: <see langword="true"/> when this confirm found zero
+/// materialised slots for the worker and performed the very first materialisation
+/// (<see cref="Application.UseCases.MaterializeAvailability.MaterializeAvailabilityHandler"/>) instead
+/// of the ordinary regression re-cut - see <see cref="RecutPreviewResult.IsBootstrap"/>. When this is
+/// <see langword="true"/>, <see cref="RecutDays"/> is the day range that was materialised,
+/// <see cref="SkippedDays"/> is always empty, <see cref="SlotsDeleted"/> is always zero (nothing
+/// existed to delete) and <see cref="BookingsCancelled"/> is always zero (there was nothing booked
+/// yet to cancel). Defaulted to <see langword="false"/> so every pre-existing caller keeps
+/// compiling unchanged.</param>
 public readonly record struct RecutConfirmResult(
     IReadOnlyList<DateOnly> RecutDays,
     IReadOnlyList<DateOnly> SkippedDays,
     int SlotsDeleted,
     int SlotsInserted,
-    int BookingsCancelled);
+    int BookingsCancelled,
+    bool Bootstrapped = false);

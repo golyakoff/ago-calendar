@@ -156,6 +156,55 @@ public class RecutScheduleTests(PostgresFixture fixture)
         Assert.Contains(day, e => e.Id == booking.Id && e.Status == EventStatus.PendingConfirmation);
     }
 
+    // `26-315`: the bootstrap branch - a worker whose schedule has never been materialised at all
+    // (no daily-job tick yet, no prior recut) has no path through the ordinary regression checks
+    // (fails-before: FromAtOrPastTheCurrentCursor_IsRefused_AsNotARegression's own scenario is exactly
+    // what a fresh schedule's own untouched cursor looks like - `CalendarSeed.AddWeeklyScheduleAsync`
+    // defaults MaterializeFrom to DateOnly.MinValue, so on the old code every `From` an operator could
+    // send is at or past it, and «Пересчёт» refuses every one of them rather than merely re-cutting
+    // zero rows). This is that same starting state, proving the new bootstrap branch is what makes it
+    // reachable at all.
+
+    [Fact]
+    public async Task ARecutOnAWorkerWithZeroMaterialisedSlots_BootstrapsTheFirstCut()
+    {
+        var (seed, harness) = await AnUnmaterializedWeekAsync();
+
+        var preview = await harness.RecutPreviewAsync(seed, Tuesday);
+        Assert.True(preview.IsSuccess, preview.Error?.Message);
+        Assert.True(preview.Value.IsBootstrap);
+        Assert.Empty(preview.Value.Days);
+
+        var confirm = await harness.RecutConfirmAsync(seed, Tuesday, preview.Value.Fingerprint);
+        Assert.True(confirm.IsSuccess, confirm.Error?.Message);
+        Assert.True(confirm.Value.Bootstrapped);
+        Assert.True(confirm.Value.SlotsInserted > 0, "expected the first materialisation to insert slots");
+        Assert.Equal(0, confirm.Value.SlotsDeleted);
+        Assert.Equal(0, confirm.Value.BookingsCancelled);
+        Assert.Empty(confirm.Value.SkippedDays);
+        Assert.NotEmpty(confirm.Value.RecutDays);
+
+        // The item's own Done-when, read straight from the table: a real Available row within the
+        // horizon, not merely a non-zero count the handler claims.
+        var tuesday = await ReadDayAsync(seed, Tuesday);
+        Assert.Contains(tuesday, e => e.Status == EventStatus.Available);
+    }
+
+    [Fact]
+    public async Task ARecutConfirmWithNoPriorPreview_StillBootstraps()
+    {
+        // The bootstrap branch never reads `From`, `Fingerprint` or `Decisions` - confirming this
+        // directly (an operator who never called preview, or a stale client) still produces slots,
+        // proving the branch really is independent of the ordinary preview/confirm handshake.
+        var (seed, harness) = await AnUnmaterializedWeekAsync();
+
+        var confirm = await harness.RecutConfirmAsync(seed, Tuesday, "irrelevant-fingerprint");
+
+        Assert.True(confirm.IsSuccess, confirm.Error?.Message);
+        Assert.True(confirm.Value.Bootstrapped);
+        Assert.True(confirm.Value.SlotsInserted > 0);
+    }
+
     [Fact]
     public async Task FromAtOrPastTheCurrentCursor_IsRefused_AsNotARegression()
     {
@@ -260,6 +309,20 @@ public class RecutScheduleTests(PostgresFixture fixture)
 
         var harness = new AvailabilityHarness(fixture, new FixedClock(Monday));
         await harness.MaterializeAsync(seed.Calendar.Id);
+        return (seed, harness);
+    }
+
+    /// <summary>`26-315`: the identical seed as <see cref="AMaterializedWeekAsync"/>, minus the
+    /// <see cref="AvailabilityHarness.MaterializeAsync"/> call - the state a freshly saved schedule
+    /// sits in before the daily job, or an operator's own recut, first runs for it.</summary>
+    private async Task<(SeededTenant Seed, AvailabilityHarness Harness)> AnUnmaterializedWeekAsync()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        await CalendarSeed.AddWorkingHoursAsync(
+            fixture, seed, new TimeOnly(9, 0), new TimeOnly(18, 0), CalendarSeed.EveryDay);
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, seed, horizonDays: HorizonDays);
+
+        var harness = new AvailabilityHarness(fixture, new FixedClock(Monday));
         return (seed, harness);
     }
 

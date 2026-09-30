@@ -309,7 +309,12 @@ public sealed class CalendarModule : IProductModule
         // would destroy, then apply it. RecutConfirmHandler takes CancelBookingHandler itself as a
         // constructor dependency so cancellation goes through the ordinary use case rather than a
         // second implementation of it; both are scoped, so both resolve against the same DbContext
-        // within one request.
+        // within one request. `26-315`: RecutConfirmHandler also takes MaterializeAvailabilityHandler
+        // (already scoped above) so a worker with zero materialised slots bootstraps through the exact
+        // same cutting logic the daily job uses, rather than a second implementation of it.
+        // RecutPreviewHandler additionally now takes IEventRepository, write-side though it is, to
+        // detect that same zero-slots state before running any of the ordinary regression checks - see
+        // both handlers' own remarks.
         services.AddScoped<RecutPreviewHandler>();
         services.AddScoped<RecutConfirmHandler>();
     }

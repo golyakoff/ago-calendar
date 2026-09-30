@@ -1138,7 +1138,8 @@ public static class ConsoleEndpoints
                             booking.CanDecide)),
                     ])),
             ],
-            preview.Fingerprint));
+            preview.Fingerprint,
+            preview.IsBootstrap));
     }
 
     private static async Task<IResult> HandleRecutConfirmAsync(
@@ -1181,7 +1182,8 @@ public static class ConsoleEndpoints
             [.. confirmed.SkippedDays],
             confirmed.SlotsDeleted,
             confirmed.SlotsInserted,
-            confirmed.BookingsCancelled));
+            confirmed.BookingsCancelled,
+            confirmed.Bootstrapped));
     }
 
     private static RecutBookingDecision ToDecision(RecutDecisionRequest request)

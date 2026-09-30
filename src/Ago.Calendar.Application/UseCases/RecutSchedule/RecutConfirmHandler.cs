@@ -1,5 +1,6 @@
 ﻿using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.UseCases.BookingLifecycle;
+using Ago.Calendar.Application.UseCases.MaterializeAvailability;
 using Ago.Calendar.Domain;
 using Ago.Platform.Kernel;
 
@@ -46,6 +47,31 @@ namespace Ago.Calendar.Application.UseCases.RecutSchedule;
 /// re-cut" against a request that stopped partway through - the cursor is supposed to mean the ordinary
 /// forward job can trust everything from here on is either freshly cut or deliberately preserved, and
 /// that is only true once the whole loop below has finished.</para>
+///
+/// <para><b>`26-315`: a worker with zero materialised slots bootstraps instead of running any of the
+/// above.</b> Every check and every write this handler otherwise performs - the staleness fingerprint,
+/// the per-booking decisions, <see cref="WorkerSchedule.RecutFrom"/> itself - assumes a cursor that has
+/// already been cut past, which is never true for a schedule sitting at its own untouched initial
+/// cursor (the state a freshly saved schedule is in until the daily job, or this handler, first runs
+/// for it). Detected the identical way <see cref="RecutPreviewHandler"/> detects it - zero
+/// <see cref="IEventRepository.ListMaterializedLocalDatesAsync"/> results anywhere in
+/// <c>[today, today + HorizonDays]</c> - and handled by delegating to
+/// <see cref="MaterializeAvailabilityHandler"/>, the identical handler the daily job itself calls, so
+/// the very first cut and every later one are produced by the exact same code rather than a second,
+/// parallel implementation of <c>DayGenerator</c>'s own cutting logic. Re-checked fresh at confirm time
+/// rather than trusted from the preview: if the daily job (or another operator) materialised something
+/// in the gap between preview and confirm, this condition is simply no longer true and the ordinary
+/// regression path below runs instead - the same self-healing role the fingerprint check plays for the
+/// non-bootstrap path, without needing a second staleness mechanism invented for this one.</para>
+///
+/// <para><b>Scoped to the calendar, not to this one worker - unlike every other branch of this
+/// handler.</b> <c>MaterializeAvailability</c> only exists at calendar granularity (the daily
+/// job's own unit of work); there is no per-worker overload to call instead, and adding one just for
+/// this branch would be exactly the new, speculative port surface this item's own scope refuses to
+/// invent for a contained fix. In practice this means a bootstrap triggered for one worker also
+/// materialises any calendar sibling that independently happens to need it too (this product already
+/// allows more than one worker per calendar, per this class's own existing tests) - a harmless,
+/// idempotent side effect in the same direction as the fix itself, never a destructive one.</para>
 /// </summary>
 public sealed class RecutConfirmHandler(
     IBookingCalendarRepository calendars,
@@ -57,7 +83,8 @@ public sealed class RecutConfirmHandler(
     IIdGenerator idGenerator,
     IPermissionChecker permissions,
     IClock clock,
-    CancelBookingHandler cancelBooking)
+    CancelBookingHandler cancelBooking,
+    MaterializeAvailabilityHandler materialize)
 {
     public async Task<Result<RecutConfirmResult>> HandleAsync(RecutConfirm command, CancellationToken cancellationToken)
     {
@@ -93,6 +120,45 @@ public sealed class RecutConfirmHandler(
 
         var now = clock.UtcNow;
         var today = wallClock.ToLocalDate(calendar.TimeZone, now);
+        var lastDay = today.AddDays(schedule.HorizonDays);
+
+        // `26-315`: the bootstrap branch, ahead of every regression check below - see this class's own
+        // remarks for why a never-materialised schedule cannot satisfy them at all, and why re-checking
+        // this fresh (rather than trusting the preview) is itself the concurrency guard this branch
+        // needs. `command.From`, `command.Fingerprint` and `command.Decisions` are all irrelevant to a
+        // worker with nothing materialised yet, so none of them are read below this point.
+        var materializedDays = await events.ListMaterializedLocalDatesAsync(
+            calendar.Id, worker.Id, today, lastDay, cancellationToken);
+        if (materializedDays.Count == 0)
+        {
+            // The same `firstDay` `MaterializeAvailabilityHandler` itself computes - captured *before*
+            // that handler runs, deliberately: `schedule` is the same tracked EF entity
+            // `MaterializeAvailabilityHandler` loads and calls `AdvanceCursor` on (both resolve
+            // `IWorkerScheduleRepository` against the one scoped `DbContext` this request shares), so
+            // reading `schedule.MaterializeFrom` after the call below would already see the *new*,
+            // past-the-horizon cursor rather than the one this bootstrap actually started from.
+            var firstDay = today > schedule.MaterializeFrom ? today : schedule.MaterializeFrom;
+
+            // Fully qualified: this file's own namespace (`...UseCases.RecutSchedule`) nests directly
+            // under `...UseCases`, the same parent `...UseCases.MaterializeAvailability` nests under -
+            // so the bare type name `MaterializeAvailability` resolves to that sibling *namespace*
+            // instead of the record inside it (CS0118), the identical trap `AvailabilityMaterializationJob`'s
+            // own remarks already document for `Worker`/`Ago.Calendar.Worker`.
+            var materializeCommand =
+                new Ago.Calendar.Application.UseCases.MaterializeAvailability.MaterializeAvailability(calendar.Id);
+            var result = await materialize.HandleAsync(materializeCommand, cancellationToken);
+
+            // Reported here only so the caller sees an honest day range for what just happened, never
+            // re-derived to decide anything: the handler above already did the actual cutting and
+            // cursor advance.
+            var bootstrappedDays = new List<DateOnly>();
+            for (var day = firstDay; day <= lastDay; day = day.AddDays(1))
+            {
+                bootstrappedDays.Add(day);
+            }
+
+            return new RecutConfirmResult(bootstrappedDays, [], 0, result.SlotsInserted, 0, Bootstrapped: true);
+        }
 
         if (command.From < today)
         {
@@ -104,7 +170,6 @@ public sealed class RecutConfirmHandler(
             return RecutErrors.NotARegression(command.From, schedule.MaterializeFrom);
         }
 
-        var lastDay = today.AddDays(schedule.HorizonDays);
         if (lastDay < command.From)
         {
             return RecutErrors.HorizonBeforeFrom(command.From, lastDay);

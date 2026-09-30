@@ -1,5 +1,7 @@
-﻿using Ago.Calendar.Application.Abstractions;
+﻿using System.Text.Json;
+using Ago.Calendar.Application.Abstractions;
 using Ago.Calendar.Application.UseCases.Configuration;
+using Ago.Calendar.Contracts;
 using Ago.Calendar.Domain;
 using Ago.Platform.Kernel;
 
@@ -635,6 +637,76 @@ public class ConfigurationHandlerTests
         Assert.Equal(["https://a.example", "https://b.example"], world.Tenant.AllowedOrigins);
     }
 
+    // `26-315`: SaveWorkerScheduleHandler's own new side effect - stage WorkerScheduleSaved so
+    // Ago.Calendar.Worker materialises the calendar within seconds rather than waiting for the daily
+    // job. Asserted at this level (a fake IOutboxWriter, the same FakeOutboxWriter
+    // BookingLifecycleHandlerTests already uses) because "was Enqueue called, with what payload" is a
+    // handler-level claim; whether a staged row actually reaches RabbitMQ is OutboxDispatcherTests'
+    // own claim, over real Postgres, in Ago.Calendar.Integration.Tests.
+
+    [Fact]
+    public async Task SavingANewSchedule_StagesWorkerScheduleSavedForTheWorkersCalendar()
+    {
+        var world = new World();
+        var worker = (await world.CreateWorkerAsync()).Value;
+
+        var result = await world.SaveWorkerScheduleAsync(worker);
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        var envelope = Assert.Single(world.Outbox.Enqueued);
+        Assert.Equal(nameof(WorkerScheduleSaved), envelope.Type);
+
+        var contract = JsonSerializer.Deserialize<WorkerScheduleSaved>(envelope.Payload)!;
+        Assert.Equal(BookingFixtures.CalendarId.Value, contract.CalendarId);
+        Assert.Equal(worker.Value, contract.WorkerId);
+    }
+
+    [Fact]
+    public async Task ReconfiguringAnExistingSchedule_StagesWorkerScheduleSavedAgain()
+    {
+        var world = new World();
+        var worker = (await world.CreateWorkerAsync()).Value;
+        await world.SaveWorkerScheduleAsync(worker);
+
+        var result = await world.SaveWorkerScheduleAsync(worker, slotMinutes: 30, bufferMinutes: 0);
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        // Once per save, not once per schedule: a reconfigure is a distinct fact from the create it
+        // followed, and WorkerScheduleSavedMapper mints a fresh correlation id for exactly that reason.
+        Assert.Equal(2, world.Outbox.Enqueued.Count);
+        Assert.All(world.Outbox.Enqueued, e => Assert.Equal(nameof(WorkerScheduleSaved), e.Type));
+    }
+
+    [Fact]
+    public async Task SavingAScheduleForAWorkerOnNoCalendarYet_StagesNothing()
+    {
+        // `SaveWorkerScheduleHandler` itself never requires calendar membership (unlike the recut
+        // handlers) - a direct API call can reach this state, and there is nothing for
+        // WorkerScheduleSavedMaterializationConsumer to materialise into.
+        var world = new World();
+        var worker = Worker.Create(
+            new WorkerId(Guid.NewGuid()), BookingFixtures.TenantId, "Doe", "Alex", null, BookingFixtures.Now);
+        world.Workers.Added.Add(worker);
+
+        var result = await world.SaveWorkerScheduleAsync(worker.Id);
+
+        Assert.True(result.IsSuccess, result.Error?.Message);
+        Assert.Empty(world.Outbox.Enqueued);
+    }
+
+    [Fact]
+    public async Task ARefusedSave_StagesNothing()
+    {
+        var world = new World();
+        var worker = (await world.CreateWorkerAsync()).Value;
+
+        var result = await world.SaveWorkerScheduleAsync(worker, horizonDays: 181);
+
+        Assert.True(result.IsFailure);
+        Assert.Empty(world.Outbox.Enqueued);
+        Assert.Empty(world.Schedules.Added);
+    }
+
     private sealed class World
     {
         public World()
@@ -765,6 +837,59 @@ public class ConfigurationHandlerTests
         public Task<Result> SetOriginsAsync(IReadOnlyList<string> origins) =>
             new SetAllowedOriginsHandler(new FakeTenantRepository(Tenant), Permissions)
                 .HandleAsync(new SetAllowedOrigins(Actor, BookingFixtures.TenantId, origins), CancellationToken.None);
+
+        /// <summary>`26-315`: staged onto <see cref="Outbox"/> by <see cref="SaveWorkerScheduleAsync"/> -
+        /// see <see cref="SaveWorkerScheduleHandler"/>'s own remarks for when.</summary>
+        public FakeOutboxWriter Outbox { get; } = new();
+
+        public RecordingWorkerScheduleRepository Schedules { get; } = new();
+
+        public Task<Result<WorkerScheduleDetail>> SaveWorkerScheduleAsync(
+            WorkerId workerId,
+            int slotMinutes = 45,
+            int bufferMinutes = 10,
+            int horizonDays = 30,
+            DateOnly? materializeFrom = null,
+            TenantId? tenantId = null) =>
+            new SaveWorkerScheduleHandler(
+                    Workers, Schedules, Permissions, Outbox, new FakeIdGenerator(), new FakeClock(BookingFixtures.Now))
+                .HandleAsync(
+                    new SaveWorkerSchedule(
+                        Actor, tenantId ?? BookingFixtures.TenantId, workerId, ScheduleKind.Weekly,
+                        null, null, null, null, null,
+                        slotMinutes, bufferMinutes, horizonDays,
+                        materializeFrom ?? DateOnly.FromDateTime(BookingFixtures.Now.UtcDateTime)),
+                    CancellationToken.None);
+    }
+}
+
+/// <summary>`26-315`: records what <see cref="SaveWorkerScheduleHandler"/> actually wrote, the same
+/// "a refused call wrote nothing" shape every other recording fake in this file already gives - unlike
+/// <see cref="FakeWorkerScheduleRepository"/> (in <c>BookingFakes.cs</c>), whose write methods
+/// deliberately throw because no <c>BookEventHandler</c> test reaches them.</summary>
+internal sealed class RecordingWorkerScheduleRepository : IWorkerScheduleRepository
+{
+    public List<WorkerSchedule> Added { get; } = [];
+
+    public List<WorkerSchedule> Saved { get; } = [];
+
+    public Task<WorkerSchedule?> GetByWorkerIdAsync(WorkerId workerId, CancellationToken cancellationToken) =>
+        Task.FromResult(Added.Find(schedule => schedule.WorkerId == workerId));
+
+    public Task<IReadOnlyList<WorkerSchedule>> ListForCalendarAsync(
+        CalendarId calendarId, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("Not reached by SaveWorkerScheduleHandler.");
+
+    public Task AddAsync(WorkerSchedule schedule, CancellationToken cancellationToken)
+    {
+        Added.Add(schedule);
+        return Task.CompletedTask;
+    }
+
+    public Task SaveAsync(WorkerSchedule schedule, CancellationToken cancellationToken)
+    {
+        Saved.Add(schedule);
+        return Task.CompletedTask;
     }
 }
 

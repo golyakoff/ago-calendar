@@ -1,5 +1,7 @@
 ﻿using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Application.Mapping;
 using Ago.Calendar.Domain;
+using Ago.Platform.Abstractions;
 using Ago.Platform.Kernel;
 
 namespace Ago.Calendar.Application.UseCases.Configuration;
@@ -19,11 +21,22 @@ namespace Ago.Calendar.Application.UseCases.Configuration;
 /// in the handler "so a direct API call can't bypass a console-only check" - which this satisfies by
 /// construction, since there is no path from this handler to a saved row that does not go through
 /// <see cref="WorkerSchedule"/>'s own validation.</para>
+///
+/// <para><b>`26-315`: stages <see cref="Ago.Calendar.Contracts.WorkerScheduleSaved"/> on every
+/// successful save, so <c>Ago.Calendar.Worker</c> materialises this calendar within seconds rather than
+/// waiting for the next daily tick.</b> Staged through the ordinary outbox (<see cref="IOutboxWriter"/>),
+/// never run inline here - this handler still never touches <c>Event</c> rows or
+/// <c>MaterializeAvailabilityHandler</c> itself, keeping the cut off the request path exactly as every
+/// other write in this product keeps its own side effects off it (CLAUDE.md rule 4). Skipped entirely
+/// for a worker joined to no calendar yet (<see cref="Domain.Worker.Calendars"/> empty) - there is
+/// nothing for the consumer to materialise into, the identical guard every other schedule-adjacent read
+/// in this product (<c>RecutPreviewHandler.WorkerNotOnACalendar</c>) already applies.</para>
 /// </summary>
 public sealed class SaveWorkerScheduleHandler(
     IWorkerRepository workers,
     IWorkerScheduleRepository schedules,
     IPermissionChecker permissions,
+    IOutboxWriter outbox,
     IIdGenerator idGenerator,
     IClock clock)
 {
@@ -51,6 +64,7 @@ public sealed class SaveWorkerScheduleHandler(
 
         var now = clock.UtcNow;
         var existing = await schedules.GetByWorkerIdAsync(command.WorkerId, cancellationToken);
+        var isNew = existing is null;
 
         WorkerSchedule schedule;
         try
@@ -68,8 +82,6 @@ public sealed class SaveWorkerScheduleHandler(
                         command.CycleStartsAt!.Value, command.CycleEndsAt!.Value,
                         command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now,
                         command.BuffersCountTowardServiceDuration);
-
-                await schedules.AddAsync(schedule, cancellationToken);
             }
             else
             {
@@ -88,13 +100,31 @@ public sealed class SaveWorkerScheduleHandler(
                         command.SlotMinutes, command.BufferMinutes, command.HorizonDays, command.MaterializeFrom, now,
                         command.BuffersCountTowardServiceDuration);
                 }
-
-                await schedules.SaveAsync(schedule, cancellationToken);
             }
         }
         catch (ArgumentOutOfRangeException exception)
         {
             return ConfigurationErrors.Invalid(exception.Message);
+        }
+
+        // `26-315`: staged before the schedule row itself commits, onto the identical DbContext
+        // AddAsync/SaveAsync below saves - the same "stage, then let the ordinary save commit both
+        // together" shape ConfirmBookingHandler's own outbox call uses, which is what CLAUDE.md rule 4
+        // actually requires: the state change and its integration event in one transaction, never two.
+        // Skipped for a worker on no calendar yet - see this class's own remarks.
+        if (worker.Calendars.Count > 0)
+        {
+            outbox.Enqueue(WorkerScheduleSavedMapper.ToEnvelope(
+                worker.Calendars[0].CalendarId, command.WorkerId, now, idGenerator));
+        }
+
+        if (isNew)
+        {
+            await schedules.AddAsync(schedule, cancellationToken);
+        }
+        else
+        {
+            await schedules.SaveAsync(schedule, cancellationToken);
         }
 
         return GetWorkerScheduleHandler.ToDetail(schedule);

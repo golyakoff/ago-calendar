@@ -18,9 +18,17 @@ public readonly record struct RecutPreview(OperatorId OperatorId, TenantId Tenan
 /// hides how large the range actually is.</param>
 /// <param name="Fingerprint">Opaque to the caller - hands it back unchanged on
 /// <see cref="RecutConfirm"/>, and <see cref="RecutFingerprint"/> is the only code that reads its
-/// shape.</param>
+/// shape. For an <see cref="IsBootstrap"/> preview this is <see cref="RecutFingerprint.Compute"/>
+/// over an empty booking set - a fixed value, since there is nothing yet to fingerprint.</param>
+/// <param name="IsBootstrap">`26-315`: <see langword="true"/> when this worker has no materialised
+/// slots at all in <c>[today, today + HorizonDays]</c> - the state a freshly saved schedule is in
+/// before the daily job, or an operator's confirm, ever runs. <see cref="Days"/> is empty in this
+/// case (there is nothing yet to preview or destroy); confirming performs the first materialisation
+/// instead of the ordinary regression re-cut - see <see cref="RecutConfirmResult.Bootstrapped"/>.
+/// Defaulted to <see langword="false"/> so every pre-existing caller that builds this record with two
+/// positional arguments keeps compiling unchanged.</param>
 public readonly record struct RecutPreviewResult(
-    IReadOnlyList<RecutDayPreview> Days, string Fingerprint);
+    IReadOnlyList<RecutDayPreview> Days, string Fingerprint, bool IsBootstrap = false);
 
 /// <param name="AvailableSlotsToDelete">How many <see cref="EventStatus.Available"/> rows a confirm
 /// would delete on this day - zero for a day that has not been materialised at all yet, which is still

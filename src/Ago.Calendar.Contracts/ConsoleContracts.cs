@@ -529,7 +529,13 @@ public sealed record WorkerSlotResponse(
 public sealed record RecutPreviewRequest(DateOnly From);
 
 /// <param name="Fingerprint">Opaque - hand back exactly what the preview response carried.</param>
-public sealed record RecutPreviewResponse(IReadOnlyList<RecutDayPreviewResponse> Days, string Fingerprint);
+/// <param name="IsBootstrap">`26-315`: <see langword="true"/> when this worker has no materialised
+/// slots at all yet - <see cref="Days"/> is empty in that state, and confirming with this same
+/// <paramref name="Fingerprint"/> performs the first materialisation rather than an ordinary re-cut.
+/// Defaulted to <see langword="false"/> so an older console build deserialising this response without
+/// knowing the field still gets a sensible value.</param>
+public sealed record RecutPreviewResponse(
+    IReadOnlyList<RecutDayPreviewResponse> Days, string Fingerprint, bool IsBootstrap = false);
 
 public sealed record RecutDayPreviewResponse(
     DateOnly LocalDate, int AvailableSlotsToDelete, IReadOnlyList<RecutBookingPreviewResponse> Bookings);
@@ -560,12 +566,16 @@ public sealed record RecutConfirmRequest(
 /// <param name="Decision"><c>"Cancel"</c> or <c>"Keep"</c>.</param>
 public sealed record RecutDecisionRequest(Guid BookingId, string Decision);
 
+/// <param name="Bootstrapped">`26-315`: <see langword="true"/> when this confirm found no materialised
+/// slots and performed the worker's first materialisation instead of an ordinary re-cut - see
+/// <see cref="RecutPreviewResponse.IsBootstrap"/>.</param>
 public sealed record RecutConfirmResponse(
     IReadOnlyList<DateOnly> RecutDays,
     IReadOnlyList<DateOnly> SkippedDays,
     int SlotsDeleted,
     int SlotsInserted,
-    int BookingsCancelled);
+    int BookingsCancelled,
+    bool Bootstrapped = false);
 
 // `22-05`/`adr/0093`: no `OperatorDisplayName`/`ExternalSubjectId` any more - provisioning a tenant no
 // longer provisions a calendar-owned operator alongside it (there is no local `operators` table left

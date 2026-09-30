@@ -115,6 +115,7 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
             new WorkerRepository(db),
             new WorkerScheduleRepository(db),
             new WorkerSlotReadStore(fixture.DataSource),
+            new EventRepository(db),
             Resolver,
             new PermissionChecker(new RoleAssignmentProjectionStore(db)),
             new ContactVisibilityProjectionStore(db),
@@ -140,6 +141,21 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
         var cancelHandler = new CancelBookingHandler(
             new EventRepository(db), new PermissionChecker(new RoleAssignmentProjectionStore(db)),
             new EfOutboxWriter<AgoCalendarDbContext>(db), new UuidV7Generator(), Clock);
+        // `26-315`: the same MaterializeAvailabilityHandler instance shape as MaterializeAsync above,
+        // built over this call's own `db` rather than a fresh one - matching production's one-scoped-
+        // DbContext-per-request shape. This is deliberate, not incidental: RecutConfirmHandler's own
+        // bootstrap branch relies on WorkerSchedule being the one EF-tracked instance both this handler
+        // and MaterializeAvailabilityHandler mutate, and a test built over two separate contexts would
+        // not exercise that sharing at all.
+        var materializeHandler = new MaterializeAvailabilityHandler(
+            new BookingCalendarRepository(db),
+            new WorkerRepository(db),
+            new WorkingHoursRuleRepository(db),
+            new WorkerScheduleRepository(db),
+            new EventRepository(db),
+            Resolver,
+            new UuidV7Generator(),
+            Clock);
         var handler = new RecutConfirmHandler(
             new BookingCalendarRepository(db),
             new WorkerRepository(db),
@@ -150,7 +166,8 @@ internal sealed class AvailabilityHarness(PostgresFixture fixture, FixedClock cl
             new UuidV7Generator(),
             new PermissionChecker(new RoleAssignmentProjectionStore(db)),
             Clock,
-            cancelHandler);
+            cancelHandler,
+            materializeHandler);
 
         return await handler.HandleAsync(
             new RecutConfirm(seed.OperatorId, seed.Tenant.Id, seed.Worker.Id, from, fingerprint, decisions),

@@ -20,13 +20,19 @@ public class ConcurrentWorkerQuotaTests(ConcurrencyFixture fixture)
 {
     private static readonly DateTimeOffset Now = new(2026, 5, 4, 9, 0, 0, TimeSpan.Zero);
 
+    /// <summary>`26-317`: the tenant is granted three, with two active workers already seeded, so the
+    /// enforced ceiling - <c>GREATEST(worker_quota, Tenant.DefaultWorkerQuota)</c>, both equal to 2
+    /// here anyway - leaves exactly one free slot. A raw quota of 1 would be floored to 2 and leave
+    /// zero seeded workers to race against, which would prove nothing about the lock itself.</summary>
     [Theory]
     [InlineData(2)]
     [InlineData(8)]
     [InlineData(24)]
-    public async Task ManyConcurrentWorkerCreations_AgainstAQuotaOfOne_ProduceExactlyOneActiveWorker(int callers)
+    public async Task ManyConcurrentWorkerCreations_AgainstAQuotaWithOneFreeSlot_ProduceExactlyOneActiveWorker(int callers)
     {
-        var tenantId = await SeedTenantAsync(quota: 1);
+        var tenantId = await SeedTenantAsync(quota: 3);
+        await SeedActiveWorkerAsync(tenantId, "Existing", "One");
+        await SeedActiveWorkerAsync(tenantId, "Existing", "Two");
 
         var results = await RaceAsync(callers, tenantId);
 
@@ -38,7 +44,7 @@ public class ConcurrentWorkerQuotaTests(ConcurrencyFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var activeCount = await db.Workers.CountAsync(w => w.TenantId == tenantId && w.IsActive);
-        Assert.Equal(1, activeCount);
+        Assert.Equal(3, activeCount);
     }
 
     /// <summary>
@@ -75,11 +81,14 @@ public class ConcurrentWorkerQuotaTests(ConcurrencyFixture fixture)
 
         await using var verify = fixture.CreateDbContext();
         var activeCount = await verify.Workers.CountAsync(w => w.TenantId == tenantId && w.IsActive);
-        var quota = (await verify.Tenants.SingleAsync(t => t.Id == tenantId)).WorkerQuota;
+        // `26-317`: the invariant this test holds enforcement to is EffectiveWorkerQuota, not the raw
+        // column - a grant of 1 floors to Tenant.DefaultWorkerQuota (2) before it gates anything, on
+        // both sides of this race.
+        var quota = (await verify.Tenants.SingleAsync(t => t.Id == tenantId)).EffectiveWorkerQuota;
 
         Assert.True(
             activeCount <= quota,
-            $"active worker count {activeCount} exceeded the granted quota {quota} - the two writers disagreed.");
+            $"active worker count {activeCount} exceeded the effective quota {quota} - the two writers disagreed.");
     }
 
     /// <summary>
@@ -97,7 +106,12 @@ public class ConcurrentWorkerQuotaTests(ConcurrencyFixture fixture)
     public async Task ManyConcurrentReactivations_AgainstAQuotaWithOneFreeSlot_ProduceExactlyOneReactivatedWorker(
         int callers)
     {
-        var tenantId = await SeedTenantAsync(quota: 1);
+        // `26-317`: granted three, with two active seeded, for the identical reason the create-side
+        // race above seeds a wider roster - a raw quota of 1 would be floored to Tenant.DefaultWorkerQuota
+        // (2) and leave two free slots instead of one.
+        var tenantId = await SeedTenantAsync(quota: 3);
+        await SeedActiveWorkerAsync(tenantId, "Existing", "One");
+        await SeedActiveWorkerAsync(tenantId, "Existing", "Two");
         var workerIds = await SeedInactiveWorkersAsync(tenantId, callers);
 
         var results = await RaceReactivationsAsync(workerIds);
@@ -110,7 +124,7 @@ public class ConcurrentWorkerQuotaTests(ConcurrencyFixture fixture)
 
         await using var db = fixture.CreateDbContext();
         var activeCount = await db.Workers.CountAsync(w => w.TenantId == tenantId && w.IsActive);
-        Assert.Equal(1, activeCount);
+        Assert.Equal(3, activeCount);
     }
 
     private async Task<IReadOnlyList<WorkerId>> SeedInactiveWorkersAsync(TenantId tenantId, int count)

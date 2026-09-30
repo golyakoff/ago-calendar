@@ -60,13 +60,33 @@ public sealed class Tenant
     /// <see cref="GrantWorkerQuota"/> is the only writer, called by the outbox consumer that projects
     /// `ago-chat`'s own grant - never by a request this product serves directly.
     ///
-    /// <para><b>Zero until granted</b>, the same "the calendar is an add-on, not a default" default
-    /// every tenant row already carries before anyone has ticked the checkbox and paid - a tenant with
-    /// no grant yet can configure calendars and services (this column gates only
-    /// <see cref="Worker"/> creation) but cannot create the first worker until the grant lands, a
-    /// bounded wait rather than a manual step (this item's own report states the bound).</para>
+    /// <para><b>This is the raw granted number, exactly as `ago-chat` last sent it - never floored,
+    /// never backfilled.</b> `26-317`: a fresh tenant used to sit at zero until a platform owner
+    /// granted one by hand, which is exactly what blocked a real onboarding. The floor that fixes that
+    /// (<see cref="EffectiveWorkerQuota"/>) is computed at every read site rather than stored here,
+    /// so this column stays an honest audit trail of what chat actually granted - a reviewer asking
+    /// "what did this tenant pay for" gets the true answer, and a tenant already granted more than the
+    /// floor is untouched by the floor's introduction.</para>
     /// </summary>
     public int WorkerQuota { get; private set; }
+
+    /// <summary>
+    /// `26-317`: what enforcement and the console actually compare against - <see cref="WorkerQuota"/>
+    /// raised to <see cref="DefaultWorkerQuota"/> when it falls short. Every tenant gets 2 masters with
+    /// no grant at all; a platform-owner grant only ever raises the ceiling, per the author's decision
+    /// that masters are resource-only and cheap enough to hand out by default. Computed rather than
+    /// stored - the alternative, backfilling every existing tenant's own <see cref="WorkerQuota"/>
+    /// column up to 2, would blur the audit trail this column exists to keep and would need a migration
+    /// this slice deliberately avoids.
+    /// </summary>
+    public int EffectiveWorkerQuota => Math.Max(WorkerQuota, DefaultWorkerQuota);
+
+    /// <summary>`26-317`: the floor every tenant gets with no grant at all - see
+    /// <see cref="EffectiveWorkerQuota"/>. A `const` rather than a config value: it is a product
+    /// decision stated once, not an operational knob, and every place that needs it
+    /// (<see cref="Infrastructure.Postgres.WorkerRepository"/>'s own SQL, the grant and preview
+    /// stores) binds this same symbol rather than repeating the literal 2.</summary>
+    public const int DefaultWorkerQuota = 2;
 
     /// <summary>
     /// `22-08`/`adr/0149` rule 1/`adr/0166`: the account-wide enforcement freeze's own projection - the

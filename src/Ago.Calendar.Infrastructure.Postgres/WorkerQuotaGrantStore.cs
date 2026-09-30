@@ -42,7 +42,14 @@ public sealed class WorkerQuotaGrantStore(AgoCalendarDbContext db) : IWorkerQuot
             .Where(w => w.TenantId == tenantId && w.IsActive)
             .ToListAsync(cancellationToken);
 
-        foreach (var worker in WorkerQuotaPolicy.SelectWorkersToDeactivate(activeWorkers, quota))
+        // `26-317`: the deactivation decision goes through the same floor enforcement reads
+        // (Tenant.EffectiveWorkerQuota, WorkerRepository's own GREATEST) - a grant of 0 or 1 must
+        // never deactivate a worker the create path would still let stand at the default floor of
+        // Tenant.DefaultWorkerQuota. tenant.GrantWorkerQuota below still receives the raw, un-floored
+        // quota - see Tenant.WorkerQuota's own remarks for why the stored value stays exactly what
+        // chat granted.
+        var effectiveQuota = Math.Max(quota, Tenant.DefaultWorkerQuota);
+        foreach (var worker in WorkerQuotaPolicy.SelectWorkersToDeactivate(activeWorkers, effectiveQuota))
         {
             worker.Deactivate(now);
         }

@@ -59,6 +59,15 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     {
         _seed = await CalendarSeed.WriteAsync(fixture, publicKey: $"chatmod-{CalendarSeed.NewId():N}"[..24]);
 
+        // `26-322`: a second worker and service, so this suite's tenant offers a real choice at both
+        // steps and the single-option auto-skip does not fire - which is what keeps every step-by-step
+        // walkthrough below (service -> worker -> date -> ...) meaningful now that a one-service-one-worker
+        // calendar deliberately skips those two steps. The skip itself is proven over the real stack by
+        // ASoloCalendarSkipsTheServiceAndWorkerSteps_AndOpensOnTheDateRound, which seeds its own solo
+        // tenant. Every walkthrough here still picks the primary _seed.Service/_seed.Worker the slots and
+        // schedule belong to.
+        await CalendarSeed.AddSecondWorkerAndServiceAsync(fixture, _seed);
+
         // `20-18`: BookEventHandler now run-finds through the worker's own schedule.
         await CalendarSeed.AddWeeklyScheduleAsync(fixture, _seed, horizonDays: 30);
 
@@ -108,8 +117,10 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
         Assert.False(started!.Complete);
         Assert.Equal(ModuleStepKinds.ChoiceList, started.Step.Kind);
-        var serviceAction = Assert.Single(started.Step.Actions);
-        Assert.Equal(_seed.Service.Id.Value.ToString(), serviceAction.Value);
+        // `26-322`: two services on this suite's tenant now, so the service step is a genuine choice - the
+        // primary Haircut is one of them (picked by id).
+        var serviceAction = Assert.Single(
+            started.Step.Actions, a => a.Value == _seed.Service.Id.Value.ToString());
         // `23-35`: the seeded service carries no price (CalendarSeed.WriteAsync's own default), so
         // ModuleStepFactory.DescribeService's price branch is not exercised here - proving instead
         // that its no-price rendering is unchanged, the one assertion this walkthrough can make about
@@ -119,8 +130,8 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var afterService = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, serviceAction.Value);
         Assert.Equal(ModuleStepKinds.ChoiceList, afterService.Step!.Kind);
-        var workerAction = Assert.Single(afterService.Step.Actions);
-        Assert.Equal(_seed.Worker.Id.Value.ToString(), workerAction.Value);
+        var workerAction = Assert.Single(
+            afterService.Step.Actions, a => a.Value == _seed.Worker.Id.Value.ToString());
 
         var afterWorker = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
         // `25-33`: the date round, not the flat slot list directly - one seeded day, one action.
@@ -160,6 +171,35 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var stored = await db.Events.SingleAsync(e => e.Id == bookedEventId);
         Assert.Equal(EventStatus.PendingConfirmation, stored.Status);
         Assert.NotNull(stored.PersonId);
+    }
+
+    /// <summary>`26-322`: a solo calendar - exactly one service, one worker, the shape `26-321`'s first
+    /// real user ran into - skips both choice steps and opens directly on the date round, proven over the
+    /// real host and Postgres rather than only the fake-backed handler proof. Seeds its own tenant left as
+    /// <see cref="CalendarSeed.WriteAsync"/> leaves it (no <see cref="CalendarSeed.AddSecondWorkerAndServiceAsync"/>,
+    /// unlike this suite's shared <see cref="_seed"/>).</summary>
+    [Fact]
+    public async Task ASoloCalendarSkipsTheServiceAndWorkerSteps_AndOpensOnTheDateRound()
+    {
+        var solo = await CalendarSeed.WriteAsync(fixture, publicKey: $"chatsolo-{CalendarSeed.NewId():N}"[..24]);
+        await CalendarSeed.AddWeeklyScheduleAsync(fixture, solo, horizonDays: 30);
+        var soloAnchor = new DateTimeOffset(DateTimeOffset.UtcNow.AddDays(7).Date, TimeSpan.Zero).AddHours(9);
+        await using (var db = fixture.CreateDbContext())
+        {
+            await new EventRepository(db).AddRangeAsync([CalendarSeed.Slot(solo, soloAnchor)], CancellationToken.None);
+        }
+
+        await RegisterChatModuleAsync(solo.Tenant.Id, TestSharedSecret);
+
+        var startResponse = await StartAsync(Guid.NewGuid(), solo.Tenant.Id.Value, Guid.NewGuid(), "/booking");
+        Assert.Equal(HttpStatusCode.OK, startResponse.StatusCode);
+        var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
+
+        // Neither a service nor a worker choice_list is ever sent: the first step the visitor sees is the
+        // date round itself.
+        Assert.False(started!.Complete);
+        Assert.Equal(ModuleStepKinds.DateTimePicker, started.Step.Kind);
+        Assert.NotEmpty(started.Step.Actions);
     }
 
     /// <summary>
@@ -220,10 +260,13 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     {
         var startResponse = await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, conversationId, "/booking");
         var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
-        var serviceAction = Assert.Single(started!.Step.Actions);
+        // `26-322`: pick the primary service/worker among the two this suite's tenant now offers.
+        var serviceAction = Assert.Single(
+            started!.Step.Actions, a => a.Value == _seed.Service.Id.Value.ToString());
 
         var afterService = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, serviceAction.Value);
-        var workerAction = Assert.Single(afterService.Step!.Actions);
+        var workerAction = Assert.Single(
+            afterService.Step!.Actions, a => a.Value == _seed.Worker.Id.Value.ToString());
 
         var afterWorker = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
         var dateAction = Assert.Single(afterWorker.Step!.Actions);
@@ -247,12 +290,14 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
             Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking", locale: "Ru");
         var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
         Assert.Equal("Выберите услугу для записи:", Prompt(started!.Step));
-        var serviceAction = Assert.Single(started.Step.Actions);
+        var serviceAction = Assert.Single(
+            started.Step.Actions, a => a.Value == _seed.Service.Id.Value.ToString());
 
         var afterService = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, serviceAction.Value, locale: "Ru");
         Assert.Equal("К кому вы хотите записаться?", Prompt(afterService.Step!));
-        var workerAction = Assert.Single(afterService.Step!.Actions);
+        var workerAction = Assert.Single(
+            afterService.Step!.Actions, a => a.Value == _seed.Worker.Id.Value.ToString());
 
         var afterWorker = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value, locale: "Ru");
@@ -282,10 +327,13 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
     {
         var startResponse = await StartAsync(Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking");
         var started = await startResponse.Content.ReadFromJsonAsync<ModuleTaskStartResponse>();
-        var serviceAction = Assert.Single(started!.Step.Actions);
+        // `26-322`: pick the primary service/worker among the two this suite's tenant now offers.
+        var serviceAction = Assert.Single(
+            started!.Step.Actions, a => a.Value == _seed.Service.Id.Value.ToString());
 
         var afterService = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, serviceAction.Value);
-        var workerAction = Assert.Single(afterService.Step!.Actions);
+        var workerAction = Assert.Single(
+            afterService.Step!.Actions, a => a.Value == _seed.Worker.Id.Value.ToString());
 
         var afterWorker = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
         var dateAction = Assert.Single(afterWorker.Step!.Actions);
@@ -332,8 +380,9 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var firstDelivery = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
         Assert.Equal(ModuleStepKinds.ChoiceList, firstDelivery.Step!.Kind);
-        var firstWorkerAction = Assert.Single(firstDelivery.Step.Actions);
-        Assert.Equal(_seed.Worker.Id.Value.ToString(), firstWorkerAction.Value);
+        // `26-322`: two workers on this suite's tenant, so this is the genuine worker-choice case (no
+        // auto-skip) - the primary worker is present among them.
+        Assert.Single(firstDelivery.Step.Actions, a => a.Value == _seed.Worker.Id.Value.ToString());
 
         // The retry: byte-identical request, arriving after the database already committed the first
         // one's advance to AwaitingWorkerChoice - a real row read back over a real connection, not a
@@ -341,8 +390,8 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var retried = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
         Assert.Equal(ModuleStepKinds.ChoiceList, retried.Step!.Kind);
-        var retriedWorkerAction = Assert.Single(retried.Step.Actions);
-        Assert.Equal(_seed.Worker.Id.Value.ToString(), retriedWorkerAction.Value);
+        var retriedWorkerAction = Assert.Single(
+            retried.Step.Actions, a => a.Value == _seed.Worker.Id.Value.ToString());
 
         // Still genuinely usable afterwards: the real slot this suite seeded in InitializeAsync comes
         // back, not an empty list.
@@ -400,7 +449,8 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var afterService = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
         var afterWorker = await ReplyAsync(
-            started.ExternalTaskId, ModuleStepKinds.ChoiceList, Assert.Single(afterService.Step!.Actions).Value);
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList,
+            Assert.Single(afterService.Step!.Actions, a => a.Value == _seed.Worker.Id.Value.ToString()).Value);
 
         Assert.Equal(ModuleStepKinds.DateTimePicker, afterWorker.Step!.Kind);
         return (started.ExternalTaskId, afterWorker.Step.Actions);
@@ -426,7 +476,8 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var afterService = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
         var afterWorker = await ReplyAsync(
-            started.ExternalTaskId, ModuleStepKinds.ChoiceList, Assert.Single(afterService.Step!.Actions).Value);
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList,
+            Assert.Single(afterService.Step!.Actions, a => a.Value == _seed.Worker.Id.Value.ToString()).Value);
         // `25-33`: both seeded slots fall on the same day (two hours apart), so the date round offers
         // exactly one date - the two slots themselves are the *time* round's own two actions.
         var dateAction = Assert.Single(afterWorker.Step!.Actions);
@@ -492,7 +543,8 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var afterService = await ReplyAsync(
             started.ExternalTaskId, ModuleStepKinds.ChoiceList, _seed.Service.Id.Value.ToString());
         var afterWorker = await ReplyAsync(
-            started.ExternalTaskId, ModuleStepKinds.ChoiceList, Assert.Single(afterService.Step!.Actions).Value);
+            started.ExternalTaskId, ModuleStepKinds.ChoiceList,
+            Assert.Single(afterService.Step!.Actions, a => a.Value == _seed.Worker.Id.Value.ToString()).Value);
         var dateValue = Assert.Single(afterWorker.Step!.Actions).Value;
         var afterDate = await ReplyAsync(started.ExternalTaskId, ModuleStepKinds.DateTimePicker, dateValue);
         var slotValue = Assert.Single(afterDate.Step!.Actions).Value;
@@ -655,6 +707,10 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
         var otherSeed = await CalendarSeed.WriteAsync(fixture, publicKey: $"chatmod3-{CalendarSeed.NewId():N}"[..24]);
         const string otherSecret = "yet-another-tenants-own-independent-secret-value";
         await RegisterChatModuleAsync(otherSeed.Tenant.Id, otherSecret);
+        // `26-322`: this test reads each tenant's Start response as a service choice, so both tenants need
+        // more than one service or the single-service auto-skip would open on the worker/date step instead
+        // (_seed already gets this in InitializeAsync; otherSeed is created fresh here).
+        await CalendarSeed.AddSecondWorkerAndServiceAsync(fixture, otherSeed);
 
         var responseA = await StartAsync(
             Guid.NewGuid(), _seed.Tenant.Id.Value, Guid.NewGuid(), "/booking",
@@ -671,11 +727,15 @@ public class ChatModuleTaskEndpointTests(PostgresFixture fixture) : IAsyncLifeti
 
         // Each tenant's own, independently seeded service id - not merely "both succeeded", but
         // "each one resolved to its own data", which is what "reaches two different tenants" means.
-        var serviceA = Assert.Single(bodyA!.Step.Actions).Value;
-        var serviceB = Assert.Single(bodyB!.Step.Actions).Value;
-        Assert.Equal(_seed.Service.Id.Value.ToString(), serviceA);
-        Assert.Equal(otherSeed.Service.Id.Value.ToString(), serviceB);
+        // `26-322`: each tenant now offers two services; the one that matters is that tenant's own
+        // primary, present in its own Start response and absent from the other's.
+        var serviceA = Assert.Single(
+            bodyA!.Step.Actions, a => a.Value == _seed.Service.Id.Value.ToString()).Value;
+        var serviceB = Assert.Single(
+            bodyB!.Step.Actions, a => a.Value == otherSeed.Service.Id.Value.ToString()).Value;
         Assert.NotEqual(serviceA, serviceB);
+        Assert.DoesNotContain(bodyA.Step.Actions, a => a.Value == otherSeed.Service.Id.Value.ToString());
+        Assert.DoesNotContain(bodyB.Step.Actions, a => a.Value == _seed.Service.Id.Value.ToString());
     }
 
     /// <summary>Closes the asymmetry adr/0094 named between this route and Calendar's own Start

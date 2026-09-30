@@ -92,7 +92,28 @@ public sealed class ReplyToModuleTaskHandler(
             return ChatModuleTaskErrors.AlreadyComplete();
         }
 
-        if (!KindMatches(task.State, command.Kind))
+        // `25-32`: a retried SubmitReplyAsync call - ModuleResiliencePipelines retries every exception,
+        // including a timeout on a request Calendar already committed (that pipeline's own remarks
+        // assumed a reply carries an idempotency key it does not) - resends the exact value that already
+        // produced this task's *current* state. ChatBookingTask.LastAppliedValue is the value that
+        // produced the state this task is in right now; an incoming value identical to it is the same
+        // request being replayed, not a fresh answer, so it must be answered the same way the very first
+        // application already would have: the step for the state that value produced, without touching
+        // anything a second time.
+        //
+        // `26-322`: this replay check now runs BEFORE KindMatches, not after. Why the move: an auto-skip
+        // can advance the state one or two steps past the step a replayed reply actually answered - a
+        // retried service-choice reply (wire kind choice_list) can now arrive at a task already in
+        // AwaitingDateChoice (wire kind date_time_picker), so KindMatches would reject it as a mismatch
+        // before the old, later replay guard was ever reached. LastAppliedValue is deliberately kept as
+        // the value the *client* sent across the skip (ChatBookingTask.AutoChooseWorker's own remarks),
+        // so this equality still holds. Before the auto-skip existed, the two replay-prone pairs were
+        // adjacent same-kind states, so KindMatches happened to pass and running it first was harmless;
+        // it is no longer harmless, hence the reorder. A genuine fresh reply (a different value) still
+        // meets KindMatches exactly as before, one branch below.
+        var isReplayOfCurrentState = task.LastAppliedValue == command.Value;
+
+        if (!isReplayOfCurrentState && !KindMatches(task.State, command.Kind))
         {
             return ChatModuleTaskErrors.KindMismatch();
         }
@@ -108,20 +129,7 @@ public sealed class ReplyToModuleTaskHandler(
         var tenantPublicKey = tenant.PublicKey.Value;
         var now = clock.UtcNow;
 
-        // `25-32`: a retried SubmitReplyAsync call - ModuleResiliencePipelines retries every exception,
-        // including a timeout on a request Calendar already committed (that pipeline's own remarks
-        // assumed a reply carries an idempotency key it does not) - resends the exact value that already
-        // produced this task's *current* state. KindMatches, just below, cannot catch it: it checks the
-        // wire shape only, and AwaitingServiceChoice/AwaitingWorkerChoice both expect a plain
-        // choice_list, so the replayed value looks like a perfectly ordinary reply to the *next* step.
-        // Left unguarded, it is silently misapplied there - a service id fed to GetOpenSlotsHandler as
-        // if it were a worker id, producing a real date_time_picker step with genuinely zero slots,
-        // while the worker-choice step this reply actually answered is never regenerated (this item's
-        // own live evidence). ChatBookingTask.LastAppliedValue is the value that produced the state this
-        // task is in right now; an incoming value identical to it is the same request being replayed,
-        // not a fresh answer, so it is answered the same way the very first application already would
-        // have: the step for the state that value produced, without touching anything a second time.
-        if (task.LastAppliedValue == command.Value)
+        if (isReplayOfCurrentState)
         {
             return await BuildStepForCurrentStateAsync(
                 task, tenantPublicKey, command.Locale, command.KnownPhone, command.AcceptUnverifiedPhone,
@@ -161,21 +169,25 @@ public sealed class ReplyToModuleTaskHandler(
             return ChatModuleTaskErrors.InvalidReplyValue();
         }
 
-        var workers = await workersHandler.HandleAsync(
-            new GetBookableWorkers(tenantPublicKey, task.CalendarId.Value, serviceId, Origin: null),
-            cancellationToken);
-        if (!workers.IsSuccess)
+        task.ChooseService(new ServiceId(serviceId), now);
+
+        // `26-322`: the worker step, or a skip straight to the date round when exactly one worker is
+        // eligible - the identical composition Start uses after auto-choosing a sole service, so the two
+        // entry points can never offer the worker step under different rules. ChooseService above set
+        // LastAppliedValue to this reply's own serviceId; the composer's AutoChooseWorker deliberately
+        // does NOT overwrite it, which is precisely what lets a retried service reply still be recognised
+        // as a replay after the skip has advanced the state to AwaitingDateChoice - see HandleAsync's
+        // replay remarks. (Empty worker list is a real state, not special-cased, exactly as before.)
+        var step = await ChatBookingStepComposer.WorkerStepAsync(
+            task, tenantPublicKey, locale, now, workersHandler, slotsHandler, cancellationToken);
+        if (!step.IsSuccess)
         {
-            return workers.Error!.Value;
+            return step.Error!.Value;
         }
 
-        task.ChooseService(new ServiceId(serviceId), now);
         await tasks.SaveAsync(task, cancellationToken);
 
-        // Empty is a real state, not special-cased - see ModuleStepFactory and the item's own report
-        // for why this deliberately mirrors GetBookingSurfaceHandler's own precedent.
-        return Result<ModuleTaskReplied>.Success(
-            new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value, locale), Complete: false));
+        return Result<ModuleTaskReplied>.Success(new ModuleTaskReplied(step.Value, Complete: false));
     }
 
     /// <summary>`25-33`: fetches broadly (<see cref="SlotQueryLimit"/>) rather than the old ten -
@@ -278,14 +290,20 @@ public sealed class ReplyToModuleTaskHandler(
         {
             ChatBookingTaskState.AwaitingWorkerChoice =>
                 await RebuildWorkerChoiceAsync(task, tenantPublicKey, locale, cancellationToken),
-            // `25-33`: AwaitingDateChoice can never get here, for the identical reason
-            // AwaitingServiceChoice (below) cannot - LastAppliedValue while in this state is the
-            // workerId that produced it, and a genuinely retried worker-choice reply always carries
-            // kind choice_list, which KindMatches already refuses against this state's own
-            // date_time_picker requirement before this switch is ever reached. AwaitingSlotChoice
-            // just below is the one genuinely reachable same-kind pairing - see
-            // ChatBookingTask.LastAppliedValue's own remarks on why a date-round replay and a
-            // genuine time-round answer can never be confused for each other regardless.
+            // `26-322`: genuinely reachable now, where `25-33` documented it unreachable. Two things
+            // changed: (1) HandleAsync recognises a replay BEFORE the kind check, so a retried reply
+            // whose wire kind no longer matches this advanced state is no longer refused first; and
+            // (2) an auto-skip can land the task here with LastAppliedValue holding the *service* reply
+            // the client actually sent (AutoChooseWorker leaves it untouched). So a retried service - or
+            // worker - reply arriving after the skip replays the date round rather than erroring, the
+            // idempotency at-least-once delivery requires (CLAUDE.md rule 5). Re-derived from the task's
+            // own already-chosen worker, the same "ask the read side again" precedent the siblings here
+            // follow.
+            ChatBookingTaskState.AwaitingDateChoice =>
+                await RebuildDateChoiceAsync(task, tenantPublicKey, locale, cancellationToken),
+            // `25-33`: AwaitingSlotChoice is the genuinely reachable adjacent same-kind pairing - see
+            // ChatBookingTask.LastAppliedValue's own remarks on why a date-round replay and a genuine
+            // time-round answer can never be confused for each other regardless.
             ChatBookingTaskState.AwaitingSlotChoice =>
                 await RebuildSlotChoiceAsync(task, tenantPublicKey, locale, cancellationToken),
             // `25-39`: rebuilt from the *current* call's own AcceptUnverifiedPhone/KnownPhone, the
@@ -297,10 +315,11 @@ public sealed class ReplyToModuleTaskHandler(
             ChatBookingTaskState.AwaitingPhone =>
                 Result<ModuleTaskReplied>.Success(new ModuleTaskReplied(
                     ModuleStepFactory.PhoneForm(locale, !acceptUnverifiedPhone, knownPhone), Complete: false)),
-            // AwaitingServiceChoice can never get here - LastAppliedValue is still null the only time
-            // the task is in that state, so it can never equal a real command.Value. Completed is
-            // intercepted above, before KindMatches even runs. Refused rather than silently doing
-            // nothing if either invariant is ever wrong.
+            // AwaitingServiceChoice can never get here - LastAppliedValue is still null every time the
+            // task actually waits in that state (a multi-service tenant has applied no value yet, and a
+            // one-service tenant auto-skips past it before the first reply, `26-322`), so it can never
+            // equal a real command.Value that reached the replay branch. Completed is intercepted above.
+            // Refused rather than silently doing nothing if either invariant is ever wrong.
             _ => ChatModuleTaskErrors.KindMismatch(),
         };
 
@@ -317,6 +336,31 @@ public sealed class ReplyToModuleTaskHandler(
 
         return Result<ModuleTaskReplied>.Success(
             new ModuleTaskReplied(ModuleStepFactory.WorkerChoice(workers.Value, locale), Complete: false));
+    }
+
+    /// <summary>`26-322`: rebuilds the date round for a task whose worker is already chosen - the step a
+    /// service- or worker-choice reply replayed after a worker auto-skip must see again. Re-queries the
+    /// same broad <see cref="SlotQueryLimit"/> fetch <see cref="HandleWorkerChosenAsync"/>'s own first
+    /// delivery used, the identical "ask the read side again rather than cache the first response"
+    /// precedent every other rebuild in this class follows. <see cref="ChatBookingTask.WorkerId"/> is
+    /// never null here: reaching <see cref="ChatBookingTaskState.AwaitingDateChoice"/> at all goes
+    /// through <see cref="ChatBookingTask.ChooseWorker"/> or <see cref="ChatBookingTask.AutoChooseWorker"/>,
+    /// both of which set it in the same transition.</summary>
+    private async Task<Result<ModuleTaskReplied>> RebuildDateChoiceAsync(
+        ChatBookingTask task, string tenantPublicKey, string locale, CancellationToken cancellationToken)
+    {
+        var slots = await slotsHandler.HandleAsync(
+            new GetOpenSlots(
+                tenantPublicKey, task.CalendarId.Value, task.ServiceId!.Value.Value, task.WorkerId!.Value.Value,
+                SlotQueryLimit, Origin: null),
+            cancellationToken);
+        if (!slots.IsSuccess)
+        {
+            return slots.Error!.Value;
+        }
+
+        return Result<ModuleTaskReplied>.Success(
+            new ModuleTaskReplied(ModuleStepFactory.DateChoice(slots.Value, locale), Complete: false));
     }
 
     /// <summary>`25-33`: rebuilds the time round for <see cref="ChatBookingTask.SelectedDate"/> - the

@@ -36,8 +36,10 @@ public class ChatModuleTaskHandlerTests
         Assert.False(result.Value.Complete);
         var step = result.Value.Step;
         Assert.Equal(ModuleStepKind.ChoiceList, step.Kind);
-        var action = Assert.Single(step.Actions);
-        Assert.Equal(BookingFixtures.ServiceId.Value.ToString(), action.Value);
+        // `26-322`: the default world has two services, so the service step is genuinely a choice (no
+        // single-option skip). The seeded Haircut is one of the offered actions.
+        Assert.Equal(2, step.Actions.Count);
+        var action = Assert.Single(step.Actions, a => a.Value == BookingFixtures.ServiceId.Value.ToString());
         Assert.Contains("Haircut", action.Label, StringComparison.Ordinal);
     }
 
@@ -83,8 +85,9 @@ public class ChatModuleTaskHandlerTests
     [Fact]
     public async Task WorkerChoice_WithMultipleWorkers_OffersEachOne_ThenLeadsToTheDateRoundNext()
     {
+        // `26-322`: the default world already has two workers, which is exactly the multiple-worker case
+        // this test needs - no worker is auto-skipped, and the worker choice is shown.
         var world = new World();
-        world.ReadStore.Workers.Add(new BookableWorkerRow(new WorkerId(Guid.NewGuid()), "Sam"));
 
         var start = await world.StartAsync();
         var afterService = await world.ReplyAsync(
@@ -248,7 +251,8 @@ public class ChatModuleTaskHandlerTests
         var afterService = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString(), locale: "Ru");
         Assert.Equal("К кому вы хотите записаться?", afterService.Value.Step!.Prompt);
-        var workerAction = Assert.Single(afterService.Value.Step!.Actions);
+        var workerAction = Assert.Single(
+            afterService.Value.Step!.Actions, a => a.Value == BookingFixtures.WorkerId.Value.ToString());
 
         var afterWorker = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value, locale: "Ru");
@@ -289,10 +293,14 @@ public class ChatModuleTaskHandlerTests
         world.ReadStore.Services.Clear();
         world.ReadStore.Services.Add(
             new BookableServiceRow(BookingFixtures.ServiceId, "Haircut", 45, PriceMinorUnits: 150000, PriceIsFrom: true));
+        // `26-322`: a second service so the service step is genuinely shown (a lone service auto-skips),
+        // leaving the priced Haircut action to assert price rendering against.
+        world.ReadStore.Services.Add(new BookableServiceRow(new ServiceId(Guid.NewGuid()), "Manicure", 30));
 
         var result = await world.StartAsync(locale: "Ru");
 
-        var action = Assert.Single(result.Value.Step.Actions);
+        var action = Assert.Single(
+            result.Value.Step.Actions, a => a.Value == BookingFixtures.ServiceId.Value.ToString());
         Assert.Contains("от 1500 RUB", action.Label, StringComparison.Ordinal);
         Assert.DoesNotContain("руб", action.Label, StringComparison.OrdinalIgnoreCase);
     }
@@ -474,8 +482,10 @@ public class ChatModuleTaskHandlerTests
         Assert.True(afterService.IsSuccess);
         Assert.False(afterService.Value.Complete);
         Assert.Equal(ModuleStepKind.ChoiceList, afterService.Value.Step!.Kind);
-        var workerAction = Assert.Single(afterService.Value.Step!.Actions);
-        Assert.Equal(BookingFixtures.WorkerId.Value.ToString(), workerAction.Value);
+        // `26-322`: two workers in the default world - pick the primary (Alex), the one the booking repos
+        // are wired for; the worker step is a real choice here, not an auto-skip.
+        var workerAction = Assert.Single(
+            afterService.Value.Step!.Actions, a => a.Value == BookingFixtures.WorkerId.Value.ToString());
 
         var afterWorker = await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
         Assert.True(afterWorker.IsSuccess);
@@ -531,7 +541,8 @@ public class ChatModuleTaskHandlerTests
         var externalTaskId = start.Value.ExternalTaskId;
         var afterService = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
-        var workerAction = Assert.Single(afterService.Value.Step!.Actions);
+        var workerAction = Assert.Single(
+            afterService.Value.Step!.Actions, a => a.Value == BookingFixtures.WorkerId.Value.ToString());
 
         var afterWorker = await world.ReplyAsync(externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value);
 
@@ -553,7 +564,8 @@ public class ChatModuleTaskHandlerTests
         var externalTaskId = start.Value.ExternalTaskId;
         var afterService = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString(), locale: "Ru");
-        var workerAction = Assert.Single(afterService.Value.Step!.Actions);
+        var workerAction = Assert.Single(
+            afterService.Value.Step!.Actions, a => a.Value == BookingFixtures.WorkerId.Value.ToString());
 
         var afterWorker = await world.ReplyAsync(
             externalTaskId, ModuleStepKinds.ChoiceList, workerAction.Value, locale: "Ru");
@@ -721,8 +733,13 @@ public class ChatModuleTaskHandlerTests
     /// parsed as a worker id and handed to <c>GetOpenSlotsHandler</c>, which found no such worker and
     /// answered with a real <c>date_time_picker</c> step carrying zero slots - the exact
     /// `{"prompt":"Pick a time:","slots":[]}` this item's own live evidence shows, with the
-    /// "Who would you like to book with?" step never shown at all. The fixture's calendar has exactly
-    /// one worker, matching the live conversation this item names.
+    /// "Who would you like to book with?" step never shown at all.
+    ///
+    /// <para>`26-322`: this proves the replay guard for the case where the worker step is genuinely shown
+    /// (the default world's two workers - no auto-skip). The single-worker case, where the retried
+    /// service reply arrives after the worker was auto-skipped and must replay the *date* round instead,
+    /// is its own test
+    /// (<see cref="ARetriedServiceChoiceReply_AfterAWorkerAutoSkip_ReplaysTheDateRound_NotAKindMismatch"/>).</para>
     /// </summary>
     [Fact]
     public async Task ARetriedServiceChoiceReply_ReplaysTheWorkerChoiceStep_RatherThanCorruptingIt()
@@ -735,8 +752,8 @@ public class ChatModuleTaskHandlerTests
             externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
         Assert.True(firstDelivery.IsSuccess);
         Assert.Equal(ModuleStepKind.ChoiceList, firstDelivery.Value.Step!.Kind);
-        var firstWorkerAction = Assert.Single(firstDelivery.Value.Step!.Actions);
-        Assert.Equal(BookingFixtures.WorkerId.Value.ToString(), firstWorkerAction.Value);
+        Assert.Single(
+            firstDelivery.Value.Step!.Actions, a => a.Value == BookingFixtures.WorkerId.Value.ToString());
 
         // The retry: byte-identical request, arriving after the first one already committed.
         var retried = await world.ReplyAsync(
@@ -746,8 +763,8 @@ public class ChatModuleTaskHandlerTests
         Assert.False(retried.Value.Complete);
         // The bug: this used to come back ModuleStepKind.DateTimePicker with an empty slots list.
         Assert.Equal(ModuleStepKind.ChoiceList, retried.Value.Step!.Kind);
-        var retriedWorkerAction = Assert.Single(retried.Value.Step!.Actions);
-        Assert.Equal(BookingFixtures.WorkerId.Value.ToString(), retriedWorkerAction.Value);
+        var retriedWorkerAction = Assert.Single(
+            retried.Value.Step!.Actions, a => a.Value == BookingFixtures.WorkerId.Value.ToString());
 
         // The flow is still genuinely usable afterwards - the replay did not leave the task stuck or
         // double-advanced.
@@ -757,6 +774,185 @@ public class ChatModuleTaskHandlerTests
         Assert.Equal(ModuleStepKind.DateTimePicker, afterWorker.Value.Step!.Kind);
         var dateAction = Assert.Single(afterWorker.Value.Step!.Actions);
         Assert.Equal(DateValue, dateAction.Value);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // `26-322`: a choice step with exactly one option is skipped - the visitor is never asked to
+    // "choose" from a list of one. Service (skip when one selectable service) composes in flow order
+    // with worker (skip when one eligible worker), so a solo calendar opens straight on the date round.
+    // The confirmation card still names the auto-selected service and worker, so nothing is hidden.
+    // The replay test at the end is the hard part: after a skip the state has advanced past a step the
+    // client never explicitly answered, and a retried inbound reply must stay idempotent.
+    // ------------------------------------------------------------------------------------------
+
+    /// <summary>One service, one eligible worker: both choices vanish and Start opens directly on the
+    /// date round - never a service or worker choice_list. This is the salon-with-one-master case the
+    /// first real user (`26-321`) stalled on.</summary>
+    [Fact]
+    public async Task Start_WithOneServiceAndOneEligibleWorker_SkipsBothChoices_AndOpensOnTheDateRound()
+    {
+        var world = OneServiceOneWorkerWorld();
+
+        var start = await world.StartAsync();
+
+        Assert.True(start.IsSuccess);
+        Assert.False(start.Value.Complete);
+        Assert.Equal(ModuleStepKind.DateTimePicker, start.Value.Step.Kind);
+        // The seeded slot's own day - a real date round, not an empty one.
+        var dateAction = Assert.Single(start.Value.Step.Actions);
+        Assert.Equal(DateValue, dateAction.Value);
+    }
+
+    /// <summary>One service but several workers: only the service is skipped - the worker choice is
+    /// still shown, because choosing between several workers is a real question.</summary>
+    [Fact]
+    public async Task Start_WithOneServiceButSeveralWorkers_SkipsOnlyTheService_AndShowsTheWorkerChoice()
+    {
+        var world = new World();
+        world.ReadStore.Services.Clear();
+        world.ReadStore.Services.Add(new BookableServiceRow(BookingFixtures.ServiceId, "Haircut", 45));
+        // The default world's two workers are left in place.
+
+        var start = await world.StartAsync();
+
+        Assert.Equal(ModuleStepKind.ChoiceList, start.Value.Step.Kind);
+        Assert.Equal("Who would you like to book with?", start.Value.Step.Prompt);
+        Assert.Equal(2, start.Value.Step.Actions.Count);
+    }
+
+    /// <summary>Several services: the service choice is shown, no skip - the negative control for the
+    /// skip above.</summary>
+    [Fact]
+    public async Task Start_WithSeveralServices_ShowsTheServiceChoice_WithNoSkip()
+    {
+        var world = new World(); // two services by default
+
+        var start = await world.StartAsync();
+
+        Assert.Equal(ModuleStepKind.ChoiceList, start.Value.Step.Kind);
+        Assert.Equal("What would you like to book?", start.Value.Step.Prompt);
+        Assert.Equal(2, start.Value.Step.Actions.Count);
+    }
+
+    /// <summary>One service, zero eligible workers: the service is still auto-skipped (it is the sole
+    /// one), and the flow lands on the empty worker choice this surface has always produced for a
+    /// calendar with nobody bookable yet - preserved, not turned into an error or a dead end.</summary>
+    [Fact]
+    public async Task Start_WithOneServiceAndZeroEligibleWorkers_AutoSkipsService_ThenShowsTheEmptyWorkerChoice()
+    {
+        var world = new World();
+        world.ReadStore.Services.Clear();
+        world.ReadStore.Services.Add(new BookableServiceRow(BookingFixtures.ServiceId, "Haircut", 45));
+        world.ReadStore.Workers.Clear();
+
+        var start = await world.StartAsync();
+
+        Assert.True(start.IsSuccess);
+        Assert.False(start.Value.Complete);
+        Assert.Equal(ModuleStepKind.ChoiceList, start.Value.Step.Kind);
+        Assert.Empty(start.Value.Step.Actions);
+    }
+
+    /// <summary>The worker skip on the reply path (not only from Start): with several services the
+    /// visitor does pick one, and if that service has exactly one eligible worker the worker step is
+    /// skipped straight to the date round.</summary>
+    [Fact]
+    public async Task HandleServiceChosen_WithOneEligibleWorker_SkipsTheWorkerChoice_AndLeadsToTheDateRound()
+    {
+        var world = new World(); // two services, so the service step is shown
+        world.ReadStore.Workers.Clear();
+        world.ReadStore.Workers.Add(new BookableWorkerRow(BookingFixtures.WorkerId, "Alex"));
+
+        var start = await world.StartAsync();
+        Assert.Equal(ModuleStepKind.ChoiceList, start.Value.Step.Kind);
+
+        var afterService = await world.ReplyAsync(
+            start.Value.ExternalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterService.Value.Step!.Kind);
+        var dateAction = Assert.Single(afterService.Value.Step!.Actions);
+        Assert.Equal(DateValue, dateAction.Value);
+    }
+
+    /// <summary>A solo calendar still books end to end, and the confirmation card names the auto-selected
+    /// service and worker - the item's own "no new copy: the confirmation card already names service and
+    /// master" holding true even when the visitor never chose either explicitly.</summary>
+    [Fact]
+    public async Task ASoloCalendar_SkipsToTheDateRound_ThenBooks_NamingTheAutoSelectedServiceAndWorker()
+    {
+        var world = OneServiceOneWorkerWorld();
+
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+        Assert.Equal(ModuleStepKind.DateTimePicker, start.Value.Step.Kind);
+
+        var afterDate = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, DateValue);
+        var slotAction = Assert.Single(afterDate.Value.Step!.Actions);
+
+        var afterSlot = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, slotAction.Value);
+        Assert.Equal(ModuleStepKind.VerifiedPhoneForm, afterSlot.Value.Step!.Kind);
+
+        var afterPhone = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.VerifiedPhoneForm, "+79990000030", phoneVerifiedAt: BookingFixtures.Now);
+
+        Assert.True(afterPhone.Value.Complete);
+        Assert.Equal(ModuleStepKind.ConfirmationCard, afterPhone.Value.Step!.Kind);
+        Assert.Collection(
+            afterPhone.Value.Step!.ConfirmationLines!,
+            l => Assert.Equal("Haircut", l.Value),
+            l => Assert.Equal("Alex", l.Value),
+            l => Assert.Contains("МСК", l.Value, StringComparison.Ordinal));
+    }
+
+    /// <summary>The hard part (`25-32` preserved across `26-322`'s skip): a retried service-choice reply
+    /// arriving after the worker was auto-skipped must replay the *current* step - the date round - and
+    /// must not be rejected on a kind mismatch (its wire kind is choice_list, but the task has advanced
+    /// to the date_time_picker state). At-least-once delivery makes this a real, not hypothetical,
+    /// duplicate (CLAUDE.md rule 5).</summary>
+    [Fact]
+    public async Task ARetriedServiceChoiceReply_AfterAWorkerAutoSkip_ReplaysTheDateRound_NotAKindMismatch()
+    {
+        var world = new World(); // several services, so the visitor really does pick one
+        world.ReadStore.Workers.Clear();
+        world.ReadStore.Workers.Add(new BookableWorkerRow(BookingFixtures.WorkerId, "Alex"));
+
+        var start = await world.StartAsync();
+        var externalTaskId = start.Value.ExternalTaskId;
+
+        var first = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+        // The worker was auto-skipped: this first delivery is already the date round.
+        Assert.Equal(ModuleStepKind.DateTimePicker, first.Value.Step!.Kind);
+
+        // The retry: byte-identical service-choice reply, arriving after the task advanced two steps.
+        var retried = await world.ReplyAsync(
+            externalTaskId, ModuleStepKinds.ChoiceList, BookingFixtures.ServiceId.Value.ToString());
+
+        Assert.True(retried.IsSuccess);
+        Assert.False(retried.Value.Complete);
+        // Replayed as the current (date-round) step - never chat_module_task.kind_mismatch, and never a
+        // second application that would double-advance the task.
+        Assert.Equal(ModuleStepKind.DateTimePicker, retried.Value.Step!.Kind);
+        var dateAction = Assert.Single(retried.Value.Step!.Actions);
+        Assert.Equal(DateValue, dateAction.Value);
+
+        // Still genuinely usable: choosing the replayed date advances to the time round.
+        var afterDate = await world.ReplyAsync(externalTaskId, ModuleStepKinds.DateTimePicker, dateAction.Value);
+        Assert.Equal(ModuleStepKind.DateTimePicker, afterDate.Value.Step!.Kind);
+        Assert.Empty(world.Bookings.Attempts);
+    }
+
+    /// <summary>The default world seeds a genuine choice at both steps (`26-322`); a one-service,
+    /// one-worker world for the skip tests clears both read lists back down to exactly one, keeping the
+    /// primary Haircut/Alex the booking repos are wired for and the seeded slot belongs to.</summary>
+    private static World OneServiceOneWorkerWorld()
+    {
+        var world = new World();
+        world.ReadStore.Services.Clear();
+        world.ReadStore.Services.Add(new BookableServiceRow(BookingFixtures.ServiceId, "Haircut", 45));
+        world.ReadStore.Workers.Clear();
+        world.ReadStore.Workers.Add(new BookableWorkerRow(BookingFixtures.WorkerId, "Alex"));
+        return world;
     }
 
     [Fact]
@@ -885,6 +1081,15 @@ public class ChatModuleTaskHandlerTests
 
             ReadStore.Services.Add(new BookableServiceRow(BookingFixtures.ServiceId, "Haircut", 45));
             ReadStore.Workers.Add(new BookableWorkerRow(BookingFixtures.WorkerId, "Alex"));
+            // `26-322`: a second selectable service and a second eligible worker, so the default world is
+            // a calendar with a genuine choice at both steps - which is what keeps every step-by-step
+            // walkthrough below meaningful now that a one-service-one-worker calendar deliberately skips
+            // the service and worker steps. The single-option skip is exercised by the dedicated tests
+            // that clear these back down to exactly one (see the `26-322` region). The primary
+            // Haircut/Alex remain the fixtures every walkthrough picks and the booking repos are wired
+            // for; the extras only exist to populate the read-side choice lists, so no test books them.
+            ReadStore.Services.Add(new BookableServiceRow(new ServiceId(Guid.NewGuid()), "Manicure", 30));
+            ReadStore.Workers.Add(new BookableWorkerRow(new WorkerId(Guid.NewGuid()), "Sam"));
             ReadStore.Slots.Add(new OpenSlotRow(
                 BookingFixtures.EventId, BookingFixtures.WorkerId, "Alex",
                 BookingFixtures.Slot.StartsAt, BookingFixtures.Slot.EndsAt, BookingFixtures.LocalDate));
@@ -907,7 +1112,11 @@ public class ChatModuleTaskHandlerTests
             // `22-04`: no more ChatModuleTaskOptions/ModuleCallCredentialOptions - StartModuleTaskHandler
             // resolves the tenant from the site id it is handed directly, and ReplyToModuleTaskHandler
             // resolves the tenant's public key itself, from the task's own TenantId.
-            _startHandler = new StartModuleTaskHandler(tenantRepo, calendarRepo, ReadStore, Tasks, idGenerator, clock);
+            // `26-322`: StartModuleTaskHandler now composes the worker/date step for a sole-service
+            // calendar, so it takes the same GetBookableWorkersHandler/GetOpenSlotsHandler instances the
+            // reply handler already uses - wired to the same fakes here.
+            _startHandler = new StartModuleTaskHandler(
+                tenantRepo, calendarRepo, ReadStore, Tasks, workersHandler, slotsHandler, idGenerator, clock);
             // `25-145`: Europe/Moscow's own fixed +3 offset by default - matches ReadStore.TimeZone's
             // own default and BookingFixtures.Calendar's own configured zone, so this world's every
             // rendered label reflects a real, non-trivial zone conversion rather than a UTC-equals-local

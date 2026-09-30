@@ -1,4 +1,5 @@
 ﻿using Ago.Calendar.Application.Abstractions;
+using Ago.Calendar.Application.UseCases.PublicBooking;
 using Ago.Calendar.Domain;
 using Ago.Platform.Kernel;
 
@@ -37,6 +38,13 @@ public sealed class StartModuleTaskHandler(
     IBookingCalendarRepository calendars,
     IBookingSurfaceReadStore surface,
     IChatBookingTaskStore tasks,
+    // `26-322`: the two read use cases the sole-service skip composes the next step from - the same
+    // instances (and DI registrations) ReplyToModuleTaskHandler already depends on, so no wiring change
+    // is needed beyond this constructor. Injected rather than reached through `surface` directly because
+    // the worker/slot reads must go through EmbedScopeResolver's own tenant/calendar cross-check, which
+    // is exactly what these handlers own and a raw read store call would bypass.
+    GetBookableWorkersHandler workersHandler,
+    GetOpenSlotsHandler slotsHandler,
     IIdGenerator idGenerator,
     IClock clock)
 {
@@ -69,17 +77,47 @@ public sealed class StartModuleTaskHandler(
         var now = clock.UtcNow;
         var task = Domain.ChatBookingTask.Start(
             new ChatBookingTaskId(idGenerator.NewId(now)), tenant.Id, calendar.Id, now);
+
+        var step = await BuildFirstStepAsync(task, tenant, services, command.Locale, now, cancellationToken);
+        if (!step.IsSuccess)
+        {
+            return step.Error!.Value;
+        }
+
+        // `26-322`: persisted once, after any auto-skip has advanced the task - AddAsync now carries the
+        // real starting state (which for a one-service calendar is already AwaitingWorkerChoice, and for
+        // a one-service-one-worker calendar already AwaitingDateChoice), never the bare
+        // AwaitingServiceChoice a solo tenant would in fact never wait in. Moved below the reads it used
+        // to sit above because the worker/slot reads go through EmbedScopeResolver, not this task store,
+        // so nothing here depends on the row being persisted first.
         await tasks.AddAsync(task, cancellationToken);
 
-        // Empty is a real, legitimate state (GetBookingSurfaceHandler's own remarks: a calendar
-        // published with nobody performing anything yet), not special-cased into an error here for
-        // the same reason it is not special-cased there.
-        // `25-37`: the site's own configured widget language, handed straight through - see
-        // ModuleStepFactory's own remarks on why this is never stored on the new ChatBookingTask
-        // itself.
-        var step = ModuleStepFactory.ServiceChoice(services, command.Locale);
-
         return Result<ModuleTaskStarted>.Success(
-            new ModuleTaskStarted(task.Id.Value.ToString(), step, Complete: false));
+            new ModuleTaskStarted(task.Id.Value.ToString(), step.Value, Complete: false));
+    }
+
+    private async Task<Result<ModuleStep>> BuildFirstStepAsync(
+        Domain.ChatBookingTask task, Tenant tenant, IReadOnlyList<BookableServiceRow> services, string locale,
+        DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        // `26-322`: more than one selectable service (or none) - offer the service choice unchanged.
+        // Empty is a real, legitimate state (GetBookingSurfaceHandler's own remarks: a calendar published
+        // with nobody performing anything yet), not special-cased into an error here for the same reason
+        // it is not special-cased there.
+        // `25-37`: the site's own configured widget language, handed straight through - see
+        // ModuleStepFactory's own remarks on why this is never stored on the new ChatBookingTask itself.
+        if (services.Count != 1)
+        {
+            return Result<ModuleStep>.Success(ModuleStepFactory.ServiceChoice(services, locale));
+        }
+
+        // `26-322`: exactly one selectable service - auto-select it (the visitor is never asked to
+        // "choose" from a list of one) and compose the worker step, which itself skips straight to the
+        // date round when exactly one worker is eligible. So a one-service-one-worker calendar opens
+        // directly on the date round, both steps vanished; the confirmation card still names the service
+        // and the worker, so nothing the visitor picked is hidden from them.
+        task.AutoChooseService(services[0].ServiceId, now);
+        return await ChatBookingStepComposer.WorkerStepAsync(
+            task, tenant.PublicKey.Value, locale, now, workersHandler, slotsHandler, cancellationToken);
     }
 }

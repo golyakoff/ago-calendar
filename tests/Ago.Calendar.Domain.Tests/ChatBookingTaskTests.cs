@@ -64,6 +64,72 @@ public class ChatBookingTaskTests
         Assert.Equal("2026-05-11", task.LastAppliedValue);
     }
 
+    /// <summary>`26-322`: an auto-selected sole service advances the state exactly as
+    /// <see cref="ChatBookingTask.ChooseService"/> does, but deliberately leaves
+    /// <see cref="ChatBookingTask.LastAppliedValue"/> untouched - no client reply chose it, so there is
+    /// nothing for a retry to replay against, and (from Start) it stays null.</summary>
+    [Fact]
+    public void AutoChooseService_AdvancesToWorkerChoice_WithoutSettingLastAppliedValue()
+    {
+        var task = ChatBookingTask.Start(new ChatBookingTaskId(Guid.NewGuid()), TenantId, CalendarId, Now);
+
+        task.AutoChooseService(ServiceId, Now);
+
+        Assert.Equal(ChatBookingTaskState.AwaitingWorkerChoice, task.State);
+        Assert.Equal(ServiceId, task.ServiceId);
+        Assert.Null(task.LastAppliedValue);
+    }
+
+    /// <summary>`26-322`: an auto-selected sole worker advances to the date round but keeps
+    /// <see cref="ChatBookingTask.LastAppliedValue"/> as whatever the client's own reply set it to - the
+    /// service id here, from the <see cref="ChatBookingTask.ChooseService"/> reply that triggered the
+    /// skip. This is the property the replay guard relies on across the skip.</summary>
+    [Fact]
+    public void AutoChooseWorker_AfterAServiceReply_AdvancesToDateChoice_PreservingTheServiceReplyValue()
+    {
+        var task = ChatBookingTask.Start(new ChatBookingTaskId(Guid.NewGuid()), TenantId, CalendarId, Now);
+        task.ChooseService(ServiceId, Now);
+
+        task.AutoChooseWorker(WorkerId, Now);
+
+        Assert.Equal(ChatBookingTaskState.AwaitingDateChoice, task.State);
+        Assert.Equal(WorkerId, task.WorkerId);
+        Assert.Equal(ServiceId.Value.ToString(), task.LastAppliedValue);
+    }
+
+    /// <summary>`26-322`: from Start (a one-service, one-worker calendar), both steps auto-skip before any
+    /// reply, so <see cref="ChatBookingTask.LastAppliedValue"/> is still null when the task opens on the
+    /// date round - there is no earlier client reply to have set it.</summary>
+    [Fact]
+    public void AutoChooseServiceThenAutoChooseWorker_FromStart_LeavesLastAppliedValueNull()
+    {
+        var task = ChatBookingTask.Start(new ChatBookingTaskId(Guid.NewGuid()), TenantId, CalendarId, Now);
+
+        task.AutoChooseService(ServiceId, Now);
+        task.AutoChooseWorker(WorkerId, Now);
+
+        Assert.Equal(ChatBookingTaskState.AwaitingDateChoice, task.State);
+        Assert.Equal(ServiceId, task.ServiceId);
+        Assert.Equal(WorkerId, task.WorkerId);
+        Assert.Null(task.LastAppliedValue);
+    }
+
+    /// <summary>`26-322`: the auto-skip affordances guard their own required state, exactly as their
+    /// explicit siblings do - auto-choosing a worker before a service is a caller bug, not an ordinary
+    /// outcome.</summary>
+    [Fact]
+    public void AutoChoose_OutOfOrder_ThrowsRatherThanSilentlyAdvancing()
+    {
+        var task = ChatBookingTask.Start(new ChatBookingTaskId(Guid.NewGuid()), TenantId, CalendarId, Now);
+
+        // Still AwaitingServiceChoice - a worker cannot be auto-chosen yet.
+        Assert.Throws<InvalidChatBookingTaskStateException>(() => task.AutoChooseWorker(WorkerId, Now));
+
+        task.AutoChooseService(ServiceId, Now);
+        // Now AwaitingWorkerChoice - the service cannot be auto-chosen a second time.
+        Assert.Throws<InvalidChatBookingTaskStateException>(() => task.AutoChooseService(ServiceId, Now));
+    }
+
     [Fact]
     public void ReopenForSlotChoice_ClearsTheLostSlot_ButKeepsTheChosenWorkerAndDate()
     {

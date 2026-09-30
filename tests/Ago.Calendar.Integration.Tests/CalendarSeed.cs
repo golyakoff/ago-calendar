@@ -112,6 +112,33 @@ internal static class CalendarSeed
         return new SeededTenant(tenant, calendar, worker, service, person, operatorId, subject);
     }
 
+    /// <summary>
+    /// `26-322`: gives an already-seeded tenant a second worker and a second service, so its chat
+    /// booking surface offers a genuine choice at both steps and `26-322`'s single-option auto-skip does
+    /// not fire. Localised to the callers that need it (the chat-module walkthroughs) rather than folded
+    /// into <see cref="WriteAsync"/>'s own default, which dozens of unrelated single-worker/single-service
+    /// integration tests across this suite still depend on. The second worker joins the same calendar and
+    /// offers the primary service (so <see cref="BookingSurfaceReadStore.ListWorkersAsync"/> returns two
+    /// for it); it also offers a second service (so <see cref="BookingSurfaceReadStore.ListServicesAsync"/>
+    /// returns two). No schedule or slots are added for it - it exists only to populate the choice lists,
+    /// and every walkthrough still picks the primary <see cref="SeededTenant.Worker"/> the slots belong to.
+    /// </summary>
+    public static async Task AddSecondWorkerAndServiceAsync(PostgresFixture fixture, SeededTenant seed)
+    {
+        var secondWorker = Domain.Worker.Create(new WorkerId(NewId()), seed.Tenant.Id, "Roe", "Sam", null, Now);
+        secondWorker.JoinCalendar(seed.Calendar);
+        secondWorker.Offer(seed.Service);
+
+        var secondService = Service.Create(
+            new ServiceId(NewId()), seed.Tenant.Id, "Manicure", TimeSpan.FromMinutes(30), null);
+        secondWorker.Offer(secondService);
+
+        await using var db = fixture.CreateDbContext();
+        db.Services.Add(secondService);
+        db.Workers.Add(secondWorker);
+        await db.SaveChangesAsync();
+    }
+
     /// <summary>Gives the seeded worker the same wall-clock window on every named day. Wall clock,
     /// not instants - see <see cref="WorkingHoursRule"/>; the conversion is the materialiser's
     /// single job.</summary>

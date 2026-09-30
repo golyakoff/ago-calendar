@@ -79,7 +79,17 @@ public sealed class ChatBookingTask
     /// different reason than "independently generated ids": a date-round value is an ISO date string
     /// (<c>"yyyy-MM-dd"</c>, see <see cref="ChooseDate"/>) and a time-round value is an
     /// <see cref="EventId"/> GUID - two disjoint formats that cannot equal each other by construction,
-    /// the same non-collision property in a different shape.</para></summary>
+    /// the same non-collision property in a different shape.</para>
+    ///
+    /// <para><b>`26-322`: an auto-skip (<see cref="AutoChooseService"/>/<see cref="AutoChooseWorker"/>)
+    /// advances the <see cref="State"/> past one or two steps the client never explicitly answered, and
+    /// deliberately leaves this field alone.</b> So after the service step is skipped and the worker step
+    /// auto-resolves, this still holds the <i>service</i> id the client's own reply carried (or null when
+    /// Start auto-advanced the whole flow before any reply). That is what keeps the guard sound across a
+    /// skip: a retried service reply arriving once the task has already advanced to
+    /// <see cref="ChatBookingTaskState.AwaitingDateChoice"/> still matches this value and is replayed,
+    /// rather than being misread as a fresh date answer or - because its wire kind no longer matches the
+    /// advanced state - rejected outright.</para></summary>
     public string? LastAppliedValue { get; private set; }
 
     public ChatBookingTaskState State { get; private set; }
@@ -124,6 +134,24 @@ public sealed class ChatBookingTask
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// `26-322`: the service step is skipped when a calendar has exactly one selectable service - the
+    /// visitor is never asked to "choose" from a list of one. This records that sole service and
+    /// advances to the worker step exactly as <see cref="ChooseService"/> does, with one deliberate
+    /// difference: it does <b>not</b> touch <see cref="LastAppliedValue"/>. No client reply chose this
+    /// service, so there is no value a retry could replay against it; leaving <see cref="LastAppliedValue"/>
+    /// untouched (null when Start reaches this before any reply) is what keeps the replay guard - which
+    /// is keyed on the value the client actually sent - correct across the skip. See
+    /// <c>ReplyToModuleTaskHandler</c>'s replay remarks and `25-32`.
+    /// </summary>
+    public void AutoChooseService(ServiceId serviceId, DateTimeOffset now)
+    {
+        RequireState(ChatBookingTaskState.AwaitingServiceChoice);
+        ServiceId = serviceId;
+        State = ChatBookingTaskState.AwaitingWorkerChoice;
+        UpdatedAt = now;
+    }
+
     public void ChooseWorker(WorkerId workerId, DateTimeOffset now)
     {
         RequireState(ChatBookingTaskState.AwaitingWorkerChoice);
@@ -132,6 +160,25 @@ public sealed class ChatBookingTask
         // ChatBookingTaskState.AwaitingDateChoice's own remarks.
         State = ChatBookingTaskState.AwaitingDateChoice;
         LastAppliedValue = workerId.Value.ToString();
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// `26-322`: the same single-option skip one step later - exactly one <i>eligible</i> worker for
+    /// the chosen service is auto-selected and the task advances to the date round without asking. As
+    /// with <see cref="AutoChooseService"/>, <see cref="LastAppliedValue"/> is left untouched on
+    /// purpose: it keeps whatever the client's own last reply set it to - the service reply that
+    /// triggered a skip out of <see cref="ChatBookingTaskState.AwaitingWorkerChoice"/>, or null when the
+    /// whole flow auto-advanced from Start - never this worker id, which the client never sent. That is
+    /// precisely what lets a retried service (or worker) reply arriving after the skip be recognised as
+    /// a replay of the <i>current</i> (now date-round) step rather than misread as a fresh answer or
+    /// rejected on a kind mismatch. See <c>ReplyToModuleTaskHandler</c>'s replay remarks and `25-32`.
+    /// </summary>
+    public void AutoChooseWorker(WorkerId workerId, DateTimeOffset now)
+    {
+        RequireState(ChatBookingTaskState.AwaitingWorkerChoice);
+        WorkerId = workerId;
+        State = ChatBookingTaskState.AwaitingDateChoice;
         UpdatedAt = now;
     }
 

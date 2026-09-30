@@ -55,20 +55,32 @@ public sealed class ModuleQuantityGrantedWireTests(ModuleQuantityGrantedWireFixt
 
     /// <summary>
     /// The end-to-end claim `23-66`'s own report has to make good on, in one test: a tenant with the
-    /// calendar module and no granted quota cannot create a worker; a quantity is granted the exact
-    /// way `ago-chat`'s own outbox would grant it - over a real broker, to a real, running consumer,
-    /// never applied by calling a store method directly; and only then can the tenant create their
-    /// first worker.
+    /// calendar module and no granted quota beyond the default floor cannot create a worker past that
+    /// floor; a quantity is granted the exact way `ago-chat`'s own outbox would grant it - over a real
+    /// broker, to a real, running consumer, never applied by calling a store method directly; and only
+    /// then can the tenant create a worker past the floor.
+    ///
+    /// <para>`26-317`: the "before" step now creates the two masters the default floor
+    /// (<see cref="Tenant.DefaultWorkerQuota"/>) already allows with no grant at all - a fresh tenant
+    /// is no longer stuck at zero, which is exactly the gap this item closes - and only the third is
+    /// refused until the grant lands.</para>
     /// </summary>
     [Fact]
-    public async Task AGrantPublishedOverTheRealBroker_IsAppliedByTheRealConsumer_AndTheTenantCanThenCreateItsFirstWorker()
+    public async Task AGrantPublishedOverTheRealBroker_IsAppliedByTheRealConsumer_AndTheTenantCanThenCreatePastTheFloor()
     {
         var seed = await SeedBareTenantAsync();
 
         // Before: WorkerQuota is zero (the default every freshly registered tenant carries -
-        // Tenant.Register's own remarks), so the calendar refuses the first worker exactly as it
-        // would for any tenant that has not been granted the add-on yet.
-        var beforeGrant = await CreateWorkerAsync(seed, "Alex", "Doe", Now);
+        // Tenant.Register's own remarks), but the default floor of two still lets the tenant create
+        // its first two masters with no grant at all.
+        var first = await CreateWorkerAsync(seed, "Alex", "Doe", Now);
+        Assert.True(first.IsSuccess);
+        var second = await CreateWorkerAsync(seed, "Sam", "Roe", Now.AddSeconds(1));
+        Assert.True(second.IsSuccess);
+
+        // The third is refused exactly as it would be for any tenant that has not been granted more
+        // than the floor yet.
+        var beforeGrant = await CreateWorkerAsync(seed, "Robin", "First", Now.AddSeconds(2));
         Assert.True(beforeGrant.IsFailure);
         Assert.Equal("configuration.worker_quota_exceeded", beforeGrant.Error!.Value.Code);
 
@@ -82,25 +94,25 @@ public sealed class ModuleQuantityGrantedWireTests(ModuleQuantityGrantedWireFixt
             // The grant, over the real wire: a real RabbitMqEventPublisher (the identical class
             // Ago.Chat.Worker.OutboxDispatcher uses) publishes the envelope ago-chat's own outbox
             // dispatcher would have published, onto a real, Testcontainers-backed broker.
-            await PublishGrantAsync(seed.TenantId, quantity: 1);
+            await PublishGrantAsync(seed.TenantId, quantity: 3);
 
             await WaitUntilAsync(
-                async () => await GetWorkerQuotaAsync(seed.TenantId) == 1, TimeSpan.FromSeconds(20));
+                async () => await GetWorkerQuotaAsync(seed.TenantId) == 3, TimeSpan.FromSeconds(20));
         });
 
         var quotaAfterGrant = await GetWorkerQuotaAsync(seed.TenantId);
-        Assert.Equal(1, quotaAfterGrant);
+        Assert.Equal(3, quotaAfterGrant);
 
-        // After: the claim the item exists for. The tenant's first worker, created through the real
+        // After: the claim the item exists for. The tenant's third worker, created through the real
         // handler, against the real row the consumer above actually wrote - not asserted from the
         // quota column alone.
-        var afterGrant = await CreateWorkerAsync(seed, "Alex", "Doe", Now.AddSeconds(1));
+        var afterGrant = await CreateWorkerAsync(seed, "Robin", "First", Now.AddSeconds(3));
         Assert.True(afterGrant.IsSuccess);
 
         await using var verify = fixture.CreateDbContext();
         var activeCount = await verify.Workers.CountAsync(
             w => w.TenantId == seed.TenantId && w.IsActive, CancellationToken.None);
-        Assert.Equal(1, activeCount);
+        Assert.Equal(3, activeCount);
     }
 
     /// <summary>

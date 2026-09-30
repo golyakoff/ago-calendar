@@ -57,7 +57,7 @@ public sealed class ModuleQuantityImpactRequestedWireTests(ModuleQuantityGranted
     [Fact]
     public async Task ARequestPublishedOverTheRealBroker_IsAnsweredByTheRealConsumer_OnThisProductsOwnOutbox()
     {
-        var seed = await SeedTenantWithTwoActiveWorkersAsync();
+        var seed = await SeedTenantWithThreeActiveWorkersAsync();
         var correlationId = Guid.NewGuid();
 
         await RunConsumerAsync(async () =>
@@ -83,7 +83,7 @@ public sealed class ModuleQuantityImpactRequestedWireTests(ModuleQuantityGranted
     [Fact]
     public async Task ARequestForADifferentModule_IsIgnored_AndNothingIsStagedOnTheOutbox()
     {
-        var seed = await SeedTenantWithTwoActiveWorkersAsync();
+        var seed = await SeedTenantWithThreeActiveWorkersAsync();
 
         await RunConsumerAsync(async () =>
         {
@@ -106,7 +106,7 @@ public sealed class ModuleQuantityImpactRequestedWireTests(ModuleQuantityGranted
         // means the real consumer may see the identical question twice, and this consumer has no
         // inbox ledger (ModuleQuantityImpactRequestedConsumer's own remarks) - both answers must
         // still carry the identical, correct numbers, which is what makes answering twice harmless.
-        var seed = await SeedTenantWithTwoActiveWorkersAsync();
+        var seed = await SeedTenantWithThreeActiveWorkersAsync();
         var correlationId = Guid.NewGuid();
 
         await RunConsumerAsync(async () =>
@@ -319,13 +319,15 @@ public sealed class ModuleQuantityImpactRequestedWireTests(ModuleQuantityGranted
     }
 
     // ------------------------------------------------------------------------------------------
-    // Seeding - two active workers so a requested quantity of one has exactly one affected worker
-    // to name, unambiguously the more recently created of the two.
+    // Seeding - `26-317`: three active workers, not two, because a requested quantity of one is
+    // floored to Tenant.DefaultWorkerQuota (2) before the excess is computed - three is the fewest
+    // active workers that still leaves exactly one affected worker to name, unambiguously the most
+    // recently created of the three.
     // ------------------------------------------------------------------------------------------
 
     private sealed record SeededTenantWithWorkers(TenantId TenantId, string NewestWorkerDisplayName);
 
-    private async Task<SeededTenantWithWorkers> SeedTenantWithTwoActiveWorkersAsync()
+    private async Task<SeededTenantWithWorkers> SeedTenantWithThreeActiveWorkersAsync()
     {
         // Not truncated, unlike some seed helpers elsewhere: TenantPublicKey allows up to 64
         // characters (its own MaxLength), and truncating a fixed-`Now` UUIDv7 down to exactly its
@@ -334,12 +336,14 @@ public sealed class ModuleQuantityImpactRequestedWireTests(ModuleQuantityGranted
         // ux_tenants_public_key collision hit while writing this suite.
         var tenant = Tenant.Register(
             new TenantId(NewId()), "Wire Test Shop", new TenantPublicKey($"wire-impact-{NewId():N}"), Now);
-        var older = Domain.Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now);
+        var oldest = Domain.Worker.Create(new WorkerId(NewId()), tenant.Id, "First", "Robin", null, Now);
+        var older = Domain.Worker.Create(new WorkerId(NewId()), tenant.Id, "Doe", "Alex", null, Now.AddSeconds(1));
         var newer = Domain.Worker.Create(
-            new WorkerId(NewId()), tenant.Id, "Roe", "Sam", null, Now.AddSeconds(1));
+            new WorkerId(NewId()), tenant.Id, "Roe", "Sam", null, Now.AddSeconds(2));
 
         await using var db = fixture.CreateDbContext();
         db.Tenants.Add(tenant);
+        db.Workers.Add(oldest);
         db.Workers.Add(older);
         db.Workers.Add(newer);
         await db.SaveChangesAsync();

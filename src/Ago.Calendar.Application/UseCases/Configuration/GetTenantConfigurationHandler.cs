@@ -44,10 +44,11 @@ public readonly record struct ConfiguredWorkingHoursRule(
 /// <param name="PublicKey">What the shop pastes into its own page. The console is the only place this
 /// is ever shown, and it is why the screen exists at all: without it nobody can write the script tag
 /// `20-06`'s Done-when asks a stranger's page to carry.</param>
-/// <param name="WorkerQuota">`22-07`: the calendar add-on's own granted number of masters - zero
-/// until `ago-chat`'s own grant has been propagated. Shown here, not only enforced silently, so the
-/// setup screen can say "N of Q masters" rather than leave a refusal at worker-creation time as the
-/// tenant's only way to discover the ceiling.</param>
+/// <param name="WorkerQuota">`22-07`/`26-317`: the ceiling this tenant's masters screen actually
+/// enforces - <see cref="Tenant.EffectiveWorkerQuota"/>, never the raw <see cref="Tenant.WorkerQuota"/>
+/// column, so a fresh tenant with no grant at all sees "0 of 2" rather than "0 of 0". Shown here, not
+/// only enforced silently, so the setup screen can say "N of Q masters" rather than leave a refusal at
+/// worker-creation time as the tenant's only way to discover the ceiling.</param>
 public readonly record struct TenantConfiguration(
     string TenantName,
     string PublicKey,
@@ -140,6 +141,8 @@ public sealed class GetTenantConfigurationHandler(
                     service.Description,
                     service.IsActive)),
             ],
-            tenant.WorkerQuota));
+            // `26-317`: the computed floor, not the raw grant - see TenantConfiguration.WorkerQuota's
+            // own remarks for why the raw column would understate what this tenant can actually do.
+            tenant.EffectiveWorkerQuota));
     }
 }

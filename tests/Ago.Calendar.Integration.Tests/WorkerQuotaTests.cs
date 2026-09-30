@@ -15,22 +15,83 @@ namespace Ago.Calendar.Integration.Tests;
 /// fixture seeds through <see cref="CalendarSeed.WriteAsync"/>, which already writes one active
 /// worker directly (not through <see cref="CreateWorkerHandler"/>) - the quotas granted below always
 /// account for that seeded worker rather than pretending the tenant starts empty.
+///
+/// <para>`26-317`: every comparison here is really against <see cref="Tenant.EffectiveWorkerQuota"/>,
+/// not the raw grant - a grant of 0 or 1 is floored to <see cref="Tenant.DefaultWorkerQuota"/> before
+/// it gates anything, so several tests below seed a wider roster than the number they grant purely to
+/// stay clear of the floor and exercise the ordinary downgrade rule on its own terms. The floor itself
+/// has its own tests just below.</para>
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public sealed class WorkerQuotaTests(PostgresFixture fixture)
 {
+    /// <summary>
+    /// `26-317`: the computed floor's own Done-when - a fresh tenant (raw `worker_quota` 0, `ago-chat`'s
+    /// own grant never having landed) can still create up to <see cref="Tenant.DefaultWorkerQuota"/>
+    /// masters with no manual owner grant at all, and only the one past that floor is refused. Fails
+    /// on the pre-`26-317` code, where a `worker_quota=0` tenant could create zero.
+    /// </summary>
     [Fact]
-    public async Task ANewTenant_WithNoGrantAtAll_CannotCreateAWorker()
+    public async Task ANewTenant_WithNoGrantAtAll_CanCreateUpToTheDefaultFloor_AndTheOneAfterIsRefused()
     {
-        // `22-07`'s own default: zero until granted. No manual step should be needed to reach the
-        // refusal - the tenant simply has not paid for the add-on yet, or the outbox has not
-        // delivered the grant, and either way the calendar says no rather than "sure, unlimited".
+        // CalendarSeed already writes one active worker directly, so exactly one more fits under the
+        // default floor of 2 before the third is refused.
         var seed = await CalendarSeed.WriteAsync(fixture);
 
-        var result = await CreateWorkerAsync(seed, "Extra", "Person", CalendarSeed.Now.AddSeconds(1));
+        var second = await CreateWorkerAsync(seed, "Two", "B", CalendarSeed.Now.AddSeconds(1));
+        Assert.True(second.IsSuccess);
 
-        Assert.True(result.IsFailure);
-        Assert.Equal("configuration.worker_quota_exceeded", result.Error!.Value.Code);
+        var third = await CreateWorkerAsync(seed, "Three", "C", CalendarSeed.Now.AddSeconds(2));
+
+        Assert.True(third.IsFailure);
+        Assert.Equal("configuration.worker_quota_exceeded", third.Error!.Value.Code);
+
+        await using var verify = fixture.CreateDbContext();
+        var activeCount = await verify.Workers.CountAsync(
+            w => w.TenantId == seed.Tenant.Id && w.IsActive, CancellationToken.None);
+        Assert.Equal(2, activeCount);
+    }
+
+    /// <summary>`26-317`: a tenant granted a number above the floor is bound by the grant, not the
+    /// floor - the floor only ever raises a shortfall, it never lowers a real grant.</summary>
+    [Fact]
+    public async Task ATenantGrantedThree_CanCreateThreeActiveWorkers_AndTheFourthIsRefused()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture);
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 3, CalendarSeed.Now);
+
+        var second = await CreateWorkerAsync(seed, "Two", "B", CalendarSeed.Now.AddSeconds(1));
+        var third = await CreateWorkerAsync(seed, "Three", "C", CalendarSeed.Now.AddSeconds(2));
+        Assert.True(second.IsSuccess);
+        Assert.True(third.IsSuccess);
+
+        var fourth = await CreateWorkerAsync(seed, "Four", "D", CalendarSeed.Now.AddSeconds(3));
+
+        Assert.True(fourth.IsFailure);
+        Assert.Equal("configuration.worker_quota_exceeded", fourth.Error!.Value.Code);
+    }
+
+    /// <summary>`26-317`: the floor's own grandfather clause - a tenant already seeded above the floor
+    /// (by direct row insertion here, standing in for a tenant that already existed before this item
+    /// shipped) is never deactivated or otherwise touched by the floor's introduction, because the
+    /// floor only ever raises <see cref="Tenant.WorkerQuota"/>, never lowers it.</summary>
+    [Fact]
+    public async Task ATenantSeededAtFour_CreatesAllFourActiveWorkers_WithNoDeactivation()
+    {
+        var seed = await CalendarSeed.WriteAsync(fixture, workerQuota: 4);
+
+        var second = await CreateWorkerAsync(seed, "Two", "B", CalendarSeed.Now.AddSeconds(1));
+        var third = await CreateWorkerAsync(seed, "Three", "C", CalendarSeed.Now.AddSeconds(2));
+        var fourth = await CreateWorkerAsync(seed, "Four", "D", CalendarSeed.Now.AddSeconds(3));
+
+        Assert.True(second.IsSuccess);
+        Assert.True(third.IsSuccess);
+        Assert.True(fourth.IsSuccess);
+
+        await using var verify = fixture.CreateDbContext();
+        var activeCount = await verify.Workers.CountAsync(
+            w => w.TenantId == seed.Tenant.Id && w.IsActive, CancellationToken.None);
+        Assert.Equal(4, activeCount);
     }
 
     [Fact]
@@ -65,7 +126,9 @@ public sealed class WorkerQuotaTests(PostgresFixture fixture)
         Assert.True(second.IsSuccess);
         Assert.True(third.IsSuccess);
 
-        // Down to one - only room for the tenant's oldest worker, the one CalendarSeed itself wrote.
+        // Down to one - but `26-317`'s own default floor of two means the grant is compared against
+        // GREATEST(1, 2), so only the one worker past that floor is deactivated, not two: the most
+        // recently created, "Three".
         await ApplyGrantAsync(seed.Tenant.Id, quota: 1, CalendarSeed.Now.AddSeconds(3));
 
         await using var verify = fixture.CreateDbContext();
@@ -75,7 +138,7 @@ public sealed class WorkerQuotaTests(PostgresFixture fixture)
             .ToDictionaryAsync(w => w.Id, w => w.IsActive, CancellationToken.None);
 
         Assert.True(isActive[seed.Worker.Id]);
-        Assert.False(isActive[second.Value]);
+        Assert.True(isActive[second.Value]);
         Assert.False(isActive[third.Value]);
 
         // Nothing a shop typed was destroyed - deactivated, not deleted.
@@ -105,17 +168,22 @@ public sealed class WorkerQuotaTests(PostgresFixture fixture)
     public async Task RaisingTheQuotaBackUp_DoesNotReactivateAnyoneItPreviouslyDeactivated()
     {
         // `22-07`'s own report names this a deliberate, stated limitation rather than an oversight -
-        // proven here so a future change that "fixes" it does so on purpose.
+        // proven here so a future change that "fixes" it does so on purpose. `26-317`: the roster is
+        // shifted two workers wider than before so the lowered grant below still deactivates someone
+        // past the default floor of two, rather than being absorbed by it with nothing to prove.
         var seed = await CalendarSeed.WriteAsync(fixture);
-        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now);
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 4, CalendarSeed.Now);
         var second = await CreateWorkerAsync(seed, "Two", "B", CalendarSeed.Now.AddSeconds(1));
+        var third = await CreateWorkerAsync(seed, "Three", "C", CalendarSeed.Now.AddSeconds(2));
         Assert.True(second.IsSuccess);
+        Assert.True(third.IsSuccess);
 
-        await ApplyGrantAsync(seed.Tenant.Id, quota: 1, CalendarSeed.Now.AddSeconds(2));
-        await ApplyGrantAsync(seed.Tenant.Id, quota: 5, CalendarSeed.Now.AddSeconds(3));
+        // Down to the default floor of two - deactivates the most recently created worker, "Three".
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now.AddSeconds(3));
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 5, CalendarSeed.Now.AddSeconds(4));
 
         await using var verify = fixture.CreateDbContext();
-        var deactivated = await verify.Workers.SingleAsync(w => w.Id == second.Value, CancellationToken.None);
+        var deactivated = await verify.Workers.SingleAsync(w => w.Id == third.Value, CancellationToken.None);
         Assert.False(deactivated.IsActive);
     }
 
@@ -124,52 +192,62 @@ public sealed class WorkerQuotaTests(PostgresFixture fixture)
     {
         // `22-23`: the bypass `22-07`'s own downgrade rule leaves open - the excess is deactivated,
         // not deleted, and the ordinary edit endpoint used to let anyone flip it straight back on.
+        // `26-317`: the roster is shifted two workers wider than before for the same reason as
+        // RaisingTheQuotaBackUp_DoesNotReactivateAnyoneItPreviouslyDeactivated above.
         var seed = await CalendarSeed.WriteAsync(fixture);
-        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now);
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 4, CalendarSeed.Now);
         var second = await CreateWorkerAsync(seed, "Two", "B", CalendarSeed.Now.AddSeconds(1));
+        var third = await CreateWorkerAsync(seed, "Three", "C", CalendarSeed.Now.AddSeconds(2));
         Assert.True(second.IsSuccess);
+        Assert.True(third.IsSuccess);
 
-        // Down to one - 22-07's own rule deactivates the most recently created worker, "Two".
-        await ApplyGrantAsync(seed.Tenant.Id, quota: 1, CalendarSeed.Now.AddSeconds(2));
+        // Down to the default floor of two - 22-07's own rule deactivates the most recently created
+        // worker, "Three".
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now.AddSeconds(3));
 
         // The request also renames the worker, so "nothing written" has to cover the whole call, not
         // only the activity flag.
         var result = await UpdateWorkerAsync(
-            seed, second.Value, lastName: "Renamed", firstName: "B", isActive: true,
-            now: CalendarSeed.Now.AddSeconds(3));
+            seed, third.Value, lastName: "Renamed", firstName: "C", isActive: true,
+            now: CalendarSeed.Now.AddSeconds(4));
 
         Assert.True(result.IsFailure);
         Assert.Equal("configuration.worker_quota_exceeded", result.Error!.Value.Code);
 
         await using var verify = fixture.CreateDbContext();
-        var worker = await verify.Workers.SingleAsync(w => w.Id == second.Value, CancellationToken.None);
+        var worker = await verify.Workers.SingleAsync(w => w.Id == third.Value, CancellationToken.None);
         Assert.False(worker.IsActive);
-        Assert.Equal("Two", worker.LastName);
+        Assert.Equal("Three", worker.LastName);
     }
 
     [Fact]
     public async Task ReactivatingADeactivatedWorker_WithinTheQuota_Succeeds()
     {
+        // `26-317`: the roster is shifted two workers wider than before for the same reason as
+        // RaisingTheQuotaBackUp_DoesNotReactivateAnyoneItPreviouslyDeactivated above.
         var seed = await CalendarSeed.WriteAsync(fixture);
-        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now);
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 4, CalendarSeed.Now);
         var second = await CreateWorkerAsync(seed, "Two", "B", CalendarSeed.Now.AddSeconds(1));
-        await ApplyGrantAsync(seed.Tenant.Id, quota: 1, CalendarSeed.Now.AddSeconds(2));
+        var third = await CreateWorkerAsync(seed, "Three", "C", CalendarSeed.Now.AddSeconds(2));
+        Assert.True(second.IsSuccess);
+        Assert.True(third.IsSuccess);
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now.AddSeconds(3));
 
         // Room again - a genuine upgrade, distinct from the auto-reactivation
         // RaisingTheQuotaBackUp_DoesNotReactivateAnyoneItPreviouslyDeactivated rules out: this test
         // reactivates through the manual endpoint the author's own ADR names as the intended path.
-        await ApplyGrantAsync(seed.Tenant.Id, quota: 2, CalendarSeed.Now.AddSeconds(3));
+        await ApplyGrantAsync(seed.Tenant.Id, quota: 3, CalendarSeed.Now.AddSeconds(4));
 
         var result = await UpdateWorkerAsync(
-            seed, second.Value, lastName: "Two", firstName: "B", isActive: true,
-            now: CalendarSeed.Now.AddSeconds(4));
+            seed, third.Value, lastName: "Three", firstName: "C", isActive: true,
+            now: CalendarSeed.Now.AddSeconds(5));
 
         Assert.True(result.IsSuccess);
 
         await using var verify = fixture.CreateDbContext();
         var activeCount = await verify.Workers.CountAsync(
             w => w.TenantId == seed.Tenant.Id && w.IsActive, CancellationToken.None);
-        Assert.Equal(2, activeCount);
+        Assert.Equal(3, activeCount);
     }
 
     private async Task ApplyGrantAsync(TenantId tenantId, int quota, DateTimeOffset now)

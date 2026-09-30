@@ -27,10 +27,18 @@ public sealed class WorkerQuotaImpactAnswerer(
             .Where(w => w.TenantId == tenantId && w.IsActive)
             .ToListAsync(cancellationToken);
 
+        // `26-317`: floored the identical way WorkerQuotaGrantStore.ApplyAsync floors the real
+        // downgrade, so a preview for a requested quantity below the default floor never threatens a
+        // worker the real grant would leave standing. Only the value fed to the policy call is
+        // floored - requestedQuantity itself is echoed into the reply below unchanged (this mapper's
+        // own remarks: "echoed back from the question, unchanged"), since it answers "what did the
+        // owner type", not "what will actually happen".
+        var effectiveQuantity = Math.Max(requestedQuantity, Tenant.DefaultWorkerQuota);
+
         // The identical rule the real downgrade would apply, not a second one - see
         // IWorkerQuotaImpactAnswerer's own remarks for why reusing this one pure function is the
         // explicitly sanctioned exception to keeping the preview and the enforcement path independent.
-        var affected = WorkerQuotaPolicy.SelectWorkersToDeactivate(activeWorkers, requestedQuantity);
+        var affected = WorkerQuotaPolicy.SelectWorkersToDeactivate(activeWorkers, effectiveQuantity);
         var affectedDisplayNames = affected.Select(worker => worker.DisplayName).ToList();
 
         outbox.Enqueue(ModuleQuantityImpactComputedMapper.ToEnvelope(

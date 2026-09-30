@@ -103,15 +103,25 @@ public sealed class WorkerRepository(AgoCalendarDbContext db) : IWorkerRepositor
     /// transaction, the same reason <c>OperatorInviteRedemptionRepository.LockSiteAndReadSeatLimitAsync</c>
     /// gives for its own identical shape: the lock only means anything if the count read and the
     /// eventual insert happen on the same Postgres connection and transaction as the lock itself, and
-    /// EF has no LINQ shape for <c>FOR UPDATE</c> on a scalar read.</summary>
+    /// EF has no LINQ shape for <c>FOR UPDATE</c> on a scalar read.
+    ///
+    /// <para>`26-317`: reads <c>GREATEST(worker_quota, @defaultQuota)</c>, not the bare column - the
+    /// same floor <see cref="Tenant.EffectiveWorkerQuota"/> computes in memory, applied here because
+    /// this method never loads a <see cref="Tenant"/> at all, only its own locked scalar. Binding
+    /// <see cref="Tenant.DefaultWorkerQuota"/> rather than the literal 2 keeps the one number in one
+    /// place, and never caching this: rule 8 requires the compare-and-set read to come from inside the
+    /// transaction it gates, exactly like the bare column did before this column had a floor.</para>
+    /// </summary>
     private async Task<int> LockTenantAndReadWorkerQuotaAsync(TenantId tenantId, CancellationToken cancellationToken)
     {
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         var pgTransaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
 
         await using var command = new NpgsqlCommand(
-            "SELECT worker_quota FROM tenants WHERE id = @tenantId FOR UPDATE", connection, pgTransaction);
+            "SELECT GREATEST(worker_quota, @defaultQuota) FROM tenants WHERE id = @tenantId FOR UPDATE",
+            connection, pgTransaction);
         command.Parameters.AddWithValue("tenantId", tenantId.Value);
+        command.Parameters.AddWithValue("defaultQuota", Tenant.DefaultWorkerQuota);
 
         var result = await command.ExecuteScalarAsync(cancellationToken);
         if (result is null)

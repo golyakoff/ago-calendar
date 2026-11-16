@@ -120,7 +120,7 @@
          and IL-body rules (adr/0027's Ago.Chat.* isolation, adr/0011's ambient-clock ban) need to
          read metadata and method bodies directly. It is the library NetArchTest itself is built on,
          so this adds a name to the restore graph, not a dependency. -->
-    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="coverlet.collector" Version="10.1.1" />
     <!-- `20-01`: migration tooling only (`dotnet ef migrations add`), PrivateAssets="all" at the
          reference site so it never ships in a container image. -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11" />

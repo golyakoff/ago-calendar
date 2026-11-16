@@ -97,8 +97,8 @@
          ago-chat already pays for the same dependency for the same reason. Same version it pins. -->
     <PackageVersion Include="Dapper" Version="2.1.79" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.15" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.15" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Abstractions" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
     <!-- `20-24`: PostgresHealthCheck lives in Ago.Calendar.Infrastructure.Postgres, not
@@ -123,7 +123,7 @@
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <!-- `20-01`: migration tooling only (`dotnet ef migrations add`), PrivateAssets="all" at the
          reference site so it never ships in a container image. -->
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.15" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <!-- `20-01`: a real Postgres for Ago.Calendar.Integration.Tests. testing.md is unambiguous that
          a mocked database proves the test compiles and nothing else - and this item's central claim
